@@ -79,16 +79,8 @@ cloc:
 	@git ls-files | xargs cloc
 
 tree:
-	@echo "Running tree on tracked files, filtering by .gitignore..."
-	@if ! command -v tree >/dev/null 2>&1; then \
-		echo "Error: tree is not installed."; \
-		exit 1; \
-	fi
-	@if ! command -v git >/dev/null 2>&1; then \
-		echo "Error: git is not installed."; \
-		exit 1; \
-	fi
-	@git ls-files | xargs dirname | sort | uniq | xargs -I{} tree -a -I .git --noreport {}
+	@echo "Running tree on tracked files, displaying git repository tree structure..."
+	@git ls-tree -r --name-only HEAD | tree --fromfile .   
 
 help:
 	@echo "SCL Core Makefile (Ninja Backend)"
