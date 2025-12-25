@@ -6,7 +6,9 @@
 PROJECT_NAME := scl-core
 BUILD_DIR := build
 CMAKE := cmake
-CMAKE_FLAGS :=
+CMAKE_GENERATOR := Ninja
+CMAKE_FLAGS := -G $(CMAKE_GENERATOR)
+NINJA := ninja
 
 # Default target
 .DEFAULT_GOAL := all
@@ -24,7 +26,7 @@ endif
 # Phony Targets
 # =============================================================================
 
-.PHONY: all clean configure build install help compile_commands
+.PHONY: all clean configure build install help compile_commands cloc tree
 
 # =============================================================================
 # Main Targets
@@ -39,8 +41,8 @@ configure:
 	@cd $(BUILD_DIR) && $(CMAKE) .. $(CMAKE_FLAGS)
 
 build: configure
-	@echo "Building..."
-	@cd $(BUILD_DIR) && $(CMAKE) --build . --parallel
+	@echo "Building with Ninja..."
+	@cd $(BUILD_DIR) && $(NINJA)
 
 install: build
 	@echo "Installing..."
@@ -64,26 +66,55 @@ compile_commands: configure
 		echo "Warning: compile_commands.json not found in $(BUILD_DIR)"; \
 	fi
 
+cloc:
+	@echo "Running cloc on project, filtering by .gitignore..."
+	@if ! command -v cloc >/dev/null 2>&1; then \
+		echo "Error: cloc is not installed."; \
+		exit 1; \
+	fi
+	@if ! command -v git >/dev/null 2>&1; then \
+		echo "Error: git is not installed."; \
+		exit 1; \
+	fi
+	@git ls-files | xargs cloc
+
+tree:
+	@echo "Running tree on tracked files, filtering by .gitignore..."
+	@if ! command -v tree >/dev/null 2>&1; then \
+		echo "Error: tree is not installed."; \
+		exit 1; \
+	fi
+	@if ! command -v git >/dev/null 2>&1; then \
+		echo "Error: git is not installed."; \
+		exit 1; \
+	fi
+	@git ls-files | xargs dirname | sort | uniq | xargs -I{} tree -a -I .git --noreport {}
+
 help:
-	@echo "SCL Core Makefile"
+	@echo "SCL Core Makefile (Ninja Backend)"
 	@echo ""
 	@echo "Available targets:"
 	@echo "  all              - Configure and build (default)"
-	@echo "  configure        - Run CMake configuration"
-	@echo "  build            - Build the project"
+	@echo "  configure        - Run CMake configuration with Ninja"
+	@echo "  build            - Build the project using Ninja"
 	@echo "  install          - Install the project"
 	@echo "  clean            - Remove build directory"
 	@echo "  compile_commands - Generate and copy compile_commands.json"
+	@echo "  cloc             - Count lines of code, respects .gitignore"
+	@echo "  tree             - Display directory tree, respects .gitignore"
 	@echo "  help             - Show this help message"
 	@echo ""
 	@echo "Environment variables:"
 	@echo "  BUILD_DIR        - Build directory (default: build)"
 	@echo "  CMAKE_FLAGS      - Additional CMake flags"
+	@echo "  CMAKE_GENERATOR  - CMake generator (default: Ninja)"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make                          # Build with default settings"
+	@echo "  make                          # Build with Ninja (default)"
 	@echo "  make CMAKE_FLAGS=-DCMAKE_BUILD_TYPE=Debug  # Debug build"
 	@echo "  make compile_commands         # Generate compile_commands.json"
+	@echo "  make cloc                     # Count lines of code"
+	@echo "  make tree                     # Show directory tree"
 
 # =============================================================================
 # Development Targets

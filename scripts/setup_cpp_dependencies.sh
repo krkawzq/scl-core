@@ -174,6 +174,9 @@ install_build_tools() {
         if ! check_command cmake; then
             brew install cmake
         fi
+        if ! check_command ninja; then
+            brew install ninja
+        fi
         if ! check_command make; then
             # Make is usually pre-installed on macOS
             print_info "Make should be available via Xcode Command Line Tools"
@@ -181,13 +184,13 @@ install_build_tools() {
     elif [ "$PLATFORM" = "debian" ] || [ "$PLATFORM" = "redhat" ]; then
         if [ "$PKG_MGR" = "apt-get" ]; then
             sudo apt-get update
-            sudo apt-get install -y build-essential cmake git
+            sudo apt-get install -y build-essential cmake git ninja-build
         elif [ "$PKG_MGR" = "yum" ] || [ "$PKG_MGR" = "dnf" ]; then
-            sudo $PKG_MGR install -y gcc gcc-c++ cmake git
+            sudo $PKG_MGR install -y gcc gcc-c++ cmake git ninja-build
         fi
     fi
     
-    print_success "Build tools ready"
+    print_success "Build tools ready (CMake + Ninja)"
 }
 
 install_highway() {
