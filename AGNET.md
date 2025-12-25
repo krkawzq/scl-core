@@ -10,17 +10,7 @@ This document serves as the authoritative guide for AI agents working on the `sc
 
 We strictly enforce a "Human-in-the-Loop" architecture. Code is not just logic; it is a collaborative artifact.
 
-### 1.1 Explicit Ownership & Attribution
-Logic must be clearly segmented. AI agents must recognize and respect ownership tags in comments:
-
-* **`[Owner: Human]`**: Represents critical, hand-tuned, or mathematically complex logic.
-    * **Rule**: Immutable. AI must **never** modify, refactor, or "clean up" these blocks unless explicitly instructed to "Refactor the Human block".
-    * **Reasoning**: Preserves domain expertise and prevents regression in hand-optimized hotspots.
-
-* **`[Owner: AI]`**: Represents boilerplate, standard algorithms, or auto-generated patterns.
-    * **Rule**: Open for optimization. AI is encouraged to propose vectorization, unrolling, or readability improvements here.
-
-### 1.2 Documentation Standard
+### 1.1 Documentation Standard
 * **Style**: Doxygen Triple Slash (`///`).
 * **Format**: Markdown embedded in comments.
 * **Language**: English only.

@@ -23,10 +23,7 @@ endif()
 
 # Compiler-specific options
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    # Warning flags
     add_compile_options(-Wall -Wextra -Wpedantic)
-    
-    # Optimization flags
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
         add_compile_options(-O3 -march=native -DNDEBUG)
     elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -42,16 +39,10 @@ if(MSVC)
     endif()
 endif()
 
-# Output directory for build artifacts
-# We output directly to the python package directory for easier development/packaging
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/scl_core/libs)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/scl_core/libs)
-
 # -----------------------------------------------------------------------------
 # 2. Configuration Options
 # -----------------------------------------------------------------------------
 # Threading Backend Selection
-# Options: AUTO, SERIAL, BS, OPENMP, TBB
 set(SCL_THREADING_BACKEND "AUTO" CACHE STRING "Select threading backend")
 set_property(CACHE SCL_THREADING_BACKEND PROPERTY STRINGS AUTO SERIAL BS OPENMP TBB)
 
@@ -59,7 +50,6 @@ set_property(CACHE SCL_THREADING_BACKEND PROPERTY STRINGS AUTO SERIAL BS OPENMP 
 option(SCL_MAC_USE_OPENMP "Force enable OpenMP on macOS (Requires libomp)" OFF)
 
 # SIMD Configuration
-# If ON, forces Google Highway to generate scalar-only code (no SIMD)
 option(SCL_ONLY_SCALAR "Force scalar execution (disable SIMD optimizations)" OFF)
 
 # -----------------------------------------------------------------------------
@@ -74,44 +64,30 @@ FetchContent_Declare(
     URL https://github.com/bshoshany/thread-pool/archive/refs/tags/v4.1.0.tar.gz
 )
 FetchContent_MakeAvailable(bs_thread_pool)
-# Fix for BS::thread_pool include path if it doesn't expose a target properly
 if(NOT TARGET bs_thread_pool)
     set(BS_THREAD_POOL_INCLUDE_DIR ${bs_thread_pool_SOURCE_DIR})
 endif()
 
-# --- 3.2 Google Highway (SIMD Framework) ---
-# We treat Highway as a core static dependency (Deep Coupling)
+# --- 3.2 Google Highway (Deep Coupling / Static) ---
+# We force a static build to embed Highway into our shared libraries.
+FetchContent_Declare(
+    hwy
+    GIT_REPOSITORY https://github.com/google/highway.git
+    GIT_TAG master # Use stable tag in production if needed
+)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE) # Force Static
+set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 
-# Configure Highway options BEFORE add_subdirectory or FetchContent
-# This prevents Highway from downloading googletest and building unnecessary components
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
-set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "Build Highway examples" FORCE)
-set(HWY_ENABLE_TESTS OFF CACHE BOOL "Build Highway tests" FORCE)
-set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "Build Highway contrib" FORCE)
-set(BUILD_TESTING OFF CACHE BOOL "Build tests" FORCE)
-
-# Strategy: Try to find Highway in libs/ first, then fall back to FetchContent
-set(HWY_LOCAL_PATH "${CMAKE_SOURCE_DIR}/libs/highway")
-
-if(EXISTS "${HWY_LOCAL_PATH}/CMakeLists.txt")
-    message(STATUS "Found local Highway in libs/highway, using it instead of FetchContent")
-    add_subdirectory(${HWY_LOCAL_PATH} ${CMAKE_BINARY_DIR}/highway)
-else()
-    message(STATUS "Highway not found in libs/, using FetchContent to download")
-    FetchContent_Declare(
-        hwy
-        GIT_REPOSITORY https://github.com/google/highway.git
-        GIT_TAG 1.0.7  # Use stable release instead of master
-    )
-    FetchContent_MakeAvailable(hwy)
-endif()
+FetchContent_MakeAvailable(hwy)
 
 # -----------------------------------------------------------------------------
-# 4. Threading Backend Logic (The Arbiter)
+# 4. Threading Backend Logic
 # -----------------------------------------------------------------------------
 message(STATUS "Configuring Threading Backend...")
 
-# Resolve AUTO mode
 if(SCL_THREADING_BACKEND STREQUAL "AUTO")
     if(APPLE AND NOT SCL_MAC_USE_OPENMP)
         set(CHOSEN_BACKEND "BS")
@@ -124,17 +100,13 @@ endif()
 
 message(STATUS "Active Threading Backend: ${CHOSEN_BACKEND}")
 
-# Prepare compile definitions and link libraries based on selection
 set(SCL_BACKEND_DEFINES "")
 set(SCL_BACKEND_LIBS "")
 
 if(CHOSEN_BACKEND STREQUAL "SERIAL")
     list(APPEND SCL_BACKEND_DEFINES "SCL_BACKEND_SERIAL")
-
 elseif(CHOSEN_BACKEND STREQUAL "BS")
     list(APPEND SCL_BACKEND_DEFINES "SCL_BACKEND_BS")
-    # BS is header only, include dir added later
-
 elseif(CHOSEN_BACKEND STREQUAL "OPENMP")
     find_package(OpenMP REQUIRED)
     list(APPEND SCL_BACKEND_LIBS OpenMP::OpenMP_CXX)
@@ -142,40 +114,33 @@ elseif(CHOSEN_BACKEND STREQUAL "OPENMP")
     if(APPLE AND SCL_MAC_USE_OPENMP)
         list(APPEND SCL_BACKEND_DEFINES "SCL_MAC_USE_OPENMP")
     endif()
-
 elseif(CHOSEN_BACKEND STREQUAL "TBB")
     find_package(TBB REQUIRED)
     list(APPEND SCL_BACKEND_LIBS TBB::tbb)
     list(APPEND SCL_BACKEND_DEFINES "SCL_BACKEND_TBB")
-
 else()
     message(FATAL_ERROR "Unknown backend: ${CHOSEN_BACKEND}")
 endif()
 
 # -----------------------------------------------------------------------------
-# 5. Source Collection
+# 5. Source Collection (Updated for Colocation)
 # -----------------------------------------------------------------------------
-# Collect all C++ core implementation and binding wrappers
-file(GLOB_RECURSE SCL_SOURCES 
-    "src/cpp/*.cpp" 
-    "src/bindings/*.cpp"
-)
+# Recursively find all .cpp files in the scl/ directory
+file(GLOB_RECURSE SCL_SOURCES "scl/*.cpp")
 
 # -----------------------------------------------------------------------------
 # 6. Multi-Precision Target Generation
 # -----------------------------------------------------------------------------
-# Helper macro to create a shared library for a specific precision
-# precision_val: 0=f32, 1=f64, 2=f16
 macro(create_scl_backend target_name output_name precision_val)
     add_library(${target_name} SHARED ${SCL_SOURCES})
     
-    # 6.1 Includes
+    # 6.1 Includes (Updated)
     target_include_directories(${target_name} 
         PUBLIC
-            $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+            # Point to root so #include "scl/config.hpp" works
+            $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
             $<INSTALL_INTERFACE:include>
         PRIVATE 
-            ${CMAKE_SOURCE_DIR}/include
             ${BS_THREAD_POOL_INCLUDE_DIR}
     )
 
@@ -185,7 +150,7 @@ macro(create_scl_backend target_name output_name precision_val)
         SCL_PRECISION=${precision_val}
     )
 
-    # 6.3 SIMD Configuration (Proxy for Highway)
+    # 6.3 SIMD Configuration
     if(SCL_ONLY_SCALAR)
         target_compile_definitions(${target_name} PRIVATE HWY_COMPILE_ONLY_SCALAR)
     endif()
@@ -196,14 +161,13 @@ macro(create_scl_backend target_name output_name precision_val)
         ${SCL_BACKEND_LIBS} # Threading Libs
     )
 
-    # 6.5 Output Naming (e.g., scl_core_f32.so)
+    # 6.5 Output Naming
     set_target_properties(${target_name} PROPERTIES 
         OUTPUT_NAME "${output_name}"
-        PREFIX "" # Remove 'lib' prefix on Linux/Mac to make Python loading easier
+        PREFIX "" 
     )
     
     # 6.6 Installation
-    # Install libraries directly into the Python package structure
     install(TARGETS ${target_name} 
         LIBRARY DESTINATION src/scl_core/libs
         RUNTIME DESTINATION src/scl_core/libs
@@ -218,11 +182,17 @@ create_scl_backend(scl_core_f32 "scl_core_f32" 0)
 # 2. Float 64 (High Precision)
 create_scl_backend(scl_core_f64 "scl_core_f64" 1)
 
-# 3. Float 16 (Optional, commented out by default)
-# create_scl_backend(scl_core_f16 "scl_core_f16" 2)
+# -----------------------------------------------------------------------------
+# 7. Install Headers (Updated)
+# -----------------------------------------------------------------------------
+# Copy the 'scl' folder structure (headers only) to 'include/scl'
+install(DIRECTORY scl/ 
+    DESTINATION include/scl
+    FILES_MATCHING PATTERN "*.hpp"
+)
 
 # -----------------------------------------------------------------------------
-# 7. Build Summary
+# 8. Build Summary
 # -----------------------------------------------------------------------------
 message(STATUS "")
 message(STATUS "==========================================")
@@ -230,10 +200,32 @@ message(STATUS "SCL Core Build Configuration")
 message(STATUS "==========================================")
 message(STATUS "  Build Type:      ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard:    ${CMAKE_CXX_STANDARD}")
-message(STATUS "  Compiler:        ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "  Threading:       ${CHOSEN_BACKEND}")
 message(STATUS "  SIMD:            ${SCL_ONLY_SCALAR} (ONLY_SCALAR Mode)")
 message(STATUS "  Targets:         scl_core_f32, scl_core_f64")
-message(STATUS "  Output Dir:      ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+message(STATUS "  Output Dir:      ${CMAKE_BINARY_DIR}")
 message(STATUS "==========================================")
 message(STATUS "")
+
+# -----------------------------------------------------------------------------
+# 9. Tooling Support (Compile Commands Link)
+# -----------------------------------------------------------------------------
+# Automatically link compile_commands.json to project root for clangd/LSP
+if(CMAKE_EXPORT_COMPILE_COMMANDS)
+    message(STATUS "Linking compile_commands.json to source directory")
+    if(NOT WIN32)
+        # Linux/macOS: Create a symbolic link
+        execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "${CMAKE_BINARY_DIR}/compile_commands.json"
+            "${CMAKE_SOURCE_DIR}/compile_commands.json"
+            ERROR_QUIET
+        )
+    else()
+        # Windows: Copy the file (Symlinks require admin privileges often)
+        execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_BINARY_DIR}/compile_commands.json"
+            "${CMAKE_SOURCE_DIR}/compile_commands.json"
+            ERROR_QUIET
+        )
+    endif()
+endif()

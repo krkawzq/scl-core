@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <type_traits>
+#include <cassert> // For debug assertions
 
 // =============================================================================
 /// @file type.hpp
@@ -18,10 +19,10 @@
 /// @section Design Philosophy
 ///
 /// The type system follows these principles:
-/// 1. **Zero Overhead**: All types are zero-cost abstractions (no vtables, no RTTI)
-/// 2. **Compile-Time Selection**: Precision chosen via CMake, not runtime checks
-/// 3. **C-ABI Compatible**: All types can be safely passed across language boundaries
-/// 4. **NumPy Aligned**: Type sizes and semantics match Python/NumPy conventions
+/// 1. **Zero Overhead**: All types are zero-cost abstractions (no vtables, no RTTI).
+/// 2. **Compile-Time Selection**: Precision chosen via CMake, not runtime checks.
+/// 3. **C-ABI Compatible**: All types can be safely passed across language boundaries.
+/// 4. **NumPy Aligned**: Type sizes and semantics match Python/NumPy conventions.
 ///
 /// @section Precision Selection
 ///
@@ -30,7 +31,7 @@
 /// - `SCL_PRECISION=1` → `Real = double` (64-bit)
 /// - `SCL_PRECISION=2` → `Real = _Float16` (16-bit, requires modern compiler)
 ///
-/// =============================================================================
+// =============================================================================
 
 namespace scl {
 
@@ -126,10 +127,10 @@ namespace scl {
 /// @brief Unified index type for array addressing and loop counters
 ///
 /// **Design rationale**: We use `int64_t` (not `size_t`) because:
-/// 1. **NumPy Compatibility**: NumPy defaults to int64 for indexing
-/// 2. **Large Dataset Support**: Biological datasets can exceed 2^31 cells
-/// 3. **Signed Arithmetic**: Allows negative indices (e.g., Python-style [-1])
-/// 4. **Cross-Platform Consistency**: `size_t` varies (32-bit on some platforms)
+/// 1. **NumPy Compatibility**: NumPy defaults to int64 for indexing.
+/// 2. **Large Dataset Support**: Biological datasets can exceed 2^31 cells.
+/// 3. **Signed Arithmetic**: Allows negative indices (e.g., Python-style [-1]).
+/// 4. **Cross-Platform Consistency**: `size_t` varies (32-bit on some platforms).
 ///
 /// @note For pointer arithmetic, use `Size` instead.
 using Index = std::int64_t;
@@ -159,18 +160,18 @@ using Byte = std::uint8_t;
 /// @brief Lightweight, non-owning view of a contiguous memory array
 ///
 /// **Purpose**: Replaces `std::vector<T>` in function signatures to:
-/// 1. Avoid heap allocation overhead
-/// 2. Enable C-ABI compatibility (no STL mangling)
-/// 3. Work seamlessly with NumPy arrays from Python
+/// 1. Avoid heap allocation overhead.
+/// 2. Enable C-ABI compatibility (no STL mangling).
+/// 3. Work seamlessly with NumPy arrays from Python.
 ///
 /// **Memory Model**: 
-/// - Does NOT own the data (no destructor, no allocation)
-/// - Simply wraps a raw pointer + size
-/// - Size: 16 bytes (pointer + size_t)
+/// - Does NOT own the data (no destructor, no allocation).
+/// - Simply wraps a raw pointer + size.
+/// - Size: 16 bytes (pointer + size_t) on 64-bit systems.
 ///
 /// **Usage Example**:
 /// @code{.cpp}
-/// void process(Span<const Real> input, Span<Real> output) {
+/// void process(Span<const Real> input, MutableSpan<Real> output) {
 ///     for (Index i = 0; i < input.size; ++i) {
 ///         output[i] = input[i] * 2.0;
 ///     }
@@ -202,15 +203,16 @@ struct Span {
     // Element Access
     // -------------------------------------------------------------------------
     
-    /// @brief Array subscript operator (no bounds check in Release builds)
+    /// @brief Array subscript operator (with debug bounds check)
     ///
     /// @param i Element index (0-based)
     /// @return Reference to element at position i
     ///
     /// @warning Does NOT perform bounds checking in Release mode for performance.
-    ///          Use at() for bounds-checked access in Debug builds.
     constexpr T& operator[](Index i) const noexcept {
-        // In Debug mode, we could add: assert(i >= 0 && i < size);
+#if !defined(NDEBUG)
+        assert(i >= 0 && static_cast<Size>(i) < size && "Span index out of bounds");
+#endif
         return ptr[i];
     }
 
@@ -244,23 +246,29 @@ struct Span {
 // SECTION 4: Common Type Aliases
 // =============================================================================
 
+/// @brief Generic mutable view (alias for Span<T>)
+/// Use this for template functions that output data.
+template <typename T>
+using MutableSpan = Span<T>;
+
+/// @brief Generic read-only view (alias for Span<const T>)
+/// Use this for template functions that only read data.
+template <typename T>
+using ConstSpan = Span<const T>;
+
 /// @brief Read-only view of Real array (const Real*)
-///
-/// Use for function parameters that should not modify input data.
 /// Example: `void analyze(RealSpan input)`
-using RealSpan = Span<const Real>;
+using RealSpan = ConstSpan<Real>;
 
 /// @brief Mutable view of Real array (Real*)
-///
-/// Use for function parameters that modify output data.
 /// Example: `void transform(MutableRealSpan output)`
-using MutableRealSpan = Span<Real>;
+using MutableRealSpan = MutableSpan<Real>;
 
 /// @brief Read-only view of Index array
-using IndexSpan = Span<const Index>;
+using IndexSpan = ConstSpan<Index>;
 
 /// @brief Mutable view of Index array
-using MutableIndexSpan = Span<Index>;
+using MutableIndexSpan = MutableSpan<Index>;
 
 /// @}
 
