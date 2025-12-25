@@ -32,9 +32,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_compile_options(-g -O0 -fsanitize=address -fsanitize=undefined)
     endif()
-    
-    # Note: Exceptions are enabled by default for error handling in C-ABI layer
-    # If you want to disable exceptions in hot paths, do it selectively per target
 endif()
 
 # MSVC-specific options
@@ -45,9 +42,10 @@ if(MSVC)
     endif()
 endif()
 
-# Output directory for build artifacts (convenience for local dev)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/libs)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/libs)
+# Output directory for build artifacts
+# We output directly to the python package directory for easier development/packaging
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/scl_core/libs)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/src/scl_core/libs)
 
 # -----------------------------------------------------------------------------
 # 2. Configuration Options
@@ -59,6 +57,10 @@ set_property(CACHE SCL_THREADING_BACKEND PROPERTY STRINGS AUTO SERIAL BS OPENMP 
 
 # macOS specific options
 option(SCL_MAC_USE_OPENMP "Force enable OpenMP on macOS (Requires libomp)" OFF)
+
+# SIMD Configuration
+# If ON, forces Google Highway to generate scalar-only code (no SIMD)
+option(SCL_ONLY_SCALAR "Force scalar execution (disable SIMD optimizations)" OFF)
 
 # -----------------------------------------------------------------------------
 # 3. Dependency Management (FetchContent)
@@ -77,18 +79,32 @@ if(NOT TARGET bs_thread_pool)
     set(BS_THREAD_POOL_INCLUDE_DIR ${bs_thread_pool_SOURCE_DIR})
 endif()
 
-# --- 3.2 Google Highway (SIMD) ---
-FetchContent_Declare(
-    hwy
-    GIT_REPOSITORY https://github.com/google/highway.git
-    GIT_TAG master # Use stable tag in production
-)
-# Disable Highway examples/tests to speed up build
-set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
-set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "" FORCE)
+# --- 3.2 Google Highway (SIMD Framework) ---
+# We treat Highway as a core static dependency (Deep Coupling)
 
-FetchContent_MakeAvailable(hwy)
+# Configure Highway options BEFORE add_subdirectory or FetchContent
+# This prevents Highway from downloading googletest and building unnecessary components
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "Build Highway examples" FORCE)
+set(HWY_ENABLE_TESTS OFF CACHE BOOL "Build Highway tests" FORCE)
+set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "Build Highway contrib" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "Build tests" FORCE)
+
+# Strategy: Try to find Highway in libs/ first, then fall back to FetchContent
+set(HWY_LOCAL_PATH "${CMAKE_SOURCE_DIR}/libs/highway")
+
+if(EXISTS "${HWY_LOCAL_PATH}/CMakeLists.txt")
+    message(STATUS "Found local Highway in libs/highway, using it instead of FetchContent")
+    add_subdirectory(${HWY_LOCAL_PATH} ${CMAKE_BINARY_DIR}/highway)
+else()
+    message(STATUS "Highway not found in libs/, using FetchContent to download")
+    FetchContent_Declare(
+        hwy
+        GIT_REPOSITORY https://github.com/google/highway.git
+        GIT_TAG 1.0.7  # Use stable release instead of master
+    )
+    FetchContent_MakeAvailable(hwy)
+endif()
 
 # -----------------------------------------------------------------------------
 # 4. Threading Backend Logic (The Arbiter)
@@ -168,24 +184,29 @@ macro(create_scl_backend target_name output_name precision_val)
         ${SCL_BACKEND_DEFINES}
         SCL_PRECISION=${precision_val}
     )
+
+    # 6.3 SIMD Configuration (Proxy for Highway)
+    if(SCL_ONLY_SCALAR)
+        target_compile_definitions(${target_name} PRIVATE HWY_COMPILE_ONLY_SCALAR)
+    endif()
     
-    # 6.3 Linking
+    # 6.4 Linking
     target_link_libraries(${target_name} PRIVATE 
-        hwy       # Google Highway
+        hwy       # Google Highway (Static)
         ${SCL_BACKEND_LIBS} # Threading Libs
     )
 
-    # 6.4 Output Naming (e.g., scl_core_f32.so)
+    # 6.5 Output Naming (e.g., scl_core_f32.so)
     set_target_properties(${target_name} PROPERTIES 
         OUTPUT_NAME "${output_name}"
         PREFIX "" # Remove 'lib' prefix on Linux/Mac to make Python loading easier
     )
     
-    # 6.5 Installation
-    # Install libraries to libs directory
+    # 6.6 Installation
+    # Install libraries directly into the Python package structure
     install(TARGETS ${target_name} 
-        LIBRARY DESTINATION libs
-        RUNTIME DESTINATION libs
+        LIBRARY DESTINATION src/scl_core/libs
+        RUNTIME DESTINATION src/scl_core/libs
     )
 endmacro()
 
@@ -201,12 +222,7 @@ create_scl_backend(scl_core_f64 "scl_core_f64" 1)
 # create_scl_backend(scl_core_f16 "scl_core_f16" 2)
 
 # -----------------------------------------------------------------------------
-# 7. Install Configuration
-# -----------------------------------------------------------------------------
-install(DIRECTORY include/ DESTINATION include)
-
-# -----------------------------------------------------------------------------
-# 8. Build Summary
+# 7. Build Summary
 # -----------------------------------------------------------------------------
 message(STATUS "")
 message(STATUS "==========================================")
@@ -216,8 +232,8 @@ message(STATUS "  Build Type:      ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard:    ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Compiler:        ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "  Threading:       ${CHOSEN_BACKEND}")
+message(STATUS "  SIMD:            ${SCL_ONLY_SCALAR} (ONLY_SCALAR Mode)")
 message(STATUS "  Targets:         scl_core_f32, scl_core_f64")
 message(STATUS "  Output Dir:      ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
-message(STATUS "  Compile Commands: ${CMAKE_BINARY_DIR}/compile_commands.json")
 message(STATUS "==========================================")
 message(STATUS "")

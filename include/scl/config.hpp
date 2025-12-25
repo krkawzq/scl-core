@@ -34,6 +34,25 @@
 /// =============================================================================
 
 // =============================================================================
+// HWY Scalar-Only Control
+// =============================================================================
+
+/// @defgroup HWYScalarOnly HWY Scalar-Only Mode
+/// @{
+///
+/// If SCL_ONLY_SCALAR is defined (e.g. via -DSCL_ONLY_SCALAR on the command line),
+/// force-enable scalar-only mode for Highway by defining HWY_COMPILE_ONLY_SCALAR.
+///
+
+#ifdef SCL_ONLY_SCALAR
+    #ifndef HWY_COMPILE_ONLY_SCALAR
+        #define HWY_COMPILE_ONLY_SCALAR
+    #endif
+#endif
+
+/// @}
+
+// =============================================================================
 // SECTION 1: Platform Detection
 // =============================================================================
 
@@ -71,17 +90,11 @@
 
 // --- Step 2.1: Check for user-specified backend ---
 /// @brief Check if user has explicitly defined a backend
-#define SCL_BACKEND_SERIAL_STATE   (defined(SCL_BACKEND_SERIAL)   ? 1 : 0)
-#define SCL_BACKEND_TBB_STATE      (defined(SCL_BACKEND_TBB)      ? 1 : 0)
-#define SCL_BACKEND_OPENMP_STATE   (defined(SCL_BACKEND_OPENMP)   ? 1 : 0)
-#define SCL_BACKEND_BS_STATE       (defined(SCL_BACKEND_BS)       ? 1 : 0)
-#define SCL_BACKEND_SELECTED_COUNT (SCL_BACKEND_SERIAL_STATE +     \
-                                    SCL_BACKEND_TBB_STATE +        \
-                                    SCL_BACKEND_OPENMP_STATE +     \
-                                    SCL_BACKEND_BS_STATE)
+/// @note These macros are for runtime use only, not for #if directives
 
 // --- Step 2.2: Auto-select backend based on platform if none specified ---
-#if SCL_BACKEND_SELECTED_COUNT == 0
+#if !defined(SCL_BACKEND_SERIAL) && !defined(SCL_BACKEND_TBB) && \
+    !defined(SCL_BACKEND_OPENMP) && !defined(SCL_BACKEND_BS)
     #if defined(SCL_OS_MAC)
         // macOS Strategy: Prefer BS::thread_pool to avoid libomp dependency issues
         // Users can force OpenMP by defining SCL_MAC_USE_OPENMP
@@ -99,23 +112,29 @@
     #endif
 #endif
 
-// --- Step 2.3: Final state validation ---
-/// @brief Final backend state after auto-selection (if applicable)
-#define SCL_FINAL_SERIAL_STATE   (defined(SCL_BACKEND_SERIAL)   ? 1 : 0)
-#define SCL_FINAL_TBB_STATE      (defined(SCL_BACKEND_TBB)      ? 1 : 0)
-#define SCL_FINAL_OPENMP_STATE   (defined(SCL_BACKEND_OPENMP)   ? 1 : 0)
-#define SCL_FINAL_BS_STATE       (defined(SCL_BACKEND_BS)       ? 1 : 0)
-#define SCL_FINAL_SELECTED_COUNT (SCL_FINAL_SERIAL_STATE +      \
-                                  SCL_FINAL_TBB_STATE +          \
-                                  SCL_FINAL_OPENMP_STATE +       \
-                                  SCL_FINAL_BS_STATE)
+// --- Step 2.3: State machine uniqueness check ---
+/// @brief Validate that exactly one backend is selected
 
-// --- Step 2.4: State machine uniqueness check ---
-#if SCL_FINAL_SELECTED_COUNT == 0
+// Count how many backends are defined
+#define SCL_COUNT_BACKENDS() ( \
+    (defined(SCL_BACKEND_SERIAL) ? 1 : 0) + \
+    (defined(SCL_BACKEND_TBB) ? 1 : 0) + \
+    (defined(SCL_BACKEND_OPENMP) ? 1 : 0) + \
+    (defined(SCL_BACKEND_BS) ? 1 : 0) \
+)
+
+// Check for no backend selected
+#if !defined(SCL_BACKEND_SERIAL) && !defined(SCL_BACKEND_TBB) && \
+    !defined(SCL_BACKEND_OPENMP) && !defined(SCL_BACKEND_BS)
     #error "SCL Configuration Error: No threading backend selected! " \
            "Please define exactly one backend: SCL_BACKEND_SERIAL, " \
            "SCL_BACKEND_TBB, SCL_BACKEND_OPENMP, or SCL_BACKEND_BS."
-#elif SCL_FINAL_SELECTED_COUNT > 1
+#endif
+
+// Check for multiple backends selected (using explicit checks to avoid macro expansion)
+#if (defined(SCL_BACKEND_SERIAL) && (defined(SCL_BACKEND_TBB) || defined(SCL_BACKEND_OPENMP) || defined(SCL_BACKEND_BS))) || \
+    (defined(SCL_BACKEND_TBB) && (defined(SCL_BACKEND_OPENMP) || defined(SCL_BACKEND_BS))) || \
+    (defined(SCL_BACKEND_OPENMP) && defined(SCL_BACKEND_BS))
     #error "SCL Configuration Error: Multiple threading backends defined! " \
            "Please define only one backend."
 #endif

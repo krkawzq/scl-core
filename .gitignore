@@ -14,13 +14,15 @@ install_manifest.txt
 # Compile commands (optional - some projects commit this)
 # compile_commands.json
 
-# Compiled binaries (but keep libs directory structure)
-libs/*.so
-libs/*.dylib
-libs/*.dll
-libs/*.a
-libs/*.lib
+# Compiled binaries
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
 *.exe
+
+# Note: libs/ directory is for third-party source code, not build artifacts
 
 # Object files
 *.o
@@ -46,6 +48,10 @@ dist/
 # Dependencies (if not using FetchContent)
 deps/
 third_party/
+
+# Local vendor dependencies (optional, downloaded by setup script)
+libs/*
+!libs/README.md
 
 # OS files
 .DS_Store

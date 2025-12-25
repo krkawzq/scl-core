@@ -190,6 +190,93 @@ install_build_tools() {
     print_success "Build tools ready"
 }
 
+install_highway() {
+    print_info "Installing Google Highway (SIMD library)..."
+    
+    local HWY_VERSION="1.0.7"
+    local HWY_DIR="$PROJECT_ROOT/libs/highway"
+    
+    # Check if already installed
+    if [ -d "$HWY_DIR" ]; then
+        print_warning "Highway directory already exists at libs/highway"
+        
+        # Check if it's a valid git repository
+        if [ -d "$HWY_DIR/.git" ]; then
+            cd "$HWY_DIR"
+            
+            # Get current version/tag
+            CURRENT_VERSION=$(git describe --tags 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            
+            print_info "Current version: $CURRENT_VERSION"
+            print_info "Target version:  $HWY_VERSION"
+            
+            # Check if CMakeLists.txt exists (validation)
+            if [ -f "$HWY_DIR/CMakeLists.txt" ]; then
+                print_success "Highway installation appears valid"
+                
+                if [[ "$CURRENT_VERSION" == "$HWY_VERSION" ]]; then
+                    print_success "Version matches target, installation is up-to-date"
+                    cd "$PROJECT_ROOT"
+                    return 0
+                else
+                    print_warning "Version mismatch detected"
+                fi
+            else
+                print_error "Invalid Highway installation (missing CMakeLists.txt)"
+            fi
+            
+            cd "$PROJECT_ROOT"
+        else
+            print_warning "Directory exists but is not a git repository"
+        fi
+        
+        # Ask user what to do
+        echo ""
+        echo "Options:"
+        echo "  1) Keep existing installation"
+        echo "  2) Remove and reinstall with v${HWY_VERSION}"
+        read -p "Choose (1/2): " -n 1 -r
+        echo
+        
+        if [[ ! $REPLY =~ ^[2]$ ]]; then
+            print_info "Keeping existing Highway installation"
+            return 0
+        fi
+        
+        print_info "Removing existing installation..."
+        rm -rf "$HWY_DIR"
+    fi
+    
+    # Create libs directory if not exists
+    mkdir -p "$PROJECT_ROOT/libs"
+    
+    # Clone Highway repository
+    print_info "Cloning Highway v${HWY_VERSION} from GitHub..."
+    cd "$PROJECT_ROOT/libs"
+    
+    git clone --depth 1 --branch ${HWY_VERSION} \
+        https://github.com/google/highway.git highway
+    
+    if [ $? -eq 0 ]; then
+        # Verify installation
+        if [ -f "$HWY_DIR/CMakeLists.txt" ]; then
+            print_success "Highway v${HWY_VERSION} installed successfully to libs/highway"
+            print_info "CMake will use the local copy instead of FetchContent"
+        else
+            print_error "Installation completed but validation failed"
+            cd "$PROJECT_ROOT"
+            return 1
+        fi
+    else
+        print_error "Failed to clone Highway repository"
+        print_info "CMake will fall back to FetchContent during build"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    
+    cd "$PROJECT_ROOT"
+}
+
 # =============================================================================
 # Main Installation Logic
 # =============================================================================
@@ -204,6 +291,15 @@ main() {
     
     # Install build tools first
     install_build_tools
+    
+    # Optionally install Highway locally
+    read -p "Install Google Highway to libs/highway? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        install_highway
+    else
+        print_info "Skipping Highway installation (CMake will use FetchContent)"
+    fi
     
     # Install dependencies based on backend
     case "$BACKEND" in
