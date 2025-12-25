@@ -15,10 +15,10 @@
 /// Implements high-performance statistical operations on CSR matrices.
 /// optimized for row-wise access patterns common in single-cell genomics.
 ///
-/// @section Optimizations
-/// - **Multi-threading**: Uses `scl::threading::parallel_for` over rows.
-/// - **Zero-Overhead**: Iterates strictly over non-zero elements (NNZ).
-/// - **One-Pass**: Computes Mean and Variance in a single pass over data.
+/// Optimizations:
+/// - Multi-threading: Uses scl::threading::parallel_for over rows.
+/// - Zero-Overhead: Iterates strictly over non-zero elements (NNZ).
+/// - One-Pass: Computes Mean and Variance in a single pass over data.
 ///
 // =============================================================================
 

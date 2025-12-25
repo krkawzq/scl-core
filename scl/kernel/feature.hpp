@@ -15,13 +15,13 @@
 /// Implements high-performance estimators for identifying informative features
 /// (Highly Variable Genes).
 ///
-/// @section Supported Methods
-/// 1. **Clipped Moments** (Seurat V3 "vst"): Robust variance with outlier clipping.
-/// 2. **Standard Moments** (CellRanger/LogMeanVar): Basic Mean/Var stats.
-/// 3. **Detection Rate**: Fraction of cells expressing a gene (Dropout analysis).
-/// 4. **Dispersion**: Fano factor calculation.
+/// Supported Methods:
+/// 1. Clipped Moments (Seurat V3 "vst"): Robust variance with outlier clipping.
+/// 2. Standard Moments (CellRanger/LogMeanVar): Basic Mean/Var stats.
+/// 3. Detection Rate: Fraction of cells expressing a gene (Dropout analysis).
+/// 4. Dispersion: Fano factor calculation.
 ///
-/// @note Optimized for CSC Matrix layout (Gene-wise parallelization).
+/// Note: Optimized for CSC Matrix layout (Gene-wise parallelization).
 // =============================================================================
 
 namespace scl::kernel::feature {

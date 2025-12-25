@@ -14,9 +14,9 @@
 ///
 /// Computes pairwise differential expression (Reference Group vs Target Groups).
 ///
-/// @section Architecture
-/// 1. **Aggregation Phase**: Calls `group_stats` to compute Mean/Var for all groups.
-/// 2. **Testing Phase**: Iterates features to compute T-stats for Ref vs Targets.
+/// Architecture:
+/// 1. Aggregation Phase: Calls group_stats to compute Mean/Var for all groups.
+/// 2. Testing Phase: Iterates features to compute T-stats for Ref vs Targets.
 // =============================================================================
 
 namespace scl::kernel::diff_expr {
@@ -32,14 +32,14 @@ struct TTestOutput {
 
 /// @brief Run One-vs-Rest or One-vs-Many T-Test.
 ///
-/// Compares **Group 0 (Reference)** against **Groups 1..K (Targets)**.
+/// Compares Group 0 (Reference) against Groups 1..K (Targets).
 ///
 /// @param matrix    CSC Matrix (Gene-wise).
 /// @param group_ids Row labels. 0=Ref, 1..K=Targets.
 /// @param n_groups  Total groups (K+1).
 /// @param output    Output buffers.
 /// @param workspace Temporary buffer for group stats.
-///                  Size: `matrix.cols * n_groups * 2 * sizeof(Real)`.
+///                  Size: matrix.cols * n_groups * 2 * sizeof(Real).
 /// @param use_welch If true, use Welch's t-test (unequal variance). Default true.
 SCL_FORCE_INLINE void ttest(
     CSCMatrix<Real> matrix,

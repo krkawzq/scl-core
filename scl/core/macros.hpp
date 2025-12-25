@@ -100,6 +100,16 @@
     
     /// @brief Prefetch memory into cache for writing.
     #define SCL_PREFETCH_WRITE(ptr, locality) __builtin_prefetch((ptr), 1, (locality))
+#elif defined(_MSC_VER)
+    #include <xmmintrin.h>
+    // MSVC uses _mm_prefetch with hint constants
+    // locality 0-3 maps to: _MM_HINT_NTA, _MM_HINT_T2, _MM_HINT_T1, _MM_HINT_T0
+    #define SCL_PREFETCH_READ(ptr, locality) \
+        _mm_prefetch(reinterpret_cast<const char*>(ptr), \
+                     (locality) == 0 ? _MM_HINT_NTA : \
+                     (locality) == 1 ? _MM_HINT_T2  : \
+                     (locality) == 2 ? _MM_HINT_T1  : _MM_HINT_T0)
+    #define SCL_PREFETCH_WRITE(ptr, locality) SCL_PREFETCH_READ(ptr, locality)
 #else
     #define SCL_PREFETCH_READ(ptr, locality) ((void)0)
     #define SCL_PREFETCH_WRITE(ptr, locality) ((void)0)

@@ -15,41 +15,41 @@
 /// Provides optimized implementations of numerically stable logarithmic
 /// functions commonly used in computational biology and statistical computing.
 ///
-/// ## Implemented Functions
-/// - `log1p(x)`: ln(1 + x) - Natural logarithm of (1 + x)
-/// - `log2p1(x)`: log2(1 + x) - Base-2 logarithm of (1 + x)
-/// - `expm1(x)`: e^x - 1 - Exponential minus one (inverse of log1p)
+/// Implemented Functions:
+/// - log1p(x): ln(1 + x) - Natural logarithm of (1 + x)
+/// - log2p1(x): log2(1 + x) - Base-2 logarithm of (1 + x)
+/// - expm1(x): e^x - 1 - Exponential minus one (inverse of log1p)
 ///
-/// ## Why Specialized Implementations?
+/// Why Specialized Implementations:
 ///
-/// ### 1. Numerical Stability
-/// Computing ln(1 + x) directly as `log(1 + x)` loses precision when
-/// |x| << 1 due to catastrophic cancellation. The `log1p` functions use
+/// 1. Numerical Stability:
+/// Computing ln(1 + x) directly as log(1 + x) loses precision when
+/// |x| << 1 due to catastrophic cancellation. The log1p functions use
 /// Taylor series or rational approximations to maintain accuracy:
 ///
 /// ln(1 + x) = x - x^2/2 + x^3/3 - ... for |x| < 1
 ///
-/// ### 2. Sparsity Preservation
+/// 2. Sparsity Preservation:
 /// For sparse matrices, ln(1 + 0) = 0, so zero elements remain zero.
 /// We only process the non-zero values array, ignoring structural information.
 ///
-/// ### 3. SIMD Vectorization
+/// 3. SIMD Vectorization:
 /// Uses Highway's optimized polynomial approximations instead of scalar
-/// `std::log` calls, achieving 4-8× throughput on modern CPUs.
+/// std::log calls, achieving 4-8x throughput on modern CPUs.
 ///
-/// ### 4. Multi-threaded Processing
+/// 4. Multi-threaded Processing:
 /// Parallel block processing outperforms NumPy/SciPy single-threaded loops
 /// for large arrays (>10K elements).
 ///
-/// ## Use Cases in Biology
-/// - **scRNA-seq**: log-normalization after CPM/TPM scaling
-/// - **Differential Expression**: Variance stabilization
-/// - **Pseudocount Handling**: log(x + 1) to avoid log(0)
+/// Use Cases in Biology:
+/// - scRNA-seq: log-normalization after CPM/TPM scaling
+/// - Differential Expression: Variance stabilization
+/// - Pseudocount Handling: log(x + 1) to avoid log(0)
 ///
-/// ## Performance
-/// - **Throughput**: ~1.5 GB/s per core (AVX2, f64)
-/// - **Cache Efficiency**: 4KB block processing
-/// - **Scalability**: Linear with thread count
+/// Performance:
+/// - Throughput: ~1.5 GB/s per core (AVX2, f64)
+/// - Cache Efficiency: 4KB block processing
+/// - Scalability: Linear with thread count
 // =============================================================================
 
 namespace scl::kernel {
@@ -73,12 +73,12 @@ namespace detail {
 
     /// @brief SIMD kernel for natural logarithm: ln(1 + x).
     ///
-    /// Uses Highway's optimized `Log1p` instruction, which employs:
+    /// Uses Highway's optimized Log1p instruction, which employs:
     /// - Range reduction to [1 - 1/sqrt(2), 1 + 1/sqrt(2)]
     /// - Minimax polynomial approximation (7-9 degree)
     /// - Special handling for subnormal and boundary values
     ///
-    /// **Accuracy**: ~0.5 ULP (Units in Last Place) across full range.
+    /// Accuracy: ~0.5 ULP (Units in Last Place) across full range.
     ///
     /// @tparam D Highway SIMD tag (deduced)
     /// @tparam V Vector type (deduced)
@@ -114,7 +114,7 @@ namespace detail {
 
     /// @brief SIMD kernel for exponential minus one: e^x - 1.
     ///
-    /// Inverse operation of `log1p`. Uses optimized polynomial to avoid
+    /// Inverse operation of log1p. Uses optimized polynomial to avoid
     /// cancellation errors when |x| << 1:
     ///
     /// e^x - 1 = x + x^2/2! + x^3/3! + ... for |x| < 1
@@ -239,8 +239,8 @@ SCL_FORCE_INLINE void log1p(
 /// @brief Compute log2(1 + x) in-place.
 ///
 /// Common normalization in single-cell RNA-seq analysis:
-/// - After CPM: `log2(CPM + 1)`
-/// - After TPM: `log2(TPM + 1)`
+/// - After CPM: log2(CPM + 1)
+/// - After TPM: log2(TPM + 1)
 ///
 /// **Formula**: log2(1 + x) = ln(1 + x) / ln(2)
 ///
@@ -429,19 +429,17 @@ SCL_FORCE_INLINE void expm1_inplace(DenseMatrix<T>& mat) {
 
 /// @brief Apply ln(1 + x) to sparse matrix values only.
 ///
-/// **Sparsity Preservation**: Since ln(1 + 0) = 0, structural zeros
+/// Sparsity Preservation: Since ln(1 + 0) = 0, structural zeros
 /// remain zero. We only transform the explicit non-zero values.
 ///
-/// **Note**: Does NOT modify matrix structure (indices/pointers).
+/// Note: Does NOT modify matrix structure (indices/pointers).
 ///
 /// @param mat Sparse matrix in CSR/CSC format [values modified in-place]
 ///
-/// @code
-/// // Example: scRNA-seq log-normalization
+/// Example: scRNA-seq log-normalization
 /// CSRMatrix counts = load_counts();
 /// normalize_cpm_inplace(counts);  // counts per million
 /// log1p_inplace(counts);           // log(CPM + 1)
-/// @endcode
 template <typename SparseMatrixType>
 SCL_FORCE_INLINE void log1p_inplace_sparse(SparseMatrixType& mat) {
     // Only transform the non-zero values array
