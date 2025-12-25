@@ -151,41 +151,4 @@ void row_statistics(const CSRMatrix<T>& input,
     });
 }
 
-// =============================================================================
-// 3. Advanced (QC Metrics)
-// =============================================================================
-
-/// @brief Calculate QC metrics in one pass (similar to scanpy.pp.calculate_qc_metrics).
-///
-/// Computes:
-/// 1. Sum (Total counts)
-/// 2. Count > 0 (Number of genes expressed)
-///
-/// @param input      Input CSR matrix.
-/// @param out_sums   Output array for row sums.
-/// @param out_counts Output array for non-zero counts.
-template <typename T>
-void row_qc_metrics(const CSRMatrix<T>& input, 
-                   MutableSpan<T> out_sums, 
-                   MutableSpan<T> out_counts) {
-    SCL_CHECK_DIM(out_sums.size == static_cast<Size>(input.rows), "Sums dim error");
-    SCL_CHECK_DIM(out_counts.size == static_cast<Size>(input.rows), "Counts dim error");
-
-    scl::threading::parallel_for(0, input.rows, [&](size_t i) {
-        auto row_vals = input.row_values(static_cast<Index>(i));
-        
-        T sum = 0;
-        // Count is simply the number of stored elements in CSR 
-        // (assuming no explicit zeros are stored, which is standard)
-        T count = static_cast<T>(row_vals.size); 
-
-        for (Size j = 0; j < row_vals.size; ++j) {
-            sum += row_vals[j];
-        }
-
-        out_sums[i] = sum;
-        out_counts[i] = count;
-    });
-}
-
 } // namespace scl::kernel::sparse
