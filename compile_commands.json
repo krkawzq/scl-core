@@ -1,0 +1,127 @@
+[
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=0 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f32_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f32.dir/src/bindings/bind_math.cpp.o -c /home/wzq/Code/Projects/scl-core/src/bindings/bind_math.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/bindings/bind_math.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=0 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f32_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f32.dir/src/bindings/module.cpp.o -c /home/wzq/Code/Projects/scl-core/src/bindings/module.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/bindings/module.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=0 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f32_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f32.dir/src/cpp/error.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/error.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/error.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=0 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f32_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f32.dir/src/cpp/math/diffusion.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/math/diffusion.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/math/diffusion.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=0 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f32_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f32.dir/src/cpp/math/saturation.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/math/saturation.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/math/saturation.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=0 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f32_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f32.dir/src/cpp/progress.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/progress.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/progress.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=0 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f32_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f32.dir/src/cpp/threading.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/threading.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/threading.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=1 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f64_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f64.dir/src/bindings/bind_math.cpp.o -c /home/wzq/Code/Projects/scl-core/src/bindings/bind_math.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/bindings/bind_math.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=1 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f64_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f64.dir/src/bindings/module.cpp.o -c /home/wzq/Code/Projects/scl-core/src/bindings/module.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/bindings/module.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=1 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f64_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f64.dir/src/cpp/error.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/error.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/error.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=1 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f64_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f64.dir/src/cpp/math/diffusion.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/math/diffusion.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/math/diffusion.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=1 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f64_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f64.dir/src/cpp/math/saturation.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/math/saturation.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/math/saturation.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=1 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f64_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f64.dir/src/cpp/progress.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/progress.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/progress.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DSCL_BACKEND_OPENMP -DSCL_PRECISION=1 -DTOOLCHAIN_MISS_ASM_HWCAP_H -Dscl_core_f64_EXPORTS -I/home/wzq/Code/Projects/scl-core/include -I/home/wzq/Code/Projects/scl-core/build/_deps/bs_thread_pool-src -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -fopenmp -std=c++17 -o CMakeFiles/scl_core_f64.dir/src/cpp/threading.cpp.o -c /home/wzq/Code/Projects/scl-core/src/cpp/threading.cpp",
+  "file": "/home/wzq/Code/Projects/scl-core/src/cpp/threading.cpp"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy.dir/hwy/abort.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/abort.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/abort.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy.dir/hwy/aligned_allocator.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/aligned_allocator.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/aligned_allocator.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy.dir/hwy/nanobenchmark.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/nanobenchmark.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/nanobenchmark.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy.dir/hwy/per_target.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/per_target.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/per_target.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy.dir/hwy/perf_counters.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/perf_counters.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/perf_counters.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy.dir/hwy/print.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/print.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/print.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy.dir/hwy/profiler.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/profiler.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/profiler.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy.dir/hwy/targets.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/targets.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/targets.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy.dir/hwy/timer.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/timer.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/timer.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIC -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy_test.dir/hwy/tests/test_util.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/tests/test_util.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/tests/test_util.cc"
+},
+{
+  "directory": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-build",
+  "command": "/usr/bin/c++ -DHWY_STATIC_DEFINE -DTOOLCHAIN_MISS_ASM_HWCAP_H -I/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src -O3 -DNDEBUG -fPIE -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wpedantic -O3 -march=native -DNDEBUG -Wno-builtin-macro-redefined -D__DATE__=\\\"redacted\\\" -D__TIMESTAMP__=\\\"redacted\\\" -D__TIME__=\\\"redacted\\\" -fmerge-all-constants -Wconversion -Wsign-conversion -Wvla -Wnon-virtual-dtor -Wcast-align -fmath-errno -fno-exceptions -Wno-psabi -std=c++17 -o CMakeFiles/hwy_list_targets.dir/hwy/tests/list_targets.cc.o -c /home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/tests/list_targets.cc",
+  "file": "/home/wzq/Code/Projects/scl-core/build/_deps/hwy-src/hwy/tests/list_targets.cc"
+}
+]
