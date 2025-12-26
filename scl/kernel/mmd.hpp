@@ -33,10 +33,11 @@ namespace detail {
 
 /// @brief Precompute exp(-gamma * v^2) for all values (SIMD)
 template <typename T>
-SCL_FORCE_INLINE T unary_exp_sum(
+SCL_FORCE_INLINE void unary_exp_sum(
     Array<const T> vals,
     T gamma,
-    T* cache
+    T* cache,
+    T& out_sum
 ) {
     namespace s = scl::simd;
     const s::Tag d;
@@ -64,16 +65,17 @@ SCL_FORCE_INLINE T unary_exp_sum(
         sum += exp_term;
     }
     
-    return sum;
+    out_sum = sum;
 }
 
 /// @brief Compute self-kernel sum (SIMD optimized)
 template <typename T>
-SCL_FORCE_INLINE T self_kernel_sum(
+SCL_FORCE_INLINE void self_kernel_sum(
     Array<const T> vals,
     Size N,
     T gamma,
-    T sum_unary
+    T sum_unary,
+    T& out_sum
 ) {
     const Size nnz = vals.size();
     const Size n_zeros = N - nnz;
@@ -124,17 +126,18 @@ SCL_FORCE_INLINE T self_kernel_sum(
     }
 
     sum += static_cast<T>(2.0) * off_diag;
-    return sum;
+    out_sum = sum;
 }
 
 /// @brief Compute cross-kernel sum (SIMD optimized)
 template <typename T>
-SCL_FORCE_INLINE T cross_kernel_sum(
+SCL_FORCE_INLINE void cross_kernel_sum(
     Array<const T> vals_x, Size N_x,
     Array<const T> vals_y, Size N_y,
     T gamma,
     T sum_x_unary,
-    T sum_y_unary
+    T sum_y_unary,
+    T& out_sum
 ) {
     const Size nnz_x = vals_x.size();
     const Size nnz_y = vals_y.size();
@@ -188,7 +191,7 @@ SCL_FORCE_INLINE T cross_kernel_sum(
     }
 
     sum += cross_sum;
-    return sum;
+    out_sum = sum;
 }
 
 } // namespace detail
@@ -265,13 +268,15 @@ void mmd_rbf(
             Array<const T> span_x(vals_x.ptr, static_cast<Size>(len_x));
             Array<const T> span_y(vals_y.ptr, static_cast<Size>(len_y));
             
-            T sum_x_unary = detail::unary_exp_sum(span_x, gamma, x_unary_cache.data());
-            T sum_y_unary = detail::unary_exp_sum(span_y, gamma, y_unary_cache.data());
+            T sum_x_unary, sum_y_unary;
+            detail::unary_exp_sum(span_x, gamma, x_unary_cache.data(), sum_x_unary);
+            detail::unary_exp_sum(span_y, gamma, y_unary_cache.data(), sum_y_unary);
 
-            T sum_xx = detail::self_kernel_sum(span_x, secondary_x, gamma, sum_x_unary);
-            T sum_yy = detail::self_kernel_sum(span_y, secondary_y, gamma, sum_y_unary);
-            T sum_xy = detail::cross_kernel_sum(span_x, secondary_x, span_y, secondary_y, 
-                                               gamma, sum_x_unary, sum_y_unary);
+            T sum_xx, sum_yy, sum_xy;
+            detail::self_kernel_sum(span_x, secondary_x, gamma, sum_x_unary, sum_xx);
+            detail::self_kernel_sum(span_y, secondary_y, gamma, sum_y_unary, sum_yy);
+            detail::cross_kernel_sum(span_x, secondary_x, span_y, secondary_y, 
+                                     gamma, sum_x_unary, sum_y_unary, sum_xy);
 
             T mmd2 = (sum_xx * inv_Nx2) + (sum_yy * inv_Ny2) - 
                      (static_cast<T>(2.0) * sum_xy * inv_NxNy);

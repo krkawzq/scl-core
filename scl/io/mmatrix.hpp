@@ -4,6 +4,7 @@
 #include "scl/core/type.hpp"
 #include "scl/core/sparse.hpp"
 #include "scl/core/simd.hpp"
+#include "scl/core/lifetime.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <vector>
@@ -12,16 +13,32 @@
 
 // =============================================================================
 /// @file mmatrix.hpp
-/// @brief Memory-Mapped Sparse Matrix
+/// @brief Memory-Mapped Sparse Matrix with Lifetime Management
 ///
-/// Provides zero-copy sparse matrix views over memory-mapped files.
-/// Enables out-of-core computation on TB-scale sparse matrices.
+/// Provides zero-copy sparse matrix views over memory-mapped files,
+/// with proper lifetime management for conversions.
+///
+/// Key Types:
+///
+/// 1. **MappedArray<T>** - Memory-mapped array (file-backed)
+/// 2. **OwnedArray<T>** - Heap-allocated array with RAII (uses MemHandle)
+/// 3. **MappedCustomSparse<T, IsCSR>** - Memory-mapped sparse matrix
+/// 4. **OwnedSparse<T, IsCSR>** - Heap-allocated sparse matrix
+///
+/// Conversion Functions:
+///
+/// - MappedArray → OwnedArray: `mapped.to_owned()`
+/// - MappedArray → Array: `mapped.as_array()` (non-owning view)
+/// - OwnedArray → Array: `owned.as_array()` (non-owning view)
+/// - MappedCustomSparse → OwnedSparse: `mapped.materialize()`
+/// - OwnedSparse → CustomSparse: `owned.view()` (non-owning view)
 ///
 /// Design:
 /// - Built on MappedArray from mmap.hpp
+/// - Uses MemHandle from lifetime.hpp for memory management
 /// - Satisfies SparseLike concept
-/// - Zero-copy operations
-/// - Parallel materialization
+/// - Zero-copy operations where possible
+/// - Parallel materialization for large data
 // =============================================================================
 
 namespace scl::io {
@@ -30,16 +47,17 @@ namespace scl::io {
 // Forward Declarations
 // =============================================================================
 
+template <typename T> class OwnedArray;
 template <typename T, bool IsCSR> class MappedCustomSparse;
 template <typename T, bool IsCSR> class MappedVirtualSparse;
 template <typename T, bool IsCSR> struct OwnedSparse;
 
 namespace detail {
 
-/// @brief Parallel memory copy
+/// @brief Parallel memory copy for large arrays
 template <typename T>
 inline void parallel_copy(const T* src, T* dst, Size count) {
-    constexpr Size MIN_PARALLEL = 1024 * 1024;
+    constexpr Size MIN_PARALLEL = 1024 * 1024;  // 1M elements
     
     if (count < MIN_PARALLEL) {
         std::memcpy(dst, src, count * sizeof(T));
@@ -59,6 +77,201 @@ inline void parallel_copy(const T* src, T* dst, Size count) {
 }
 
 } // namespace detail
+
+// =============================================================================
+// OwnedArray: Heap-Allocated Array with RAII
+// =============================================================================
+
+/// @brief Heap-allocated array with automatic memory management
+///
+/// Uses MemHandle from lifetime.hpp to manage memory.
+/// Provides conversions to/from Array views.
+///
+/// Memory Ownership:
+/// - OwnedArray owns its memory (freed on destruction)
+/// - as_array() returns a non-owning view
+/// - release() transfers ownership to caller
+///
+/// @tparam T Element type
+template <typename T>
+class OwnedArray {
+public:
+    using value_type = T;
+    
+private:
+    core::MemHandle _handle;
+    
+public:
+    // -------------------------------------------------------------------------
+    // Construction
+    // -------------------------------------------------------------------------
+    
+    /// @brief Default constructor (empty)
+    OwnedArray() = default;
+    
+    /// @brief Construct with allocated memory (uninitialized)
+    explicit OwnedArray(Size count) 
+        : _handle(core::mem::alloc_array<T>(count)) {}
+    
+    /// @brief Construct with allocated memory (zero-initialized)
+    static OwnedArray zeros(Size count) {
+        OwnedArray arr;
+        arr._handle = core::mem::alloc_array_zero<T>(count);
+        return arr;
+    }
+    
+    /// @brief Construct with aligned memory (for SIMD)
+    static OwnedArray aligned(Size count, Size alignment = 64) {
+        OwnedArray arr;
+        arr._handle = core::mem::alloc_array_aligned<T>(count, alignment);
+        return arr;
+    }
+    
+    /// @brief Construct from existing MemHandle (takes ownership)
+    explicit OwnedArray(core::MemHandle&& handle) 
+        : _handle(std::move(handle)) {}
+    
+    /// @brief Copy from Array (deep copy)
+    static OwnedArray from_array(Array<const T> src) {
+        if (src.len == 0) return OwnedArray();
+        
+        OwnedArray arr(src.len);
+        detail::parallel_copy(src.ptr, arr.data(), src.len);
+        return arr;
+    }
+    
+    /// @brief Copy from raw pointer (deep copy)
+    static OwnedArray from_ptr(const T* src, Size count) {
+        return from_array(Array<const T>(src, count));
+    }
+    
+    // -------------------------------------------------------------------------
+    // Move Semantics (No Copy)
+    // -------------------------------------------------------------------------
+    
+    OwnedArray(OwnedArray&&) noexcept = default;
+    OwnedArray& operator=(OwnedArray&&) noexcept = default;
+    
+    OwnedArray(const OwnedArray&) = delete;
+    OwnedArray& operator=(const OwnedArray&) = delete;
+    
+    /// @brief Deep copy (explicit)
+    [[nodiscard]] OwnedArray clone() const {
+        return from_array(as_array());
+    }
+    
+    // -------------------------------------------------------------------------
+    // Accessors
+    // -------------------------------------------------------------------------
+    
+    /// @brief Get raw pointer
+    [[nodiscard]] T* data() noexcept { 
+        return _handle.as<T>(); 
+    }
+    
+    [[nodiscard]] const T* data() const noexcept { 
+        return _handle.as<T>(); 
+    }
+    
+    /// @brief Get number of elements
+    [[nodiscard]] Size size() const noexcept { 
+        return _handle.count<T>(); 
+    }
+    
+    /// @brief Check if empty
+    [[nodiscard]] bool empty() const noexcept { 
+        return _handle.empty(); 
+    }
+    
+    /// @brief Element access
+    [[nodiscard]] T& operator[](Size i) noexcept { 
+        return data()[i]; 
+    }
+    
+    [[nodiscard]] const T& operator[](Size i) const noexcept { 
+        return data()[i]; 
+    }
+    
+    // -------------------------------------------------------------------------
+    // Conversion to Array (Non-Owning View)
+    // -------------------------------------------------------------------------
+    
+    /// @brief Get non-owning Array view
+    ///
+    /// WARNING: The returned Array is only valid while this OwnedArray exists!
+    [[nodiscard]] Array<T> as_array() noexcept {
+        return Array<T>(data(), size());
+    }
+    
+    [[nodiscard]] Array<const T> as_array() const noexcept {
+        return Array<const T>(data(), size());
+    }
+    
+    /// @brief Implicit conversion to Array (non-owning view)
+    operator Array<T>() noexcept { return as_array(); }
+    operator Array<const T>() const noexcept { return as_array(); }
+    
+    // -------------------------------------------------------------------------
+    // Lifetime Control
+    // -------------------------------------------------------------------------
+    
+    /// @brief Release ownership (for handoff to external code)
+    ///
+    /// After calling release(), this OwnedArray becomes empty.
+    /// The caller is responsible for freeing the memory!
+    [[nodiscard]] T* release() noexcept {
+        return _handle.release<T>();
+    }
+    
+    /// @brief Get underlying MemHandle (moves ownership)
+    [[nodiscard]] core::MemHandle release_handle() noexcept {
+        return std::move(_handle);
+    }
+    
+    /// @brief Free memory immediately
+    void reset() noexcept {
+        _handle.reset();
+    }
+};
+
+// =============================================================================
+// MappedArray Extensions (Conversion Methods)
+// =============================================================================
+
+// Note: These are free functions because MappedArray is defined in mmap.hpp
+
+/// @brief Convert MappedArray to OwnedArray (deep copy)
+///
+/// Copies data from memory-mapped file to heap memory.
+/// The returned OwnedArray owns the copied data.
+///
+/// @param mapped Source memory-mapped array
+/// @return OwnedArray with copied data
+template <typename T>
+[[nodiscard]] inline OwnedArray<T> to_owned(const MappedArray<T>& mapped) {
+    if (mapped.size() == 0) return OwnedArray<T>();
+    
+    OwnedArray<T> owned(mapped.size());
+    detail::parallel_copy(mapped.data(), owned.data(), mapped.size());
+    return owned;
+}
+
+/// @brief Convert MappedArray to Array view (non-owning, zero-copy)
+///
+/// WARNING: The returned Array is only valid while the MappedArray exists!
+///
+/// @param mapped Source memory-mapped array
+/// @return Non-owning Array view
+template <typename T>
+[[nodiscard]] inline Array<const T> as_array(const MappedArray<T>& mapped) noexcept {
+    return Array<const T>(mapped.data(), mapped.size());
+}
+
+/// @brief Convert MappedArray to mutable Array view
+template <typename T>
+[[nodiscard]] inline Array<T> as_mutable_array(MappedArray<T>& mapped) noexcept {
+    return Array<T>(const_cast<T*>(mapped.data()), mapped.size());
+}
 
 // =============================================================================
 // MappedCustomSparse: Memory-Mapped Sparse Matrix
@@ -112,7 +325,10 @@ public:
     MappedCustomSparse(const MappedCustomSparse&) = delete;
     MappedCustomSparse& operator=(const MappedCustomSparse&) = delete;
 
+    // -------------------------------------------------------------------------
     // SparseLike Interface
+    // -------------------------------------------------------------------------
+
     SCL_NODISCARD SCL_FORCE_INLINE Index nnz() const {
         Index primary_dim = IsCSR ? rows : cols;
         return _indptr[primary_dim];
@@ -152,13 +368,23 @@ public:
         return _indptr[j + 1] - _indptr[j];
     }
 
-    // Direct access
+    // -------------------------------------------------------------------------
+    // Direct Array Access
+    // -------------------------------------------------------------------------
+
     SCL_NODISCARD T* data() const noexcept { return const_cast<T*>(_data.data()); }
     SCL_NODISCARD Index* indices() const noexcept { return const_cast<Index*>(_indices.data()); }
     SCL_NODISCARD Index* indptr() const noexcept { return const_cast<Index*>(_indptr.data()); }
 
-    // Materialization
-    OwnedSparse<T, IsCSR> materialize() const {
+    // -------------------------------------------------------------------------
+    // Conversion Methods
+    // -------------------------------------------------------------------------
+
+    /// @brief Materialize to OwnedSparse (deep copy)
+    ///
+    /// Copies all data from memory-mapped files to heap memory.
+    /// The returned OwnedSparse owns all the copied data.
+    [[nodiscard]] OwnedSparse<T, IsCSR> materialize() const {
         Index total_nnz = nnz();
         Index primary_dim = IsCSR ? rows : cols;
         
@@ -178,7 +404,23 @@ public:
         );
     }
 
-    // Memory hints
+    /// @brief Get CustomSparse view (non-owning, zero-copy)
+    ///
+    /// WARNING: The returned CustomSparse is only valid while this
+    /// MappedCustomSparse exists!
+    [[nodiscard]] CustomSparse<T, IsCSR> as_view() const noexcept {
+        return CustomSparse<T, IsCSR>(
+            const_cast<T*>(_data.data()),
+            const_cast<Index*>(_indices.data()),
+            const_cast<Index*>(_indptr.data()),
+            rows, cols
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Memory Hints
+    // -------------------------------------------------------------------------
+
     void prefetch() const noexcept {
         _data.prefetch();
         _indices.prefetch();
@@ -293,8 +535,12 @@ public:
         return indptr[phys_col + 1] - indptr[phys_col];
     }
 
-    // Materialization
-    OwnedSparse<T, IsCSR> materialize() const {
+    // -------------------------------------------------------------------------
+    // Conversion Methods
+    // -------------------------------------------------------------------------
+
+    /// @brief Materialize to OwnedSparse (deep copy with remapping)
+    [[nodiscard]] OwnedSparse<T, IsCSR> materialize() const {
         Index primary_dim = IsCSR ? rows : cols;
         Index total_nnz = nnz();
         
@@ -331,7 +577,8 @@ public:
 
 /// @brief Sparse matrix with owned heap storage
 ///
-/// Target for materialization. Manages memory lifetime.
+/// Target for materialization. Manages memory lifetime via std::vector.
+/// Provides view() to get non-owning CustomSparse.
 template <typename T, bool IsCSR>
 struct OwnedSparse {
     std::vector<T> data;
@@ -356,7 +603,10 @@ struct OwnedSparse {
     {}
     
     /// @brief Get CustomSparse view (non-owning)
-    CustomSparse<T, IsCSR> view() noexcept {
+    ///
+    /// WARNING: The returned CustomSparse is only valid while this
+    /// OwnedSparse exists!
+    [[nodiscard]] CustomSparse<T, IsCSR> view() noexcept {
         return CustomSparse<T, IsCSR>(
             data.data(), 
             indices.data(), 
@@ -365,16 +615,98 @@ struct OwnedSparse {
         );
     }
     
+    [[nodiscard]] CustomSparse<T, IsCSR> view() const noexcept {
+        return CustomSparse<T, IsCSR>(
+            const_cast<T*>(data.data()), 
+            const_cast<Index*>(indices.data()), 
+            const_cast<Index*>(indptr.data()), 
+            rows, cols
+        );
+    }
+    
     /// @brief Get nnz
-    Index nnz() const {
+    [[nodiscard]] Index nnz() const {
         Index primary_dim = IsCSR ? rows : cols;
-        return indptr[primary_dim];
+        return primary_dim > 0 ? indptr[primary_dim] : 0;
+    }
+    
+    /// @brief Check if empty
+    [[nodiscard]] bool empty() const noexcept {
+        return rows == 0 && cols == 0;
+    }
+    
+    /// @brief Deep copy
+    [[nodiscard]] OwnedSparse clone() const {
+        return OwnedSparse(
+            std::vector<T>(data),
+            std::vector<Index>(indices),
+            std::vector<Index>(indptr),
+            rows, cols
+        );
     }
 };
 
 // =============================================================================
+// Convenience Functions
+// =============================================================================
+
+/// @brief Create OwnedSparse from CustomSparse (deep copy)
+template <typename T, bool IsCSR>
+[[nodiscard]] inline OwnedSparse<T, IsCSR> to_owned(const CustomSparse<T, IsCSR>& sparse) {
+    Index primary_dim = IsCSR ? sparse.rows : sparse.cols;
+    Index total_nnz = sparse.indptr[primary_dim];
+    
+    std::vector<T> data_copy(sparse.data, sparse.data + total_nnz);
+    std::vector<Index> indices_copy(sparse.indices, sparse.indices + total_nnz);
+    std::vector<Index> indptr_copy(sparse.indptr, sparse.indptr + primary_dim + 1);
+    
+    return OwnedSparse<T, IsCSR>(
+        std::move(data_copy),
+        std::move(indices_copy),
+        std::move(indptr_copy),
+        sparse.rows, sparse.cols
+    );
+}
+
+/// @brief Create OwnedSparse from VirtualSparse (deep copy with remapping)
+template <typename T, bool IsCSR>
+[[nodiscard]] inline OwnedSparse<T, IsCSR> to_owned(const VirtualSparse<T, IsCSR>& sparse) {
+    Index primary_dim = IsCSR ? sparse.rows : sparse.cols;
+    Index total_nnz = scl::nnz(sparse);
+    
+    std::vector<T> data_copy;
+    std::vector<Index> indices_copy;
+    std::vector<Index> indptr_copy;
+    
+    data_copy.reserve(total_nnz);
+    indices_copy.reserve(total_nnz);
+    indptr_copy.reserve(primary_dim + 1);
+    indptr_copy.push_back(0);
+    
+    for (Index i = 0; i < primary_dim; ++i) {
+        auto vals = scl::primary_values(sparse, i);
+        auto inds = scl::primary_indices(sparse, i);
+        
+        data_copy.insert(data_copy.end(), vals.ptr, vals.ptr + vals.len);
+        indices_copy.insert(indices_copy.end(), inds.ptr, inds.ptr + inds.len);
+        indptr_copy.push_back(static_cast<Index>(data_copy.size()));
+    }
+    
+    return OwnedSparse<T, IsCSR>(
+        std::move(data_copy),
+        std::move(indices_copy),
+        std::move(indptr_copy),
+        sparse.rows, sparse.cols
+    );
+}
+
+// =============================================================================
 // Type Aliases
 // =============================================================================
+
+// OwnedArray aliases
+using OwnedArrayReal = OwnedArray<Real>;
+using OwnedArrayIndex = OwnedArray<Index>;
 
 // MappedCustomSparse aliases
 template <typename T>
@@ -406,7 +738,10 @@ using OwnedCSC = OwnedSparse<T, false>;
 using OwnedCSRReal = OwnedCSR<Real>;
 using OwnedCSCReal = OwnedCSC<Real>;
 
-// Concept verification
+// =============================================================================
+// Concept Verification
+// =============================================================================
+
 static_assert(SparseLike<MappedCustomCSR<Real>, true>);
 static_assert(SparseLike<MappedCustomCSC<Real>, false>);
 static_assert(SparseLike<MappedVirtualCSR<Real>, true>);

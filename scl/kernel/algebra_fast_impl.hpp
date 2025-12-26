@@ -26,11 +26,12 @@ constexpr size_t UNROLL_FACTOR = 8;
 
 /// @brief Ultra-optimized sparse-dense dot (8-way unroll)
 template <typename T>
-SCL_FORCE_INLINE T sparse_dot_ultra(
+SCL_FORCE_INLINE void sparse_dot_ultra(
     const Index* SCL_RESTRICT indices,
     const T* SCL_RESTRICT values,
     Size nnz,
-    const T* SCL_RESTRICT x
+    const T* SCL_RESTRICT x,
+    T& out_dot
 ) {
     T sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
     T sum4 = 0, sum5 = 0, sum6 = 0, sum7 = 0;
@@ -58,7 +59,7 @@ SCL_FORCE_INLINE T sparse_dot_ultra(
         sum += values[k] * x[indices[k]];
     }
     
-    return sum;
+    out_dot = sum;
 }
 
 } // namespace detail
@@ -114,11 +115,13 @@ SCL_FORCE_INLINE void spmv_custom_fast(
         
         if (len == 0) return;
 
-        T dot = detail::sparse_dot_ultra(
+        T dot;
+        detail::sparse_dot_ultra(
             A.indices + start,
             A.data + start,
             static_cast<Size>(len),
-            x.ptr
+            x.ptr,
+            dot
         );
 
         y[p] += alpha * dot;
@@ -178,11 +181,13 @@ SCL_FORCE_INLINE void spmv_virtual_fast(
         const T* SCL_RESTRICT vals = static_cast<const T*>(A.data_ptrs[p]);
         const Index* SCL_RESTRICT inds = static_cast<const Index*>(A.indices_ptrs[p]);
 
-        T dot = detail::sparse_dot_ultra(
+        T dot;
+        detail::sparse_dot_ultra(
             inds,
             vals,
             static_cast<Size>(len),
-            x.ptr
+            x.ptr,
+            dot
         );
 
         y[p] += alpha * dot;

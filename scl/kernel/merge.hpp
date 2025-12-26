@@ -37,14 +37,16 @@ namespace scl::kernel::merge {
 ///
 /// @param inputs Array of VirtualSparse pointers
 /// @param out_row_map Output merged row map [size = total_rows]
-/// @return VirtualSparse view of merged matrix
+/// @param out_result Output VirtualSparse view of merged matrix
 template <typename T, bool IsCSR>
-VirtualSparse<T, IsCSR> vstack(
+void vstack(
     Array<const VirtualSparse<T, IsCSR>*> inputs,
-    Array<Index> out_row_map
+    Array<Index> out_row_map,
+    VirtualSparse<T, IsCSR>& out_result
 ) {
     if (inputs.size() == 0) {
-        return VirtualSparse<T, IsCSR>();
+        out_result = VirtualSparse<T, IsCSR>();
+        return;
     }
     
     // Validate dimensions
@@ -79,16 +81,13 @@ VirtualSparse<T, IsCSR> vstack(
     // Construct merged VirtualSparse
     // Note: This is a simplified version - full implementation needs
     // to merge data_ptrs, indices_ptrs, lengths arrays
-    VirtualSparse<T, IsCSR> result;
     if constexpr (IsCSR) {
-        result.rows = total_primary;
-        result.cols = secondary_dim;
+        out_result.rows = total_primary;
+        out_result.cols = secondary_dim;
     } else {
-        result.rows = secondary_dim;
-        result.cols = total_primary;
+        out_result.rows = secondary_dim;
+        out_result.cols = total_primary;
     }
-    
-    return result;
 }
 
 } // namespace scl::kernel::merge

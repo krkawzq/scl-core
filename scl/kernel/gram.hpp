@@ -25,9 +25,10 @@ namespace detail {
 
 /// @brief Linear merge dot product O(n + m)
 template <typename T>
-SCL_FORCE_INLINE T dot_linear(
+SCL_FORCE_INLINE void dot_linear(
     const Index* SCL_RESTRICT idx1, const T* SCL_RESTRICT val1, Size n1,
-    const Index* SCL_RESTRICT idx2, const T* SCL_RESTRICT val2, Size n2
+    const Index* SCL_RESTRICT idx2, const T* SCL_RESTRICT val2, Size n2,
+    T& out_dot
 ) {
     T sum = static_cast<T>(0.0);
     Size i = 0, j = 0;
@@ -45,14 +46,15 @@ SCL_FORCE_INLINE T dot_linear(
             ++j;
         }
     }
-    return sum;
+    out_dot = sum;
 }
 
 /// @brief Binary search dot product O(n log m), n << m
 template <typename T>
-SCL_FORCE_INLINE T dot_binary(
+SCL_FORCE_INLINE void dot_binary(
     const Index* SCL_RESTRICT idx_small, const T* SCL_RESTRICT val_small, Size n_small,
-    const Index* SCL_RESTRICT idx_large, const T* SCL_RESTRICT val_large, Size n_large
+    const Index* SCL_RESTRICT idx_large, const T* SCL_RESTRICT val_large, Size n_large,
+    T& out_dot
 ) {
     T sum = static_cast<T>(0.0);
     const Index* base = idx_large;
@@ -78,32 +80,34 @@ SCL_FORCE_INLINE T dot_binary(
             len -= step;
         }
     }
-    return sum;
+    out_dot = sum;
 }
 
 /// @brief Adaptive dispatcher (auto-selects linear or binary)
 template <typename T>
-SCL_FORCE_INLINE T dot_product(
+SCL_FORCE_INLINE void dot_product(
     const Index* idx1, const T* val1, Size n1,
-    const Index* idx2, const T* val2, Size n2
+    const Index* idx2, const T* val2, Size n2,
+    T& out_dot
 ) {
     if (SCL_UNLIKELY(n1 == 0 || n2 == 0)) {
-        return static_cast<T>(0.0);
+        out_dot = static_cast<T>(0.0);
+        return;
     }
 
     constexpr Size RATIO_THRESHOLD = 32;
 
     if (n1 < n2) {
         if (n2 > n1 * RATIO_THRESHOLD) {
-            return dot_binary(idx1, val1, n1, idx2, val2, n2);
+            dot_binary(idx1, val1, n1, idx2, val2, n2, out_dot);
         } else {
-            return dot_linear(idx1, val1, n1, idx2, val2, n2);
+            dot_linear(idx1, val1, n1, idx2, val2, n2, out_dot);
         }
     } else {
         if (n1 > n2 * RATIO_THRESHOLD) {
-            return dot_binary(idx2, val2, n2, idx1, val1, n1);
+            dot_binary(idx2, val2, n2, idx1, val1, n1, out_dot);
         } else {
-            return dot_linear(idx1, val1, n1, idx2, val2, n2);
+            dot_linear(idx1, val1, n1, idx2, val2, n2, out_dot);
         }
     }
 }
@@ -151,9 +155,11 @@ void gram(const MatrixT& matrix, Array<typename MatrixT::ValueType> output) {
             auto idx_j = scl::primary_indices(matrix, jdx);
             auto val_j = scl::primary_values(matrix, jdx);
 
-            T dot = detail::dot_product(
+            T dot;
+            detail::dot_product(
                 idx_i.ptr, val_i.ptr, idx_i.size(),
-                idx_j.ptr, val_j.ptr, idx_j.size()
+                idx_j.ptr, val_j.ptr, idx_j.size(),
+                dot
             );
 
             row_ptr[j] = dot;

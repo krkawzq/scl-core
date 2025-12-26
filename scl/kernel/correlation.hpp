@@ -25,24 +25,21 @@ namespace scl::kernel::correlation {
 
 namespace detail {
 
-template <typename T>
-struct Stats {
-    std::vector<T> means;
-    std::vector<T> inv_stds;
-};
-
 /// @brief Compute statistics for primary dimension (SIMD)
 template <typename MatrixT>
     requires AnySparse<MatrixT>
-SCL_FORCE_INLINE Stats<typename MatrixT::ValueType> compute_stats(const MatrixT& matrix) {
+SCL_FORCE_INLINE void compute_stats(
+    const MatrixT& matrix,
+    Array<typename MatrixT::ValueType> out_means,
+    Array<typename MatrixT::ValueType> out_inv_stds
+) {
     using T = typename MatrixT::ValueType;
     const Index primary_dim = scl::primary_size(matrix);
     const Size secondary_dim = static_cast<Size>(scl::secondary_size(matrix));
     const T inv_n = static_cast<T>(1.0) / static_cast<T>(secondary_dim);
-
-    Stats<T> stats;
-    stats.means.resize(primary_dim);
-    stats.inv_stds.resize(primary_dim);
+    
+    SCL_CHECK_DIM(out_means.size() == static_cast<Size>(primary_dim), "Means size mismatch");
+    SCL_CHECK_DIM(out_inv_stds.size() == static_cast<Size>(primary_dim), "Inv_stds size mismatch");
 
     scl::threading::parallel_for(0, static_cast<size_t>(primary_dim), [&](size_t p) {
         Index idx = static_cast<Index>(p);
@@ -76,11 +73,9 @@ SCL_FORCE_INLINE Stats<typename MatrixT::ValueType> compute_stats(const MatrixT&
         T var = (sq_sum * inv_n) - (mean * mean);
         if (var < 0) var = 0;
 
-        stats.means[p] = mean;
-        stats.inv_stds[p] = (var > 0) ? (static_cast<T>(1.0) / std::sqrt(var)) : 0.0;
+        out_means[p] = mean;
+        out_inv_stds[p] = (var > 0) ? (static_cast<T>(1.0) / std::sqrt(var)) : 0.0;
     });
-
-    return stats;
 }
 
 } // namespace detail
@@ -99,8 +94,16 @@ void pearson(const MatrixT& matrix, Array<typename MatrixT::ValueType> output) {
     SCL_CHECK_DIM(output.size() == static_cast<Size>(primary_dim * primary_dim), 
                   "Pearson: Output size mismatch");
 
+    // Allocate workspace for statistics
+    std::vector<T> means(primary_dim);
+    std::vector<T> inv_stds(primary_dim);
+
     // Compute statistics
-    auto stats = detail::compute_stats(matrix);
+    detail::compute_stats(
+        matrix,
+        Array<T>(means.data(), static_cast<Size>(primary_dim)),
+        Array<T>(inv_stds.data(), static_cast<Size>(primary_dim))
+    );
 
     // Compute Gram matrix
     scl::kernel::gram::gram(matrix, output);
@@ -110,8 +113,8 @@ void pearson(const MatrixT& matrix, Array<typename MatrixT::ValueType> output) {
 
     scl::threading::parallel_for(0, static_cast<size_t>(primary_dim), [&](size_t i) {
         T* row_ptr = output.ptr + (i * static_cast<size_t>(primary_dim));
-        T mu_i = stats.means[i];
-        T inv_sig_i = stats.inv_stds[i];
+        T mu_i = means[i];
+        T inv_sig_i = inv_stds[i];
 
         namespace s = scl::simd;
         const s::Tag d;
@@ -127,8 +130,8 @@ void pearson(const MatrixT& matrix, Array<typename MatrixT::ValueType> output) {
         
         for (; j + lanes <= static_cast<size_t>(primary_dim); j += lanes) {
             auto v_g = s::Load(d, row_ptr + j);
-            auto v_mu_j = s::Load(d, stats.means.data() + j);
-            auto v_inv_sig_j = s::Load(d, stats.inv_stds.data() + j);
+            auto v_mu_j = s::Load(d, means.data() + j);
+            auto v_inv_sig_j = s::Load(d, inv_stds.data() + j);
 
             auto v_cov = s::Sub(s::Mul(v_g, v_inv_n), s::Mul(v_mu_i, v_mu_j));
             auto v_norm = s::Mul(v_inv_sig_i, v_inv_sig_j);
@@ -142,8 +145,8 @@ void pearson(const MatrixT& matrix, Array<typename MatrixT::ValueType> output) {
 
         for (; j < static_cast<size_t>(primary_dim); ++j) {
             T g_val = row_ptr[j];
-            T mu_j = stats.means[j];
-            T inv_sig_j = stats.inv_stds[j];
+            T mu_j = means[j];
+            T inv_sig_j = inv_stds[j];
 
             T cov = (g_val * inv_n) - (mu_i * mu_j);
             T corr = cov * (inv_sig_i * inv_sig_j);

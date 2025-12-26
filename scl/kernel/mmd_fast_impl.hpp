@@ -11,27 +11,33 @@
 
 // =============================================================================
 /// @file mmd_fast_impl.hpp
-/// @brief Extreme Performance MMD for CustomSparse
+/// @brief Extreme Performance MMD
 ///
 /// Ultra-optimized Maximum Mean Discrepancy with:
 /// - Batch SIMD exp computation
 /// - Cache-optimized kernel evaluation
 /// - 4-way unrolling for distance computation
 ///
+/// Note: These functions accept raw pointers and are generic for both
+/// CustomSparse and VirtualSparse. The caller should extract the appropriate
+/// data pointers before calling these functions.
+///
 /// Performance Target: 2-3x faster than generic
 // =============================================================================
 
 namespace scl::kernel::mmd::fast {
 
-/// @brief Ultra-fast unary exp sum (CustomSparse)
+/// @brief Ultra-fast unary exp sum
 ///
 /// Optimization: Batch SIMD on contiguous data
+/// Generic for both CustomSparse and VirtualSparse (accepts raw pointers)
 template <typename T>
-SCL_FORCE_INLINE T unary_exp_sum_fast(
+SCL_FORCE_INLINE void unary_exp_sum_fast(
     const T* SCL_RESTRICT vals,
     Size nnz,
     T gamma,
-    T* cache
+    T* cache,
+    T& out_sum
 ) {
     namespace s = scl::simd;
     const s::Tag d;
@@ -92,20 +98,21 @@ SCL_FORCE_INLINE T unary_exp_sum_fast(
         sum += exp_term;
     }
     
-    return sum;
+    out_sum = sum;
 }
 
 /// @brief Ultra-fast cross kernel sum
 ///
 /// Optimization: 4-way unrolled distance computation
 template <typename T>
-SCL_FORCE_INLINE T cross_kernel_sum_fast(
+SCL_FORCE_INLINE void cross_kernel_sum_fast(
     const T* SCL_RESTRICT vals_x, Size nnz_x,
     const T* SCL_RESTRICT vals_y, Size nnz_y,
     Size N_x, Size N_y,
     T gamma,
     T sum_x_unary,
-    T sum_y_unary
+    T sum_y_unary,
+    T& out_sum
 ) {
     const Size zeros_x = N_x - nnz_x;
     const Size zeros_y = N_y - nnz_y;
@@ -160,7 +167,7 @@ SCL_FORCE_INLINE T cross_kernel_sum_fast(
     }
 
     sum += cross_sum;
-    return sum;
+    out_sum = sum;
 }
 
 } // namespace scl::kernel::mmd::fast

@@ -228,11 +228,15 @@ SCL_FORCE_INLINE void primary_sums_masked(
 }
 
 /// @brief Compute median
-SCL_FORCE_INLINE Real median(
+SCL_FORCE_INLINE void median(
     Array<const Real> data,
-    Array<Real> workspace
+    Array<Real> workspace,
+    Real& out_median
 ) {
-    if (data.empty()) return 0.0;
+    if (data.empty()) {
+        out_median = 0.0;
+        return;
+    }
     SCL_CHECK_DIM(workspace.size() >= data.size(), "Workspace too small");
     
     scl::memory::copy(data, workspace);
@@ -244,11 +248,11 @@ SCL_FORCE_INLINE Real median(
     std::nth_element(work_view.ptr, work_view.ptr + mid, work_view.ptr + n);
     
     if (n % 2 == 1) {
-        return work_view[mid];
+        out_median = work_view[mid];
     } else {
         Real upper = work_view[mid];
         Real lower = *std::max_element(work_view.ptr, work_view.ptr + mid);
-        return (lower + upper) * 0.5;
+        out_median = (lower + upper) * 0.5;
     }
 }
 

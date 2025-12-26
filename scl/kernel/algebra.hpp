@@ -65,11 +65,12 @@ SCL_FORCE_INLINE void scale_vector(Array<T> y, T beta) {
 
 /// @brief Sparse-dense dot product with 4-way unrolling
 template <typename T>
-SCL_FORCE_INLINE T sparse_dot_dense(
+SCL_FORCE_INLINE void sparse_dot_dense(
     const Index* SCL_RESTRICT indices,
     const T* SCL_RESTRICT values,
     Size nnz,
-    const T* SCL_RESTRICT x
+    const T* SCL_RESTRICT x,
+    T& out_dot
 ) {
     T sum = static_cast<T>(0.0);
     Size k = 0;
@@ -89,7 +90,7 @@ SCL_FORCE_INLINE T sparse_dot_dense(
         sum += values[k] * x[indices[k]];
     }
 
-    return sum;
+    out_dot = sum;
 }
 
 } // namespace detail
@@ -142,11 +143,13 @@ void spmv(
             
             if (len == 0) return;
 
-            T dot = detail::sparse_dot_dense(
+            T dot;
+            detail::sparse_dot_dense(
                 A.indices + start, 
                 A.data + start, 
                 static_cast<Size>(len), 
-                x.ptr
+                x.ptr,
+                dot
             );
 
             y[primary_idx] += alpha * dot;
@@ -161,7 +164,8 @@ void spmv(
             
             if (vals.size() == 0) return;
 
-            T dot = detail::sparse_dot_dense(inds.ptr, vals.ptr, vals.size(), x.ptr);
+            T dot;
+            detail::sparse_dot_dense(inds.ptr, vals.ptr, vals.size(), x.ptr, dot);
             y[primary_idx] += alpha * dot;
         });
     }

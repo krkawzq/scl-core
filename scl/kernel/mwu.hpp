@@ -33,9 +33,11 @@ static constexpr double INV_SQRT2 = 0.7071067811865475244;
 
 /// @brief Compute rank sum with implicit zeros (linear merge)
 template <typename T>
-SCL_FORCE_INLINE std::pair<double, double> compute_rank_sum_sparse(
+SCL_FORCE_INLINE void compute_rank_sum_sparse(
     const T* a, Size na_nz, Size n1_total,
-    const T* b, Size nb_nz, Size n2_total
+    const T* b, Size nb_nz, Size n2_total,
+    double& out_R1,
+    double& out_tie_sum
 ) {
     double R1 = 0.0;
     double tie_sum = 0.0;
@@ -121,7 +123,8 @@ SCL_FORCE_INLINE std::pair<double, double> compute_rank_sum_sparse(
         rank += t;
     }
     
-    return {R1, tie_sum};
+    out_R1 = R1;
+    out_tie_sum = tie_sum;
 }
 
 } // namespace detail
@@ -227,12 +230,13 @@ void mwu_test(
         }
         
         // Compute rank sum
-        auto result = detail::compute_rank_sum_sparse(
+        double R1, tie_sum;
+        detail::compute_rank_sum_sparse(
             buf1.data(), buf1.size(), n1_total,
-            buf2.data(), buf2.size(), n2_total
+            buf2.data(), buf2.size(), n2_total,
+            R1,
+            tie_sum
         );
-        double R1 = result.first;
-        double tie_sum = result.second;
         
         // U statistic
         double U = R1 - 0.5 * n1d * (n1d + 1.0);
