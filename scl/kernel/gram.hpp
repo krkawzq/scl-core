@@ -2,44 +2,29 @@
 
 #include "scl/core/type.hpp"
 #include "scl/core/matrix.hpp"
-#include "scl/core/memory.hpp"
 #include "scl/core/macros.hpp"
-#include "scl/core/simd.hpp"
 #include "scl/threading/parallel_for.hpp"
 
-#include <cmath>
 #include <algorithm>
+#include <type_traits>
 
 // =============================================================================
 /// @file gram.hpp
-/// @brief High-Performance Sparse Gram Matrix Kernel
+/// @brief Generic Gram Matrix Kernel
 ///
-/// Computes Gram matrix: G = A^T * A (CSC) or G = A * A^T (CSR).
+/// Computes Gram matrix G = A^T A (CSC) or G = A A^T (CSR).
+///
+/// **Fully Generic**: Works with ANY matrix type (Standard, Virtual, Future).
+/// Requirements: Matrix must provide row_values/row_indices OR col_values/col_indices.
 ///
 /// Algorithm:
-///
-/// For symmetric matrix G_ij = inner product of v_i and v_j:
-/// 1. Compute upper triangle via sparse dot products
-/// 2. Mirror to lower triangle (exploit symmetry)
-///
-/// Sparse Dot Product Strategy:
-///
-/// Adaptive Algorithm Selection:
-/// - If size ratio < 32: Linear merge (O(n + m))
-/// - If size ratio >= 32: Binary search (O(n log m))
-///
-/// Optimization:
-///
-/// - Parallelism: Row-level dynamic scheduling (handles variable density)
-/// - Symmetry: Only compute upper triangle, mirror to lower
-/// - Cache: Self-dot uses linear scan (optimal)
-/// - SIMD: Future potential for vectorized merge
+/// - Adaptive sparse dot product (linear merge or binary search)
+/// - Symmetric output (compute upper triangle, mirror to lower)
+/// - Row-level parallelism with dynamic scheduling
 ///
 /// Performance:
-///
 /// - Throughput: ~500M dot products/sec per core
-/// - Memory: Zero heap allocation (pure computational kernel)
-/// - Scalability: Near-linear with thread count
+/// - Zero overhead: Compiles to direct pointer arithmetic
 // =============================================================================
 
 namespace scl::kernel::gram {
@@ -50,20 +35,7 @@ namespace detail {
 // Sparse Dot Product Primitives
 // =============================================================================
 
-/// @brief Sparse dot product via linear merge.
-///
-/// Optimal when vectors have comparable sizes (ratio < 32).
-/// Uses two-pointer merge algorithm.
-///
-/// Complexity: O(n1 + n2)
-///
-/// @param idx1 Indices of first vector
-/// @param val1 Values of first vector
-/// @param n1   Length of first vector
-/// @param idx2 Indices of second vector
-/// @param val2 Values of second vector
-/// @param n2   Length of second vector
-/// @return Dot product
+/// @brief Linear merge dot product (O(n + m)).
 template <typename T>
 SCL_FORCE_INLINE T dot_linear(
     const Index* SCL_RESTRICT idx1, const T* SCL_RESTRICT val1, Size n1,
@@ -72,7 +44,6 @@ SCL_FORCE_INLINE T dot_linear(
     T sum = static_cast<T>(0.0);
     Size i = 0, j = 0;
     
-    // Two-pointer merge with early exit
     while (i < n1 && j < n2) {
         Index r1 = idx1[i];
         Index r2 = idx2[j];
@@ -89,20 +60,7 @@ SCL_FORCE_INLINE T dot_linear(
     return sum;
 }
 
-/// @brief Sparse dot product via binary search (galloping).
-///
-/// Optimal when one vector is much smaller than the other (ratio ≥ 32).
-/// Uses binary search to find matches in the larger vector.
-///
-/// Complexity: O(n_small × log(n_large))
-///
-/// @param idx_small Indices of smaller vector
-/// @param val_small Values of smaller vector
-/// @param n_small   Length of smaller vector
-/// @param idx_large Indices of larger vector
-/// @param val_large Values of larger vector
-/// @param n_large   Length of larger vector
-/// @return Dot product
+/// @brief Binary search dot product (O(n log m), n << m).
 template <typename T>
 SCL_FORCE_INLINE T dot_binary(
     const Index* SCL_RESTRICT idx_small, const T* SCL_RESTRICT val_small, Size n_small,
@@ -115,21 +73,17 @@ SCL_FORCE_INLINE T dot_binary(
     for (Size i = 0; i < n_small; ++i) {
         Index target = idx_small[i];
         
-        // Binary search in remaining range
         auto it = std::lower_bound(base, base + len, target);
         
         if (SCL_LIKELY(it != base + len && *it == target)) {
-            // Match found: accumulate product
             Size offset = static_cast<Size>(it - idx_large);
             sum += val_small[i] * val_large[offset];
             
-            // Advance search window (galloping optimization)
             Size step = static_cast<Size>(it - base) + 1;
             if (SCL_UNLIKELY(step >= len)) break;
             base += step;
             len -= step;
         } else {
-            // No match: advance window to reduce search space
             Size step = static_cast<Size>(it - base);
             if (SCL_UNLIKELY(step >= len)) break;
             base += step;
@@ -139,28 +93,16 @@ SCL_FORCE_INLINE T dot_binary(
     return sum;
 }
 
-/// @brief Adaptive sparse dot product dispatcher.
-///
-/// Automatically selects optimal algorithm based on size ratio.
-///
-/// @param idx1 Indices of first vector
-/// @param val1 Values of first vector
-/// @param n1   Length of first vector
-/// @param idx2 Indices of second vector
-/// @param val2 Values of second vector
-/// @param n2   Length of second vector
-/// @return Dot product
+/// @brief Adaptive dispatcher.
 template <typename T>
 SCL_FORCE_INLINE T dot_product(
     const Index* idx1, const T* val1, Size n1,
     const Index* idx2, const T* val2, Size n2
 ) {
-    // Early exit for empty vectors
     if (SCL_UNLIKELY(n1 == 0 || n2 == 0)) {
         return static_cast<T>(0.0);
     }
 
-    // Heuristic: Binary search when size ratio > 32
     constexpr Size RATIO_THRESHOLD = 32;
 
     if (n1 < n2) {
@@ -181,104 +123,99 @@ SCL_FORCE_INLINE T dot_product(
 } // namespace detail
 
 // =============================================================================
-// Public API
+// Generic Gram Kernel (Tag Dispatch)
 // =============================================================================
 
-/// @brief Compute Gram Matrix: G = A^T * A (CSC).
+/// @brief Compute Gram matrix for ANY sparse matrix type.
 ///
-/// Computes pairwise dot products between columns (features).
+/// **Compile-time dispatch** based on matrix Tag:
+/// - TagCSR: Computes G = A × A^T (sample similarity)
+/// - TagCSC: Computes G = A^T × A (feature correlation)
 ///
-/// Output: Dense symmetric matrix (row-major).
+/// **Zero overhead**: All abstractions inline to direct pointer arithmetic.
 ///
-/// Use Case: Feature-feature correlation in single-cell data.
-///
-/// @param matrix Input CSC matrix (cells × features)
-/// @param output Output buffer (size = features × features)
-template <typename T>
-void gram(const CSCMatrix<T>& matrix, MutableSpan<T> output) {
-    const Index C = matrix.cols;
-    const Size N = static_cast<Size>(C);
-    
-    SCL_CHECK_DIM(output.size == N * N, "Gram: Output size mismatch");
+/// @tparam MatrixT Any CSR-like or CSC-like matrix type
+/// @param matrix Input sparse matrix
+/// @param output Output dense Gram matrix [N × N], row-major
+template <SparseLike MatrixT>
+void gram(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
+    using Tag = typename MatrixT::Tag;
 
-    // Parallelize over rows of the output Gram matrix
-    // Dynamic scheduling handles variable sparsity well
-    scl::threading::parallel_for(0, N, [&](size_t i) {
-        auto idx_i = matrix.col_indices(static_cast<Index>(i));
-        auto val_i = matrix.col_values(static_cast<Index>(i));
+    // Compile-time dispatch
+    if constexpr (std::is_same_v<Tag, TagCSC>) {
+        // CSC: Gram = A^T × A (feature-feature)
+        const Index N = matrix.cols;
+        const Size N_size = static_cast<Size>(N);
         
-        T* row_ptr = output.ptr + (i * N);
+        SCL_CHECK_DIM(output.size == N_size * N_size, "Gram: Output size mismatch");
 
-        // Diagonal: Self dot product (optimized linear scan)
-        T self_dot = static_cast<T>(0.0);
-        for (size_t k = 0; k < idx_i.size; ++k) {
-            self_dot += val_i[k] * val_i[k];
-        }
-        row_ptr[i] = self_dot;
-
-        // Upper triangle (i < j)
-        for (size_t j = i + 1; j < N; ++j) {
-            auto idx_j = matrix.col_indices(static_cast<Index>(j));
-            auto val_j = matrix.col_values(static_cast<Index>(j));
-
-            T dot = detail::dot_product(
-                idx_i.ptr, val_i.ptr, idx_i.size,
-                idx_j.ptr, val_j.ptr, idx_j.size
-            );
-
-            // Store upper triangle
-            row_ptr[j] = dot;
+        scl::threading::parallel_for(0, N_size, [&](size_t i) {
+            auto idx_i = matrix.col_indices(static_cast<Index>(i));
+            auto val_i = matrix.col_values(static_cast<Index>(i));
             
-            // Mirror to lower triangle (symmetric)
-            output.ptr[j * N + i] = dot;
-        }
-    });
-}
+            T* row_ptr = output.ptr + (i * N_size);
 
-/// @brief Compute Gram Matrix: G = A * A^T (CSR).
-///
-/// Computes pairwise dot products between rows (samples).
-///
-/// Output: Dense symmetric matrix (row-major).
-///
-/// Use Case: Sample-sample similarity (e.g., cell-cell distance).
-///
-/// @param matrix Input CSR matrix (samples × features)
-/// @param output Output buffer (size = samples × samples)
-template <typename T>
-void gram(const CSRMatrix<T>& matrix, MutableSpan<T> output) {
-    const Index R = matrix.rows;
-    const Size N = static_cast<Size>(R);
-    
-    SCL_CHECK_DIM(output.size == N * N, "Gram: Output size mismatch");
+            // Diagonal: Self dot product
+            T self_dot = static_cast<T>(0.0);
+            for (Size k = 0; k < idx_i.size; ++k) {
+                self_dot += val_i[k] * val_i[k];
+            }
+            row_ptr[i] = self_dot;
 
-    scl::threading::parallel_for(0, N, [&](size_t i) {
-        auto idx_i = matrix.row_indices(static_cast<Index>(i));
-        auto val_i = matrix.row_values(static_cast<Index>(i));
+            // Upper triangle
+            for (Size j = i + 1; j < N_size; ++j) {
+                auto idx_j = matrix.col_indices(static_cast<Index>(j));
+                auto val_j = matrix.col_values(static_cast<Index>(j));
+
+                T dot = detail::dot_product(
+                    idx_i.ptr, val_i.ptr, idx_i.size,
+                    idx_j.ptr, val_j.ptr, idx_j.size
+                );
+
+                row_ptr[j] = dot;
+                output.ptr[j * N_size + i] = dot;  // Mirror
+            }
+        });
+    }
+    else if constexpr (std::is_same_v<Tag, TagCSR>) {
+        // CSR: Gram = A × A^T (sample-sample)
+        const Index N = matrix.rows;
+        const Size N_size = static_cast<Size>(N);
         
-        T* row_ptr = output.ptr + (i * N);
+        SCL_CHECK_DIM(output.size == N_size * N_size, "Gram: Output size mismatch");
 
-        // Diagonal
-        T self_dot = static_cast<T>(0.0);
-        for (size_t k = 0; k < idx_i.size; ++k) {
-            self_dot += val_i[k] * val_i[k];
-        }
-        row_ptr[i] = self_dot;
+        scl::threading::parallel_for(0, N_size, [&](size_t i) {
+            auto idx_i = matrix.row_indices(static_cast<Index>(i));
+            auto val_i = matrix.row_values(static_cast<Index>(i));
+            
+            T* row_ptr = output.ptr + (i * N_size);
 
-        // Upper triangle
-        for (size_t j = i + 1; j < N; ++j) {
-            auto idx_j = matrix.row_indices(static_cast<Index>(j));
-            auto val_j = matrix.row_values(static_cast<Index>(j));
+            // Diagonal
+            T self_dot = static_cast<T>(0.0);
+            for (Size k = 0; k < idx_i.size; ++k) {
+                self_dot += val_i[k] * val_i[k];
+            }
+            row_ptr[i] = self_dot;
 
-            T dot = detail::dot_product(
-                idx_i.ptr, val_i.ptr, idx_i.size,
-                idx_j.ptr, val_j.ptr, idx_j.size
-            );
+            // Upper triangle
+            for (Size j = i + 1; j < N_size; ++j) {
+                auto idx_j = matrix.row_indices(static_cast<Index>(j));
+                auto val_j = matrix.row_values(static_cast<Index>(j));
 
-            row_ptr[j] = dot;
-            output.ptr[j * N + i] = dot;
-        }
-    });
+                T dot = detail::dot_product(
+                    idx_i.ptr, val_i.ptr, idx_i.size,
+                    idx_j.ptr, val_j.ptr, idx_j.size
+                );
+
+                row_ptr[j] = dot;
+                output.ptr[j * N_size + i] = dot;  // Mirror
+            }
+        });
+    }
+    else {
+        static_assert(!std::is_same_v<Tag, Tag>, "Gram: Unsupported matrix tag");
+    }
 }
 
 } // namespace scl::kernel::gram

@@ -391,18 +391,20 @@ SCL_FORCE_INLINE void expm1(
 }
 
 // =============================================================================
-// 4. Matrix Overloads (Dense)
+// 4. Matrix Overloads (Dense & Sparse)
 // =============================================================================
 
 /// @brief Apply ln(1 + x) to dense matrix in-place.
 ///
 /// Transforms all elements in the underlying data buffer.
+/// Uses optimized SIMD path for contiguous memory.
 ///
 /// @tparam T Element type (typically Real)
 /// @param mat Dense matrix [modified in-place]
 template <typename T>
 SCL_FORCE_INLINE void log1p_inplace(DenseMatrix<T>& mat) {
-    log1p_inplace(mat.data_span());
+    Span<T> data_span(mat.ptr, mat.size());
+    log1p_inplace(data_span);
 }
 
 /// @brief Apply log2(1 + x) to dense matrix in-place.
@@ -411,7 +413,8 @@ SCL_FORCE_INLINE void log1p_inplace(DenseMatrix<T>& mat) {
 /// @param mat Dense matrix [modified in-place]
 template <typename T>
 SCL_FORCE_INLINE void log2p1_inplace(DenseMatrix<T>& mat) {
-    log2p1_inplace(mat.data_span());
+    Span<T> data_span(mat.ptr, mat.size());
+    log2p1_inplace(data_span);
 }
 
 /// @brief Apply e^x - 1 to dense matrix in-place.
@@ -420,46 +423,61 @@ SCL_FORCE_INLINE void log2p1_inplace(DenseMatrix<T>& mat) {
 /// @param mat Dense matrix [modified in-place]
 template <typename T>
 SCL_FORCE_INLINE void expm1_inplace(DenseMatrix<T>& mat) {
-    expm1_inplace(mat.data_span());
+    Span<T> data_span(mat.ptr, mat.size());
+    expm1_inplace(data_span);
 }
 
 // =============================================================================
-// 5. Sparse Matrix Support
+// 5. Sparse Matrix Support (Contiguous Data)
 // =============================================================================
 
-/// @brief Apply ln(1 + x) to sparse matrix values only.
+/// @brief Apply ln(1 + x) to sparse matrix values (Optimized for contiguous data).
 ///
 /// Sparsity Preservation: Since ln(1 + 0) = 0, structural zeros
 /// remain zero. We only transform the explicit non-zero values.
 ///
+/// This overload is for matrices with contiguous data arrays (CustomCSR/CustomCSC).
+/// Uses optimized SIMD path for direct memory access.
+///
 /// Note: Does NOT modify matrix structure (indices/pointers).
 ///
-/// @param mat Sparse matrix in CSR/CSC format [values modified in-place]
+/// @tparam MatrixT Sparse matrix type with contiguous data (CustomCSR, CustomCSC)
+/// @param mat Sparse matrix [values modified in-place]
 ///
 /// Example: scRNA-seq log-normalization
-/// CSRMatrix counts = load_counts();
+/// @code
+/// CustomCSR<Real> counts = load_counts();
 /// normalize_cpm_inplace(counts);  // counts per million
 /// log1p_inplace(counts);           // log(CPM + 1)
-template <typename SparseMatrixType>
-SCL_FORCE_INLINE void log1p_inplace_sparse(SparseMatrixType& mat) {
-    // Only transform the non-zero values array
-    log1p_inplace(mat.values_span());
+/// @endcode
+template <typename MatrixT>
+    requires ContiguousData<MatrixT> && SparseLike<MatrixT>
+SCL_FORCE_INLINE void log1p_inplace(MatrixT& mat) {
+    // Direct access to contiguous non-zero values array
+    Span<typename MatrixT::ValueType> data_span(mat.data, static_cast<Size>(mat.nnz));
+    log1p_inplace(data_span);
 }
 
-/// @brief Apply log2(1 + x) to sparse matrix values.
+/// @brief Apply log2(1 + x) to sparse matrix values (Optimized for contiguous data).
 ///
+/// @tparam MatrixT Sparse matrix type with contiguous data
 /// @param mat Sparse matrix [values modified in-place]
-template <typename SparseMatrixType>
-SCL_FORCE_INLINE void log2p1_inplace_sparse(SparseMatrixType& mat) {
-    log2p1_inplace(mat.values_span());
+template <typename MatrixT>
+    requires ContiguousData<MatrixT> && SparseLike<MatrixT>
+SCL_FORCE_INLINE void log2p1_inplace(MatrixT& mat) {
+    Span<typename MatrixT::ValueType> data_span(mat.data, static_cast<Size>(mat.nnz));
+    log2p1_inplace(data_span);
 }
 
-/// @brief Apply e^x - 1 to sparse matrix values.
+/// @brief Apply e^x - 1 to sparse matrix values (Optimized for contiguous data).
 ///
+/// @tparam MatrixT Sparse matrix type with contiguous data
 /// @param mat Sparse matrix [values modified in-place]
-template <typename SparseMatrixType>
-SCL_FORCE_INLINE void expm1_inplace_sparse(SparseMatrixType& mat) {
-    expm1_inplace(mat.values_span());
+template <typename MatrixT>
+    requires ContiguousData<MatrixT> && SparseLike<MatrixT>
+SCL_FORCE_INLINE void expm1_inplace(MatrixT& mat) {
+    Span<typename MatrixT::ValueType> data_span(mat.data, static_cast<Size>(mat.nnz));
+    expm1_inplace(data_span);
 }
 
 } // namespace scl::kernel

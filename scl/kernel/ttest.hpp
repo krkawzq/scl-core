@@ -21,31 +21,30 @@
 
 namespace scl::kernel::diff_expr {
 
-/// @brief Output buffers for T-Test results.
-/// Using Span to remain zero-alloc in the kernel signature.
-struct TTestOutput {
-    MutableSpan<Real> t_stats;   ///< Size: n_features * n_targets
-    MutableSpan<Real> p_values;  ///< Size: n_features * n_targets
-    MutableSpan<Real> log2_fc;   ///< Size: n_features * n_targets
-    MutableSpan<Real> mean_diff; ///< Size: n_features * n_targets
-};
-
-/// @brief Run One-vs-Rest or One-vs-Many T-Test.
+/// @brief Run One-vs-Rest or One-vs-Many T-Test (Generic CSC-like matrices).
 ///
 /// Compares Group 0 (Reference) against Groups 1..K (Targets).
 ///
-/// @param matrix    CSC Matrix (Gene-wise).
-/// @param group_ids Row labels. 0=Ref, 1..K=Targets.
-/// @param n_groups  Total groups (K+1).
-/// @param output    Output buffers.
-/// @param workspace Temporary buffer for group stats.
-///                  Size: matrix.cols * n_groups * 2 * sizeof(Real).
-/// @param use_welch If true, use Welch's t-test (unequal variance). Default true.
+/// @tparam MatrixT Any CSC-like matrix type
+/// @param matrix        Input CSC-like Matrix (Gene-wise).
+/// @param group_ids     Row labels. 0=Ref, 1..K=Targets.
+/// @param n_groups      Total groups (K+1).
+/// @param out_t_stats   Output: T-statistics [size = n_features * n_targets].
+/// @param out_p_values  Output: P-values [size = n_features * n_targets].
+/// @param out_log2_fc   Output: Log2 fold changes [size = n_features * n_targets].
+/// @param out_mean_diff Output: Mean differences [size = n_features * n_targets].
+/// @param workspace     Temporary buffer for group stats.
+///                      Size: matrix.cols * n_groups * 2 * sizeof(Real).
+/// @param use_welch     If true, use Welch's t-test (unequal variance). Default true.
+template <CSCLike MatrixT>
 SCL_FORCE_INLINE void ttest(
-    CSCMatrix<Real> matrix,
+    const MatrixT& matrix,
     Span<const int32_t> group_ids,
     Size n_groups,
-    TTestOutput output,
+    MutableSpan<Real> out_t_stats,
+    MutableSpan<Real> out_p_values,
+    MutableSpan<Real> out_log2_fc,
+    MutableSpan<Real> out_mean_diff,
     MutableSpan<Byte> workspace,
     bool use_welch = true
 ) {
@@ -53,7 +52,10 @@ SCL_FORCE_INLINE void ttest(
     const Size n_targets = n_groups - 1;
 
     // Validate Dimensions
-    SCL_CHECK_DIM(output.t_stats.size == n_features * n_targets, "Output size mismatch");
+    SCL_CHECK_DIM(out_t_stats.size == n_features * n_targets, "T-stats output size mismatch");
+    SCL_CHECK_DIM(out_p_values.size == n_features * n_targets, "P-values output size mismatch");
+    SCL_CHECK_DIM(out_log2_fc.size == n_features * n_targets, "Log2FC output size mismatch");
+    SCL_CHECK_DIM(out_mean_diff.size == n_features * n_targets, "Mean diff output size mismatch");
     SCL_CHECK_DIM(workspace.size >= n_features * n_groups * 2 * sizeof(Real), "Workspace too small");
 
     // 1. Calculate Group Sizes
@@ -147,10 +149,10 @@ SCL_FORCE_INLINE void ttest(
             // This aligns with the outer loop (i)
             size_t out_idx = i * n_targets + t;
             
-            output.t_stats[out_idx] = t_stat;
-            output.p_values[out_idx] = p_val;
-            output.log2_fc[out_idx] = lfc;
-            output.mean_diff[out_idx] = diff;
+            out_t_stats[out_idx] = t_stat;
+            out_p_values[out_idx] = p_val;
+            out_log2_fc[out_idx] = lfc;
+            out_mean_diff[out_idx] = diff;
         }
     });
 }

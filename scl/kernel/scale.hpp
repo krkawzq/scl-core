@@ -24,17 +24,19 @@ namespace scl::kernel::scale {
 // 1. Dense Matrix Standardization
 // =============================================================================
 
-/// @brief Standardize dense matrix columns in-place.
+/// @brief Standardize dense matrix columns in-place (Generic Dense matrices).
 ///
 /// Operation: X[i,j] = clamp((X[i,j] - mu[j]) * inv_std[j], -max, max)
 ///
+/// @tparam MatrixT Any Dense-like matrix type
 /// @param matrix      Dense matrix (Row-Major). Modified in-place.
 /// @param means       Column means (size = matrix.cols).
 /// @param stds        Column stds (size = matrix.cols).
 /// @param max_value   Clipping threshold (0 = no clipping).
 /// @param zero_center If true, subtract mean. If false, only divide by std.
+template <DenseLike MatrixT>
 SCL_FORCE_INLINE void standardize_dense(
-    DenseMatrix<Real> matrix,
+    MatrixT matrix,
     Span<const Real> means,
     Span<const Real> stds,
     Real max_value = 0.0,
@@ -107,7 +109,7 @@ SCL_FORCE_INLINE void standardize_dense(
 // 2. CSC Matrix Standardization (Sparse)
 // =============================================================================
 
-/// @brief Standardize CSC matrix columns in-place.
+/// @brief Standardize CSC matrix columns in-place (Generic CSC-like matrices).
 ///
 /// **Note**: This modifies ONLY the stored non-zero elements.
 /// If `zero_center=true`, this operation is mathematically approximate 
@@ -115,8 +117,11 @@ SCL_FORCE_INLINE void standardize_dense(
 /// which is standard behavior in Scanpy/Seurat to maintain sparsity.
 ///
 /// Use `zero_center=false` for exact mathematical correctness on sparse data.
+///
+/// @tparam MatrixT Any CSC-like matrix type
+template <CSCLike MatrixT>
 SCL_FORCE_INLINE void standardize_csc(
-    CSCMatrix<Real> matrix,
+    MatrixT matrix,
     Span<const Real> means,
     Span<const Real> stds,
     Real max_value = 0.0,
@@ -185,13 +190,16 @@ SCL_FORCE_INLINE void standardize_csc(
 // 3. CSR Matrix Standardization (Sparse)
 // =============================================================================
 
-/// @brief Standardize CSR matrix columns in-place.
+/// @brief Standardize CSR matrix columns in-place (Generic CSR-like matrices).
 ///
 /// **Performance Warning**: Row-wise iteration accessing column statistics (means/stds)
 /// causes random memory access (gather) on the stats arrays. 
 /// Less efficient than CSC or Dense.
+///
+/// @tparam MatrixT Any CSR-like matrix type
+template <CSRLike MatrixT>
 SCL_FORCE_INLINE void standardize_csr(
-    CSRMatrix<Real> matrix,
+    MatrixT matrix,
     Span<const Real> means,
     Span<const Real> stds,
     Real max_value = 0.0,

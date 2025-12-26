@@ -244,27 +244,29 @@ SCL_FORCE_INLINE T cross_kernel_sum(
 // Public API
 // =============================================================================
 
-/// @brief Compute MMD^2 statistic for each feature (gene).
+/// @brief Compute MMD^2 statistic for each feature (gene) (Generic CSC-like matrices).
 ///
 /// Compares distribution of feature j in matrix X vs matrix Y using RBF kernel.
 ///
-/// Input: Two CSC matrices (cells x genes), typically:
+/// Input: Two CSC-like matrices (cells x genes), typically:
 /// - X: Reference group (e.g., control cells)
 /// - Y: Query group (e.g., treated cells)
 ///
 /// Output: MMD^2 value per gene (higher = more different distributions).
 ///
-/// @param mat_x Reference matrix (CSC format)
-/// @param mat_y Query matrix (CSC format)
+/// @tparam MatrixT Any CSC-like matrix type
+/// @param mat_x Reference CSC-like matrix
+/// @param mat_y Query CSC-like matrix
 /// @param output Output buffer [size = n_genes]
 /// @param gamma RBF kernel bandwidth (default 1.0). Smaller = more sensitive.
-template <typename T>
+template <CSCLike MatrixT>
 void mmd_rbf(
-    const CSCMatrix<T>& mat_x,
-    const CSCMatrix<T>& mat_y,
-    MutableSpan<T> output,
-    T gamma = static_cast<T>(1.0)
+    const MatrixT& mat_x,
+    const MatrixT& mat_y,
+    MutableSpan<typename MatrixT::ValueType> output,
+    typename MatrixT::ValueType gamma = static_cast<typename MatrixT::ValueType>(1.0)
 ) {
+    using T = typename MatrixT::ValueType;
     const Index n_genes = mat_x.cols;
     
     SCL_CHECK_DIM(mat_y.cols == n_genes, "MMD: Matrix column count mismatch");
@@ -300,9 +302,11 @@ void mmd_rbf(
             
             auto vals_x = mat_x.col_values(col_idx);
             auto vals_y = mat_y.col_values(col_idx);
+            Index len_x = mat_x.col_length(col_idx);
+            Index len_y = mat_y.col_length(col_idx);
 
             // Skip if both vectors are empty
-            if (SCL_UNLIKELY(vals_x.size == 0 && vals_y.size == 0)) {
+            if (SCL_UNLIKELY(len_x == 0 && len_y == 0)) {
                 output[col_idx] = static_cast<T>(0.0);
                 continue;
             }
@@ -312,18 +316,22 @@ void mmd_rbf(
             // ---------------------------------------------------------------
             
             // Ensure buffers are large enough
-            if (x_unary_cache.size() < vals_x.size) {
-                x_unary_cache.resize(vals_x.size);
+            if (x_unary_cache.size() < static_cast<size_t>(len_x)) {
+                x_unary_cache.resize(static_cast<size_t>(len_x));
             }
-            if (y_unary_cache.size() < vals_y.size) {
-                y_unary_cache.resize(vals_y.size);
+            if (y_unary_cache.size() < static_cast<size_t>(len_y)) {
+                y_unary_cache.resize(static_cast<size_t>(len_y));
             }
 
+            // Create proper Spans with correct lengths
+            Span<const T> span_x(vals_x.ptr, static_cast<Size>(len_x));
+            Span<const T> span_y(vals_y.ptr, static_cast<Size>(len_y));
+            
             T sum_x_unary = detail::unary_exp_sum(
-                vals_x, gamma, x_unary_cache.data()
+                span_x, gamma, x_unary_cache.data()
             );
             T sum_y_unary = detail::unary_exp_sum(
-                vals_y, gamma, y_unary_cache.data()
+                span_y, gamma, y_unary_cache.data()
             );
 
             // ---------------------------------------------------------------
@@ -331,15 +339,15 @@ void mmd_rbf(
             // ---------------------------------------------------------------
             
             T sum_xx = detail::self_kernel_sum(
-                vals_x, N_x, gamma, sum_x_unary
+                span_x, N_x, gamma, sum_x_unary
             );
 
             T sum_yy = detail::self_kernel_sum(
-                vals_y, N_y, gamma, sum_y_unary
+                span_y, N_y, gamma, sum_y_unary
             );
 
             T sum_xy = detail::cross_kernel_sum(
-                vals_x, N_x, vals_y, N_y, gamma, sum_x_unary, sum_y_unary
+                span_x, N_x, span_y, N_y, gamma, sum_x_unary, sum_y_unary
             );
 
             // ---------------------------------------------------------------

@@ -40,8 +40,9 @@ namespace scl::kernel::feature {
 /// @param clip_vals Clipping thresholds theta_j for each column (size = cols).
 /// @param out_means Output: Mean of clipped values (size = cols).
 /// @param out_vars  Output: Variance of clipped values (size = cols).
+template <CSCLike MatrixT>
 SCL_FORCE_INLINE void clipped_moments(
-    CSCMatrix<Real> matrix,
+    MatrixT matrix,
     Span<const Real> clip_vals,
     MutableSpan<Real> out_means,
     MutableSpan<Real> out_vars
@@ -121,8 +122,9 @@ SCL_FORCE_INLINE void clipped_moments(
 /// @param out_means Output Means.
 /// @param out_vars  Output Variances.
 /// @param ddof      Delta Degrees of Freedom (usually 1 for sample variance).
+template <CSCLike MatrixT>
 SCL_FORCE_INLINE void standard_moments(
-    CSCMatrix<Real> matrix,
+    MatrixT matrix,
     MutableSpan<Real> out_means,
     MutableSpan<Real> out_vars,
     int ddof = 1
@@ -187,8 +189,9 @@ SCL_FORCE_INLINE void standard_moments(
 ///
 /// @param matrix CSC Matrix.
 /// @param out_rates Output: fraction [0.0, 1.0] for each gene.
+template <CSCLike MatrixT>
 SCL_FORCE_INLINE void detection_rate(
-    CSCMatrix<Real> matrix,
+    MatrixT matrix,
     MutableSpan<Real> out_rates
 ) {
     SCL_CHECK_DIM(out_rates.size == static_cast<Size>(matrix.cols), "Output rates mismatch");
@@ -196,12 +199,11 @@ SCL_FORCE_INLINE void detection_rate(
     const Real inv_N = 1.0 / static_cast<Real>(matrix.rows);
 
     scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
-        // In CSC, the number of non-zeros is simply determined by the indptr difference.
-        // This is O(1) per gene! Extremely fast.
-        Index start = matrix.indptr[c];
-        Index end   = matrix.indptr[c+1];
+        // Use unified interface to get column length (O(1) per gene)
+        Index col_idx = static_cast<Index>(c);
+        Index len = matrix.col_length(col_idx);
         
-        Real nnz_count = static_cast<Real>(end - start);
+        Real nnz_count = static_cast<Real>(len);
         out_rates[c] = nnz_count * inv_N;
     });
 }

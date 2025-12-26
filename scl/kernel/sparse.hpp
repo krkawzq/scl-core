@@ -28,45 +28,50 @@ namespace scl::kernel::sparse {
 // 1. Basic Aggregations (Sum, Count)
 // =============================================================================
 
-/// @brief Compute sum of values for each row.
+/// @brief Compute sum of values for each row (Generic CSR-like matrices).
 ///
 /// y_i = sum over j of A_{ij}
 ///
-/// @param input  Input CSR matrix (M x N).
+/// @tparam MatrixT Any CSR-like matrix type (CustomCSR, VirtualCSR, etc.)
+/// @param input  Input CSR-like matrix (M x N).
 /// @param output Output array of size M (sums).
-template <typename T>
-void row_sums(const CSRMatrix<T>& input, MutableSpan<T> output) {
+template <CSRLike MatrixT>
+void row_sums(const MatrixT& input, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
     SCL_CHECK_DIM(output.size == static_cast<Size>(input.rows), 
                   "Output size must match input rows");
 
     scl::threading::parallel_for(0, input.rows, [&](size_t i) {
         // CSR optimization: Iterate only non-zeros in the row
-        auto row_vals = input.row_values(static_cast<Index>(i));
+        Index row_idx = static_cast<Index>(i);
+        auto row_vals = input.row_values(row_idx);
+        Index len = input.row_length(row_idx);
         
         T sum = 0;
         // Compiler auto-vectorization friendly loop
-        for (Size j = 0; j < row_vals.size; ++j) {
+        for (Index j = 0; j < len; ++j) {
             sum += row_vals[j];
         }
         output[i] = sum;
     });
 }
 
-/// @brief Count non-zero elements (NNZ) per row.
+/// @brief Count non-zero elements (NNZ) per row (Generic CSR-like matrices).
 ///
-/// @param input  Input CSR matrix.
+/// @tparam MatrixT Any CSR-like matrix type
+/// @param input  Input CSR-like matrix.
 /// @param output Output array of size M (counts).
-template <typename T>
-void row_nnz(const CSRMatrix<T>& input, MutableSpan<T> output) {
+template <CSRLike MatrixT>
+void row_nnz(const MatrixT& input, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
     SCL_CHECK_DIM(output.size == static_cast<Size>(input.rows), 
                   "Output size must match input rows");
 
     scl::threading::parallel_for(0, input.rows, [&](size_t i) {
-        // For CSR, NNZ is simply the size of the row span
-        // We calculate ptr[i+1] - ptr[i]
-        Index start = input.indptr[i];
-        Index end = input.indptr[i+1];
-        output[i] = static_cast<T>(end - start);
+        // For CSR, NNZ is simply the row length
+        Index row_idx = static_cast<Index>(i);
+        Index len = input.row_length(row_idx);
+        output[i] = static_cast<T>(len);
     });
 }
 
@@ -74,32 +79,36 @@ void row_nnz(const CSRMatrix<T>& input, MutableSpan<T> output) {
 // 2. Statistics (Mean, Variance)
 // =============================================================================
 
-/// @brief Compute Mean for each row.
+/// @brief Compute Mean for each row (Generic CSR-like matrices).
 ///
 /// mu_i = (1/N) * sum over j of A_{ij}
 /// Note: N is the total number of columns (including zeros).
 ///
-/// @param input  Input CSR matrix (M x N).
+/// @tparam MatrixT Any CSR-like matrix type
+/// @param input  Input CSR-like matrix (M x N).
 /// @param output Output array of size M (means).
-template <typename T>
-void row_means(const CSRMatrix<T>& input, MutableSpan<T> output) {
+template <CSRLike MatrixT>
+void row_means(const MatrixT& input, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
     SCL_CHECK_DIM(output.size == static_cast<Size>(input.rows), 
                   "Output size must match input rows");
 
     const T n_cols_inv = static_cast<T>(1.0) / static_cast<T>(input.cols);
 
     scl::threading::parallel_for(0, input.rows, [&](size_t i) {
-        auto row_vals = input.row_values(static_cast<Index>(i));
+        Index row_idx = static_cast<Index>(i);
+        auto row_vals = input.row_values(row_idx);
+        Index len = input.row_length(row_idx);
         
         T sum = 0;
-        for (Size j = 0; j < row_vals.size; ++j) {
+        for (Index j = 0; j < len; ++j) {
             sum += row_vals[j];
         }
         output[i] = sum * n_cols_inv;
     });
 }
 
-/// @brief Compute Mean and Variance for each row efficiently.
+/// @brief Compute Mean and Variance for each row efficiently (Generic CSR-like matrices).
 ///
 /// Uses the efficient formula for sparse data (Population Variance):
 /// Var(X) = E[X^2] - (E[X])^2
@@ -109,13 +118,15 @@ void row_means(const CSRMatrix<T>& input, MutableSpan<T> output) {
 /// - Standard Welford algorithm requires iterating zeros which is O(N) instead of O(NNZ).
 /// - For high-dimensional sparse data, O(NNZ) is orders of magnitude faster.
 ///
-/// @param input    Input CSR matrix (M x N).
+/// @tparam MatrixT Any CSR-like matrix type
+/// @param input    Input CSR-like matrix (M x N).
 /// @param out_mean Output array for means (size M).
 /// @param out_var  Output array for variances (size M).
-template <typename T>
-void row_statistics(const CSRMatrix<T>& input, 
-                   MutableSpan<T> out_mean, 
-                   MutableSpan<T> out_var) {
+template <CSRLike MatrixT>
+void row_statistics(const MatrixT& input, 
+                   MutableSpan<typename MatrixT::ValueType> out_mean, 
+                   MutableSpan<typename MatrixT::ValueType> out_var) {
+    using T = typename MatrixT::ValueType;
     SCL_CHECK_DIM(out_mean.size == static_cast<Size>(input.rows), "Mean output dimension mismatch");
     SCL_CHECK_DIM(out_var.size == static_cast<Size>(input.rows), "Var output dimension mismatch");
 
@@ -123,13 +134,15 @@ void row_statistics(const CSRMatrix<T>& input,
     const T n_cols_inv = static_cast<T>(1.0) / n_cols;
 
     scl::threading::parallel_for(0, input.rows, [&](size_t i) {
-        auto row_vals = input.row_values(static_cast<Index>(i));
+        Index row_idx = static_cast<Index>(i);
+        auto row_vals = input.row_values(row_idx);
+        Index len = input.row_length(row_idx);
         
         T sum = 0;
         T sum_sq = 0;
 
         // Single pass over non-zeros (Cache friendly)
-        for (Size j = 0; j < row_vals.size; ++j) {
+        for (Index j = 0; j < len; ++j) {
             T val = row_vals[j];
             sum += val;
             sum_sq += val * val;

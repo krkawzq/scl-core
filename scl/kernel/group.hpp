@@ -64,8 +64,9 @@ SCL_FORCE_INLINE void count_group_sizes(
 /// @param group_ids Row labels (size = matrix.rows).
 /// @param n_groups Number of groups.
 /// @param out_counts Output buffer (size = matrix.cols * n_groups).
+template <CSCLike MatrixT>
 SCL_FORCE_INLINE void group_count_nonzero(
-    CSCMatrix<Real> matrix,
+    const MatrixT& matrix,
     Span<const int32_t> group_ids,
     Size n_groups,
     MutableSpan<Real> out_counts // Using Real for compatibility with downstream
@@ -81,12 +82,14 @@ SCL_FORCE_INLINE void group_count_nonzero(
     // No atomics needed because each thread owns a generic slice of output:
     // [c * n_groups, (c+1) * n_groups]
     scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
-        auto indices = matrix.col_indices(static_cast<Index>(c));
+        Index col_idx = static_cast<Index>(c);
+        auto indices = matrix.col_indices(col_idx);
+        Index len = matrix.col_length(col_idx);
         
         // Pointer to the start of this column's result block
         Real* res_ptr = out_counts.ptr + (c * n_groups);
 
-        for (size_t k = 0; k < indices.size; ++k) {
+        for (Index k = 0; k < len; ++k) {
             Index row = indices[k];
             int32_t g = group_ids[row];
             
@@ -111,8 +114,9 @@ SCL_FORCE_INLINE void group_count_nonzero(
 /// @param out_means Output buffer (size = cols * n_groups).
 /// @param include_zeros If true, denominator is group_size (implicit zeros included).
 ///                      If false, denominator is count of non-zeros.
+template <CSCLike MatrixT>
 SCL_FORCE_INLINE void group_mean(
-    CSCMatrix<Real> matrix,
+    const MatrixT& matrix,
     Span<const int32_t> group_ids,
     Size n_groups,
     Span<const Size> group_sizes,
@@ -133,8 +137,10 @@ SCL_FORCE_INLINE void group_mean(
     // 2. Accumulate Sums (Parallel over Columns)
     // Note: We use out_means as the 'Sum' accumulator temporarily
     scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
-        auto indices = matrix.col_indices(static_cast<Index>(c));
-        auto values  = matrix.col_values(static_cast<Index>(c));
+        Index col_idx = static_cast<Index>(c);
+        auto indices = matrix.col_indices(col_idx);
+        auto values  = matrix.col_values(col_idx);
+        Index len = matrix.col_length(col_idx);
         
         Real* res_ptr = out_means.ptr + (c * n_groups);
         
@@ -148,7 +154,7 @@ SCL_FORCE_INLINE void group_mean(
         // Let's implement the standard include_zeros=true path (High Perf).
         // For include_zeros=false, we will just assume caller uses group_stats.
         
-        for (size_t k = 0; k < values.size; ++k) {
+        for (Index k = 0; k < len; ++k) {
             Index row = indices[k];
             int32_t g = group_ids[row];
             if (g >= 0 && static_cast<Size>(g) < n_groups) {
@@ -186,8 +192,9 @@ SCL_FORCE_INLINE void group_mean(
 ///
 /// @param out_means Output Sum (initially), then Mean.
 /// @param out_vars  Output SumSq (initially), then Variance.
+template <CSCLike MatrixT>
 SCL_FORCE_INLINE void group_stats(
-    CSCMatrix<Real> matrix,
+    const MatrixT& matrix,
     Span<const int32_t> group_ids,
     Size n_groups,
     Span<const Size> group_sizes,
@@ -208,8 +215,10 @@ SCL_FORCE_INLINE void group_stats(
 
     // 2. Accumulate Sum and SumSq
     scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
-        auto indices = matrix.col_indices(static_cast<Index>(c));
-        auto values  = matrix.col_values(static_cast<Index>(c));
+        Index col_idx = static_cast<Index>(c);
+        auto indices = matrix.col_indices(col_idx);
+        auto values  = matrix.col_values(col_idx);
+        Index len = matrix.col_length(col_idx);
         
         Real* mean_ptr = out_means.ptr + (c * n_groups);
         Real* var_ptr  = out_vars.ptr + (c * n_groups);
@@ -221,7 +230,7 @@ SCL_FORCE_INLINE void group_stats(
         // For safety, if include_zeros=false, we warn or use a hack.
         // Let's assume include_zeros=true (standard) for the optimized path.
         
-        for (size_t k = 0; k < values.size; ++k) {
+        for (Index k = 0; k < len; ++k) {
             Index row = indices[k];
             int32_t g = group_ids[row];
             if (g >= 0 && static_cast<Size>(g) < n_groups) {
@@ -245,7 +254,7 @@ SCL_FORCE_INLINE void group_stats(
                 // Pass 1: Count. Pass 2: Accumulate.
                 // Since columns are usually short (< 5% sparsity), 2-pass is cheap.
                 Index count = 0;
-                for (size_t k = 0; k < indices.size; ++k) {
+                for (Index k = 0; k < len; ++k) {
                     if (group_ids[indices[k]] == static_cast<int32_t>(g)) count++;
                 }
                 N = static_cast<Real>(count);

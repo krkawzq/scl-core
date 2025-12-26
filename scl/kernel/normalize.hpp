@@ -29,15 +29,17 @@ namespace scl::kernel::normalize {
 // 1. Row Scaling (In-Place)
 // =============================================================================
 
-/// @brief Scale each row by a specific factor.
+/// @brief Scale each row by a specific factor (Generic CSR-like matrices).
 ///
 /// Operation: matrix[i, :] *= scales[i]
 /// Used for Library Size Normalization (CPM/TPM) where scale = target_sum / current_sum.
 ///
-/// @param matrix CSR Matrix (modified in-place).
+/// @tparam MatrixT Any CSR-like matrix type
+/// @param matrix CSR-like Matrix (modified in-place).
 /// @param scales Array of scale factors (one per row).
+template <CSRLike MatrixT>
 SCL_FORCE_INLINE void scale_rows(
-    CSRMatrix<Real> matrix,
+    MatrixT matrix,
     Span<const Real> scales
 ) {
     SCL_CHECK_DIM(scales.size == static_cast<Size>(matrix.rows), "Scales dim mismatch");
@@ -74,19 +76,21 @@ SCL_FORCE_INLINE void scale_rows(
 // 2. Highly Expressed Gene Detection
 // =============================================================================
 
-/// @brief Identify genes that consume a large fraction of counts in any cell.
+/// @brief Identify genes that consume a large fraction of counts in any cell (Generic CSR-like matrices).
 ///
 /// Used to exclude genes like Hemoglobin or Mitochondria from normalization factors.
 /// A gene is flagged if: `expression[cell, gene] > max_fraction * total_counts[cell]`.
 ///
-/// @param matrix CSR Matrix.
+/// @tparam MatrixT Any CSR-like matrix type
+/// @param matrix CSR-like Matrix.
 /// @param row_sums Pre-computed row sums (total counts per cell).
 /// @param max_fraction Threshold (e.g., 0.05 for 5%).
 /// @param out_mask Output boolean mask (Byte array) of size n_cols. 
 ///                 1 if highly expressed, 0 otherwise.
 ///                 **Note**: Use uint8_t/Byte instead of bool to avoid bit-vector races.
+template <CSRLike MatrixT>
 SCL_FORCE_INLINE void detect_highly_expressed_genes(
-    CSRMatrix<Real> matrix,
+    const MatrixT& matrix,
     Span<const Real> row_sums,
     Real max_fraction,
     MutableSpan<Byte> out_mask
@@ -131,13 +135,15 @@ SCL_FORCE_INLINE void detect_highly_expressed_genes(
 // 3. Masked Row Sums
 // =============================================================================
 
-/// @brief Compute row sums excluding specific genes.
+/// @brief Compute row sums excluding specific genes (Generic CSR-like matrices).
 ///
-/// @param matrix CSR Matrix.
+/// @tparam MatrixT Any CSR-like matrix type
+/// @param matrix CSR-like Matrix.
 /// @param gene_mask Byte mask (size n_cols). If gene_mask[j] != 0, ignore gene j.
 /// @param out_sums Output row sums.
+template <CSRLike MatrixT>
 SCL_FORCE_INLINE void row_sums_masked(
-    CSRMatrix<Real> matrix,
+    const MatrixT& matrix,
     Span<const Byte> gene_mask,
     MutableSpan<Real> out_sums
 ) {

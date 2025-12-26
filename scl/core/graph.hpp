@@ -67,8 +67,8 @@ struct CSRGraph {
 #if !defined(NDEBUG)
         SCL_ASSERT(u >= 0 && u < adj.rows, "Graph: Node index out of bounds");
 #endif
-        // For CSR, degree is simply the difference in indptr
-        return adj.indptr[u + 1] - adj.indptr[u];
+        // Use unified interface to get row length
+        return adj.row_length(u);
     }
 
     /// @brief Get the neighbors of a node.

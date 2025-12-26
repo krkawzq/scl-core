@@ -39,7 +39,27 @@
 /// @}
 
 // =============================================================================
-// SECTION 2: Function Inlining & Visibility
+// SECTION 2: Compiler Warnings & Attributes
+// =============================================================================
+
+/// @defgroup Attributes Compiler Attributes
+/// @{
+
+#if defined(__has_cpp_attribute)
+    #if __has_cpp_attribute(nodiscard) >= 201603L
+        /// @brief Mark function return value must be used (C++17).
+        #define SCL_NODISCARD [[nodiscard]]
+    #else
+        #define SCL_NODISCARD
+    #endif
+#else
+    #define SCL_NODISCARD
+#endif
+
+/// @}
+
+// =============================================================================
+// SECTION 3: Function Inlining & Visibility
 // =============================================================================
 
 /// @defgroup Inlining Inlining Control
@@ -68,7 +88,7 @@
 /// @}
 
 // =============================================================================
-// SECTION 3: Memory Alignment & Prefetching
+// SECTION 4: Memory Alignment & Prefetching
 // =============================================================================
 
 /// @defgroup MemoryTools Memory Optimization Tools
@@ -118,7 +138,7 @@
 /// @}
 
 // =============================================================================
-// SECTION 4: Aligned Memory Management (Low Level)
+// SECTION 5: Aligned Memory Management (Low Level)
 // =============================================================================
 
 /// @defgroup MemoryAlloc Aligned Allocation Macros

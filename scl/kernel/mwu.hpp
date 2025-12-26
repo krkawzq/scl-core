@@ -192,12 +192,15 @@ SCL_FORCE_INLINE void softmax_impl(
 // Public API
 // =============================================================================
 
-/// @brief Row-wise Softmax for CSR Matrix.
+/// @brief Row-wise Softmax for Generic CSR-like Matrices.
 ///
 /// Output is a dense row-major matrix.
 /// Uses chunked parallelism to reuse memory for exp caching.
-template <typename T>
-void softmax(const CSRMatrix<T>& matrix, MutableSpan<T> output) {
+///
+/// @tparam MatrixT Any CSR-like matrix type
+template <CSRLike MatrixT>
+void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
     const Index R = matrix.rows;
     const Index C = matrix.cols;
     SCL_CHECK_DIM(output.size == static_cast<Size>(R * C), 
@@ -228,11 +231,14 @@ void softmax(const CSRMatrix<T>& matrix, MutableSpan<T> output) {
     });
 }
 
-/// @brief Column-wise Softmax for CSC Matrix.
+/// @brief Column-wise Softmax for Generic CSC-like Matrices.
 ///
 /// Output is a dense column-major matrix (compatible with CSC layout).
-template <typename T>
-void softmax(const CSCMatrix<T>& matrix, MutableSpan<T> output) {
+///
+/// @tparam MatrixT Any CSC-like matrix type
+template <CSCLike MatrixT>
+void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
     const Index R = matrix.rows;
     const Index C = matrix.cols;
     SCL_CHECK_DIM(output.size == static_cast<Size>(R * C), 

@@ -45,11 +45,12 @@ struct ColStats {
     std::vector<T> inv_stds; // 1.0 / std
 };
 
-/// @brief Compute Mean and 1/Std for each column in a CSC matrix.
+/// @brief Compute Mean and 1/Std for each column in a CSC-like matrix.
 ///
 /// Complexity: O(nnz)
-template <typename T>
-SCL_FORCE_INLINE ColStats<T> compute_col_stats(const CSCMatrix<T>& matrix) {
+template <CSCLike MatrixT>
+SCL_FORCE_INLINE ColStats<typename MatrixT::ValueType> compute_col_stats(const MatrixT& matrix) {
+    using T = typename MatrixT::ValueType;
     const Index C = matrix.cols;
     const Size R = static_cast<Size>(matrix.rows);
     const T inv_n = static_cast<T>(1.0) / static_cast<T>(R);
@@ -59,7 +60,9 @@ SCL_FORCE_INLINE ColStats<T> compute_col_stats(const CSCMatrix<T>& matrix) {
     stats.inv_stds.resize(C);
 
     scl::threading::parallel_for(0, C, [&](size_t j) {
-        auto vals = matrix.col_values(static_cast<Index>(j));
+        Index col_idx = static_cast<Index>(j);
+        auto vals = matrix.col_values(col_idx);
+        Index len = matrix.col_length(col_idx);
         
         namespace s = scl::simd;
         const s::Tag d;
@@ -67,10 +70,10 @@ SCL_FORCE_INLINE ColStats<T> compute_col_stats(const CSCMatrix<T>& matrix) {
 
         auto v_sum = s::Zero(d);
         auto v_sq_sum = s::Zero(d);
-        size_t k = 0;
+        Index k = 0;
 
         // SIMD Accumulation
-        for (; k + lanes <= vals.size; k += lanes) {
+        for (; k + static_cast<Index>(lanes) <= len; k += static_cast<Index>(lanes)) {
             auto v = s::Load(d, vals.ptr + k);
             v_sum = s::Add(v_sum, v);
             v_sq_sum = s::Add(v_sq_sum, s::Mul(v, v));
@@ -80,7 +83,7 @@ SCL_FORCE_INLINE ColStats<T> compute_col_stats(const CSCMatrix<T>& matrix) {
         T sq_sum = s::GetLane(s::SumOfLanes(d, v_sq_sum));
 
         // Scalar Tail
-        for (; k < vals.size; ++k) {
+        for (; k < len; ++k) {
             T v = vals[k];
             sum += v;
             sq_sum += v * v;
@@ -116,13 +119,15 @@ SCL_FORCE_INLINE ColStats<T> compute_col_stats(const CSCMatrix<T>& matrix) {
 // Public API
 // =============================================================================
 
-/// @brief Compute Pearson Correlation Matrix from Sparse Input (CSC).
+/// @brief Compute Pearson Correlation Matrix from Sparse Input (Generic CSC-like matrices).
 ///
+/// @tparam MatrixT Any CSC-like matrix type
 /// @param matrix  Input sparse matrix (cells x genes).
 /// @param output  Output dense correlation matrix (genes x genes).
 ///                Must be pre-allocated (size = cols * cols).
-template <typename T>
-void pearson(const CSCMatrix<T>& matrix, MutableSpan<T> output) {
+template <CSCLike MatrixT>
+void pearson(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
     const Index C = matrix.cols;
     const Size N_cells = static_cast<Size>(matrix.rows);
     SCL_CHECK_DIM(output.size == static_cast<Size>(C * C), "Pearson: Output size mismatch");

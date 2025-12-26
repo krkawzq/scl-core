@@ -40,7 +40,7 @@
 ///
 /// - Zero intermediate storage (streaming computation)
 /// - Peak: O(N) for thread-local distance buffer
-/// - No full N×N matrix allocation
+/// - No full NxN matrix allocation
 ///
 /// Performance:
 ///
@@ -158,14 +158,14 @@ SCL_FORCE_INLINE void find_sigma(
 /// Computes exact KNN using distance decomposition formula.
 /// Suitable for moderate-size datasets (N < 50K) or when precision is critical.
 ///
-/// Input: CSR matrix (cells × features)
+/// Input: CSR matrix (cells x features)
 ///
 /// Output: K nearest neighbors for each cell (excluding self).
 ///
 /// @param matrix Input sparse matrix (CSR format)
 /// @param k Number of neighbors to find
-/// @param out_indices Output neighbor indices [size = n_cells × k]
-/// @param out_distances Output distances [size = n_cells × k]
+/// @param out_indices Output neighbor indices [size = n_cells x k]
+/// @param out_distances Output distances [size = n_cells x k]
 template <typename T>
 void knn_sparse(
     const CSRMatrix<T>& matrix,
@@ -299,8 +299,8 @@ void knn_sparse(
 ///
 /// Algorithm: For each cell, find bandwidth sigma via perplexity matching.
 ///
-/// @param knn_indices Neighbor indices [size = n_cells × k]
-/// @param knn_distances Neighbor distances [size = n_cells × k]
+/// @param knn_indices Neighbor indices [size = n_cells x k]
+/// @param knn_distances Neighbor distances [size = n_cells x k]
 /// @param k Number of neighbors per cell
 /// @param out_sigmas Output: Bandwidth parameters [size = n_cells]
 /// @param out_rhos Output: Offset distances [size = n_cells]
@@ -345,12 +345,12 @@ void find_connectivities(
 /// Applies smooth kernel to raw distances:
 /// w_ij = exp(-(max(0, d_ij - rho_i)) / sigma_i)
 ///
-/// @param knn_indices Neighbor indices [size = n_cells × k]
-/// @param knn_distances Neighbor distances [size = n_cells × k]
+/// @param knn_indices Neighbor indices [size = n_cells x k]
+/// @param knn_distances Neighbor distances [size = n_cells x k]
 /// @param sigmas Bandwidth parameters [size = n_cells]
 /// @param rhos Offset distances [size = n_cells]
 /// @param k Number of neighbors per cell
-/// @param out_weights Output affinity weights [size = n_cells × k]
+/// @param out_weights Output affinity weights [size = n_cells x k]
 template <typename T>
 void affinity_weights(
     Span<const Index> knn_indices,
@@ -396,11 +396,11 @@ void affinity_weights(
 /// 2. Find perplexity-matched sigmas
 /// 3. Compute smooth affinity weights
 ///
-/// @param matrix Input sparse matrix (CSR, cells × features)
+/// @param matrix Input sparse matrix (CSR, cells x features)
 /// @param k Number of neighbors
-/// @param out_indices KNN indices [size = n_cells × k]
-/// @param out_distances KNN distances [size = n_cells × k]
-/// @param out_weights UMAP weights [size = n_cells × k]
+/// @param out_indices KNN indices [size = n_cells x k]
+/// @param out_distances KNN distances [size = n_cells x k]
+/// @param out_weights UMAP weights [size = n_cells x k]
 template <typename T>
 void knn_graph(
     const CSRMatrix<T>& matrix,
@@ -444,15 +444,15 @@ void knn_graph(
 
 /// @brief Cosine similarity KNN (normalized Euclidean).
 ///
-/// Computes KNN based on cosine similarity: $sim(x,y) = \frac{\langle x,y \rangle}{\|x\|\|y\|}$
+/// Computes KNN based on cosine similarity: sim(x,y) = <x,y> / (||x|| * ||y||)
 ///
 /// Equivalent to Euclidean KNN on L2-normalized vectors, but computed directly
 /// on unnormalized data.
 ///
 /// @param matrix Input sparse matrix (CSR format)
 /// @param k Number of neighbors to find
-/// @param out_indices Output neighbor indices [size = n_cells × k]
-/// @param out_similarities Output cosine similarities [size = n_cells × k]
+/// @param out_indices Output neighbor indices [size = n_cells x k]
+/// @param out_similarities Output cosine similarities [size = n_cells x k]
 template <typename T>
 void knn_cosine(
     const CSRMatrix<T>& matrix,
@@ -571,13 +571,13 @@ void knn_cosine(
 /// @brief Symmetrize KNN graph using fuzzy union (UMAP style).
 ///
 /// Combines directed graph into undirected:
-/// $w_{sym}(i,j) = w(i,j) + w(j,i) - w(i,j) \cdot w(j,i)$
+/// w_sym(i,j) = w(i,j) + w(j,i) - w(i,j) * w(j,i)
 ///
-/// Input: Directed KNN graph (CSR-like, n_cells × k)
+/// Input: Directed KNN graph (CSR-like, n_cells x k)
 /// Output: Symmetrized edge list (COO format: row_i, col_j, weight)
 ///
-/// @param knn_indices KNN indices [size = n_cells × k]
-/// @param knn_weights KNN weights [size = n_cells × k]
+/// @param knn_indices KNN indices [size = n_cells x k]
+/// @param knn_weights KNN weights [size = n_cells x k]
 /// @param k Number of neighbors per cell
 /// @param out_row_indices Output row indices for edges
 /// @param out_col_indices Output column indices for edges
@@ -663,11 +663,11 @@ void symmetrize_graph(
 /// Finds k nearest neighbors in reference set for each query sample.
 /// Useful for out-of-sample embedding or batch integration.
 ///
-/// @param reference Reference CSR matrix (n_ref × features)
-/// @param query Query CSR matrix (n_query × features)
+/// @param reference Reference CSR matrix (n_ref x features)
+/// @param query Query CSR matrix (n_query x features)
 /// @param k Number of neighbors
-/// @param out_indices Output indices into reference [size = n_query × k]
-/// @param out_distances Output distances [size = n_query × k]
+/// @param out_indices Output indices into reference [size = n_query x k]
+/// @param out_distances Output distances [size = n_query x k]
 template <typename T>
 void knn_query(
     const CSRMatrix<T>& reference,
@@ -779,13 +779,13 @@ void knn_query(
 /// @brief Symmetrize affinity graph using max operator.
 ///
 /// Simpler alternative to fuzzy union:
-/// $w_{sym}(i,j) = \max(w(i,j), w(j,i))$
+/// w_sym(i,j) = max(w(i,j), w(j,i))
 ///
-/// Input: Directed KNN graph (stored as n_cells × k arrays)
+/// Input: Directed KNN graph (stored as n_cells x k arrays)
 /// Output: Symmetrized weights (in-place modification)
 ///
-/// @param knn_indices Neighbor indices [size = n_cells × k]
-/// @param knn_weights Weights [size = n_cells × k], modified in-place
+/// @param knn_indices Neighbor indices [size = n_cells x k]
+/// @param knn_weights Weights [size = n_cells x k], modified in-place
 /// @param k Number of neighbors per cell
 template <typename T>
 void symmetrize_max(
@@ -827,10 +827,10 @@ void symmetrize_max(
 ///
 /// Removes edges with weight below threshold, useful for reducing graph size.
 ///
-/// @param knn_weights Weights [size = n_cells × k]
+/// @param knn_weights Weights [size = n_cells x k]
 /// @param k Number of neighbors per cell
 /// @param threshold Weight threshold
-/// @param out_valid_mask Output mask for valid edges [size = n_cells × k]
+/// @param out_valid_mask Output mask for valid edges [size = n_cells x k]
 template <typename T>
 void prune_edges(
     Span<const T> knn_weights,
@@ -855,15 +855,15 @@ void prune_edges(
 
 /// @brief Compute mutual KNN graph (intersection of forward and backward edges).
 ///
-/// An edge (i,j) is kept only if: j ∈ KNN(i) AND i ∈ KNN(j)
+/// An edge (i,j) is kept only if: j in KNN(i) AND i in KNN(j)
 ///
 /// Useful for constructing more robust neighborhood graphs.
 ///
-/// @param knn_indices Neighbor indices [size = n_cells × k]
+/// @param knn_indices Neighbor indices [size = n_cells x k]
 /// @param k Number of neighbors per cell
-/// @param out_mutual_mask Output mask for mutual edges [size = n_cells × k]
+/// @param out_mutual_mask Output mask for mutual edges [size = n_cells x k]
 template <typename T>
-void compute_mutual_knn(
+void mutual_knn(
     Span<const Index> knn_indices,
     Size k,
     MutableSpan<uint8_t> out_mutual_mask

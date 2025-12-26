@@ -42,16 +42,17 @@ namespace scl::kernel::qc {
 // Core Kernels
 // =============================================================================
 
-/// @brief Compute n_genes (nnz) and total_counts per cell.
+/// @brief Compute n_genes (nnz) and total_counts per cell (Generic CSR-like matrices).
 ///
 /// This is the most basic QC metric computation.
 ///
-/// @param matrix Input CSR matrix (cells × genes)
+/// @tparam MatrixT Any CSR-like matrix type
+/// @param matrix Input CSR-like matrix (cells × genes)
 /// @param out_n_genes Output: Number of detected genes per cell [size = n_cells]
 /// @param out_total_counts Output: Total counts per cell [size = n_cells]
-template <typename T>
+template <CSRLike MatrixT>
 void compute_basic_qc(
-    const CSRMatrix<T>& matrix,
+    const MatrixT& matrix,
     MutableSpan<Index> out_n_genes,
     MutableSpan<Real> out_total_counts
 ) {
@@ -103,9 +104,9 @@ void compute_basic_qc(
 /// @param mask Binary mask for gene subset [size = n_genes], 0 or non-zero
 /// @param total_counts Pre-computed total counts per cell [size = n_cells]
 /// @param out_subset_pct Output: Percentage [size = n_cells]
-template <typename T>
+template <CSRLike MatrixT>
 void compute_subset_pct(
-    const CSRMatrix<T>& matrix,
+    const MatrixT& matrix,
     Span<const uint8_t> mask,
     Span<const Real> total_counts,
     MutableSpan<Real> out_subset_pct
@@ -155,9 +156,9 @@ void compute_subset_pct(
 /// @param masks Array of binary masks [each size = n_genes]
 /// @param total_counts Pre-computed total counts per cell [size = n_cells]
 /// @param out_subset_pcts Output: Percentages [size = n_cells × n_subsets], row-major
-template <typename T>
+template <CSRLike MatrixT>
 void compute_multi_subset_pct(
-    const CSRMatrix<T>& matrix,
+    const MatrixT& matrix,
     Span<const Span<const uint8_t>> masks,
     Span<const Real> total_counts,
     MutableSpan<Real> out_subset_pcts
@@ -231,9 +232,9 @@ void compute_multi_subset_pct(
 /// @param out_n_genes Output: Number of detected genes [size = n_cells]
 /// @param out_total_counts Output: Total counts [size = n_cells]
 /// @param out_subset_pct Output: Subset percentage [size = n_cells]
-template <typename T>
+template <CSRLike MatrixT>
 void compute_qc_with_subset(
-    const CSRMatrix<T>& matrix,
+    const MatrixT& matrix,
     Span<const uint8_t> subset_mask,
     MutableSpan<Index> out_n_genes,
     MutableSpan<Real> out_total_counts,
