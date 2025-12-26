@@ -193,6 +193,36 @@ install_build_tools() {
     print_success "Build tools ready (CMake + Ninja)"
 }
 
+install_hdf5_linux() {
+    print_info "Installing HDF5 for Linux..."
+    
+    if [ "$PKG_MGR" = "apt-get" ]; then
+        sudo apt-get update
+        sudo apt-get install -y libhdf5-dev hdf5-tools
+    elif [ "$PKG_MGR" = "yum" ] || [ "$PKG_MGR" = "dnf" ]; then
+        sudo $PKG_MGR install -y hdf5-devel
+    else
+        print_error "Unknown package manager for Linux"
+        return 1
+    fi
+    
+    print_success "HDF5 installed successfully"
+}
+
+install_hdf5_macos() {
+    print_info "Installing HDF5 for macOS..."
+    
+    if ! check_command brew; then
+        print_error "Homebrew is required for macOS HDF5 installation"
+        return 1
+    fi
+    
+    brew install hdf5
+    
+    print_success "HDF5 installed successfully"
+    print_info "HDF5 location: $(brew --prefix hdf5)"
+}
+
 install_highway() {
     print_info "Installing Google Highway (SIMD library)..."
     
@@ -294,6 +324,19 @@ main() {
     
     # Install build tools first
     install_build_tools
+    
+    # Install HDF5 (required for h5ad support)
+    read -p "Install HDF5 for native .h5ad support? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        if [ "$PLATFORM" = "macos" ]; then
+            install_hdf5_macos
+        else
+            install_hdf5_linux
+        fi
+    else
+        print_warning "Skipping HDF5 - native .h5ad I/O will be disabled"
+    fi
     
     # Optionally install Highway locally
     read -p "Install Google Highway to libs/highway? (y/N): " -n 1 -r

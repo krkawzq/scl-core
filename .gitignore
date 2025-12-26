@@ -65,3 +65,6 @@ Thumbs.db
 .cache/
 uv.lock
 .pytest_cache/
+
+
+forks/
