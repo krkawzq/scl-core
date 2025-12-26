@@ -368,3 +368,128 @@ class TestMatrixInfo:
         assert 'shape' in info_str
         assert 'backend' in info_str
         assert 'ownership' in info_str
+
+
+# =============================================================================
+# Statistical Methods Tests
+# =============================================================================
+
+class TestCSRStatisticalMethods:
+    """Test SclCSR statistical methods (sum, mean, min, max)."""
+    
+    def test_sum_total(self, small_csr_from_dense):
+        """Test total sum of matrix."""
+        # Matrix: [[1, 0, 2, 0], [0, 3, 0, 4], [5, 0, 0, 6]]
+        # Sum: 1+2+3+4+5+6 = 21
+        total = small_csr_from_dense.sum()
+        assert total == pytest.approx(21.0)
+    
+    def test_sum_axis1_row_sums(self, small_csr_from_dense):
+        """Test row sums (axis=1)."""
+        row_sums = small_csr_from_dense.sum(axis=1)
+        assert len(row_sums) == 3
+        assert row_sums[0] == pytest.approx(3.0)   # 1+2
+        assert row_sums[1] == pytest.approx(7.0)   # 3+4
+        assert row_sums[2] == pytest.approx(11.0)  # 5+6
+    
+    def test_sum_axis0_col_sums(self, small_csr_from_dense):
+        """Test column sums (axis=0)."""
+        col_sums = small_csr_from_dense.sum(axis=0)
+        assert len(col_sums) == 4
+        assert col_sums[0] == pytest.approx(6.0)   # 1+5
+        assert col_sums[1] == pytest.approx(3.0)   # 3
+        assert col_sums[2] == pytest.approx(2.0)   # 2
+        assert col_sums[3] == pytest.approx(10.0)  # 4+6
+    
+    def test_mean_total(self, small_csr_from_dense):
+        """Test total mean of matrix."""
+        # Mean: 21 / 12 = 1.75
+        mean_val = small_csr_from_dense.mean()
+        assert mean_val == pytest.approx(21.0 / 12.0)
+    
+    def test_mean_axis1_row_means(self, small_csr_from_dense):
+        """Test row means (axis=1)."""
+        row_means = small_csr_from_dense.mean(axis=1)
+        assert len(row_means) == 3
+        assert row_means[0] == pytest.approx(3.0 / 4.0)
+        assert row_means[1] == pytest.approx(7.0 / 4.0)
+        assert row_means[2] == pytest.approx(11.0 / 4.0)
+    
+    def test_min_total(self, small_csr_from_dense):
+        """Test global minimum."""
+        min_val = small_csr_from_dense.min()
+        # Has implicit zeros
+        assert min_val == pytest.approx(0.0)
+    
+    def test_max_total(self, small_csr_from_dense):
+        """Test global maximum."""
+        max_val = small_csr_from_dense.max()
+        assert max_val == pytest.approx(6.0)
+    
+    def test_max_axis1_row_maxs(self, small_csr_from_dense):
+        """Test row maximums (axis=1)."""
+        row_maxs = small_csr_from_dense.max(axis=1)
+        assert len(row_maxs) == 3
+        assert row_maxs[0] == pytest.approx(2.0)
+        assert row_maxs[1] == pytest.approx(4.0)
+        assert row_maxs[2] == pytest.approx(6.0)
+
+
+class TestCSCStatisticalMethods:
+    """Test SclCSC statistical methods."""
+    
+    def test_sum_total(self, small_csc_from_dense):
+        """Test total sum of CSC matrix."""
+        total = small_csc_from_dense.sum()
+        assert total == pytest.approx(21.0)
+    
+    def test_sum_axis0_col_sums(self, small_csc_from_dense):
+        """Test column sums (axis=0) - efficient for CSC."""
+        col_sums = small_csc_from_dense.sum(axis=0)
+        assert len(col_sums) == 4
+        assert col_sums[0] == pytest.approx(6.0)
+        assert col_sums[1] == pytest.approx(3.0)
+        assert col_sums[2] == pytest.approx(2.0)
+        assert col_sums[3] == pytest.approx(10.0)
+    
+    def test_mean_total(self, small_csc_from_dense):
+        """Test total mean of CSC matrix."""
+        mean_val = small_csc_from_dense.mean()
+        assert mean_val == pytest.approx(21.0 / 12.0)
+    
+    def test_max_total(self, small_csc_from_dense):
+        """Test global maximum of CSC matrix."""
+        max_val = small_csc_from_dense.max()
+        assert max_val == pytest.approx(6.0)
+
+
+# =============================================================================
+# Conversion Alias Tests
+# =============================================================================
+
+class TestConversionAliases:
+    """Test to_csc() and to_csr() aliases."""
+    
+    @pytest.mark.skipif(not HAS_SCIPY, reason="scipy not available")
+    def test_to_csc_alias(self, small_csr_from_dense):
+        """Test to_csc() is alias for tocsc()."""
+        csc = small_csr_from_dense.to_csc()
+        assert isinstance(csc, SclCSC)
+        assert csc.shape == small_csr_from_dense.shape
+    
+    @pytest.mark.skipif(not HAS_SCIPY, reason="scipy not available")
+    def test_to_csr_alias(self, small_csc_from_dense):
+        """Test to_csr() is alias for tocsr()."""
+        csr = small_csc_from_dense.to_csr()
+        assert isinstance(csr, SclCSR)
+        assert csr.shape == small_csc_from_dense.shape
+    
+    def test_to_csr_on_csr_returns_self(self, small_csr_from_dense):
+        """Test to_csr() on CSR returns self."""
+        result = small_csr_from_dense.to_csr()
+        assert result is small_csr_from_dense
+    
+    def test_to_csc_on_csc_returns_self(self, small_csc_from_dense):
+        """Test to_csc() on CSC returns self."""
+        result = small_csc_from_dense.to_csc()
+        assert result is small_csc_from_dense

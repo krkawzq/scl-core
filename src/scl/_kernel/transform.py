@@ -4,7 +4,7 @@ Low-level C bindings for log transforms, softmax, etc.
 """
 
 import ctypes
-from typing import Any, Optional
+from typing import Any
 
 from .lib_loader import get_lib
 from .types import c_real, c_index, c_size, check_error
@@ -30,7 +30,7 @@ def log1p_inplace_array(data: Any, size: int) -> None:
         RuntimeError: If C function fails.
     """
     lib = get_lib()
-    lib.scl_log1p_inplace_array.argtypes = [ctypes.POINTER(c_real), c_size]
+    lib.scl_log1p_inplace_array.argtypes = [ctypes.c_void_p, c_size]
     lib.scl_log1p_inplace_array.restype = ctypes.c_int
     
     status = lib.scl_log1p_inplace_array(data, size)
@@ -41,10 +41,8 @@ def log1p_inplace_csr(
     data: Any,
     indices: Any,
     indptr: Any,
-    row_lengths: Optional[Any],
     rows: int,
-    cols: int,
-    nnz: int
+    cols: int
 ) -> None:
     """Apply ln(1 + x) transformation to CSR matrix in-place.
     
@@ -52,22 +50,20 @@ def log1p_inplace_csr(
         data: CSR data array pointer (modified in-place).
         indices: CSR column indices pointer.
         indptr: CSR row pointers pointer.
-        row_lengths: Explicit row lengths pointer or None.
         rows: Number of rows.
         cols: Number of columns.
-        nnz: Number of non-zeros.
         
     Raises:
         RuntimeError: If C function fails.
     """
     lib = get_lib()
     lib.scl_log1p_inplace_csr.argtypes = [
-        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
-        ctypes.POINTER(c_index), c_index, c_index, c_index
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        c_index, c_index
     ]
     lib.scl_log1p_inplace_csr.restype = ctypes.c_int
     
-    status = lib.scl_log1p_inplace_csr(data, indices, indptr, row_lengths, rows, cols, nnz)
+    status = lib.scl_log1p_inplace_csr(data, indices, indptr, rows, cols)
     check_error(status, "log1p_inplace_csr")
 
 
@@ -82,7 +78,7 @@ def log2p1_inplace_array(data: Any, size: int) -> None:
         RuntimeError: If C function fails.
     """
     lib = get_lib()
-    lib.scl_log2p1_inplace_array.argtypes = [ctypes.POINTER(c_real), c_size]
+    lib.scl_log2p1_inplace_array.argtypes = [ctypes.c_void_p, c_size]
     lib.scl_log2p1_inplace_array.restype = ctypes.c_int
     
     status = lib.scl_log2p1_inplace_array(data, size)
@@ -100,7 +96,7 @@ def expm1_inplace_array(data: Any, size: int) -> None:
         RuntimeError: If C function fails.
     """
     lib = get_lib()
-    lib.scl_expm1_inplace_array.argtypes = [ctypes.POINTER(c_real), c_size]
+    lib.scl_expm1_inplace_array.argtypes = [ctypes.c_void_p, c_size]
     lib.scl_expm1_inplace_array.restype = ctypes.c_int
     
     status = lib.scl_expm1_inplace_array(data, size)
@@ -111,10 +107,8 @@ def softmax_inplace_csr(
     data: Any,
     indices: Any,
     indptr: Any,
-    row_lengths: Optional[Any],
     rows: int,
-    cols: int,
-    nnz: int
+    cols: int
 ) -> None:
     """Apply softmax to rows of CSR matrix in-place.
     
@@ -122,20 +116,18 @@ def softmax_inplace_csr(
         data: CSR data array pointer (modified in-place).
         indices: CSR column indices pointer.
         indptr: CSR row pointers pointer.
-        row_lengths: Explicit row lengths pointer or None.
         rows: Number of rows.
         cols: Number of columns.
-        nnz: Number of non-zeros.
         
     Raises:
         RuntimeError: If C function fails.
     """
     lib = get_lib()
     lib.scl_softmax_inplace_csr.argtypes = [
-        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
-        ctypes.POINTER(c_index), c_index, c_index, c_index
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        c_index, c_index
     ]
     lib.scl_softmax_inplace_csr.restype = ctypes.c_int
     
-    status = lib.scl_softmax_inplace_csr(data, indices, indptr, row_lengths, rows, cols, nnz)
+    status = lib.scl_softmax_inplace_csr(data, indices, indptr, rows, cols)
     check_error(status, "softmax_inplace_csr")

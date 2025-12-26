@@ -4,22 +4,29 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/lifetime.hpp"
 #include "scl/core/error.hpp"
+#include "scl/core/simd.hpp"
+#include "scl/core/macros.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <algorithm>
 #include <numeric>
+#include <cstring>
 
 // =============================================================================
 /// @file slice.hpp
-/// @brief Sparse Matrix Slicing Operations
-///
-/// Implements unsafe (allocating) and safe (pre-allocated) slicing operations.
+/// @brief High-Performance Sparse Matrix Slicing Operations
 ///
 /// Key Design Principles:
 /// 1. Unsafe functions allocate and return new memory (caller owns)
 /// 2. Returns CustomSparse (always contiguous after slicing)
 /// 3. Memory management via lifetime.hpp
 /// 4. Parallel execution for large matrices
+///
+/// Optimizations:
+/// - SIMD mask operations
+/// - Thread-local accumulation
+/// - Cache-friendly memory access
+/// - Parallel prefix sum where applicable
 ///
 /// Memory Handoff Protocol:
 /// - C++ allocates memory using scl::core::mem
@@ -58,6 +65,128 @@ struct SliceResult {
 };
 
 // =============================================================================
+// SIMD Utilities
+// =============================================================================
+
+namespace detail {
+
+/// @brief SIMD popcount for mask (count set bits in uint8_t array)
+SCL_FORCE_INLINE Size popcount_mask_simd(const uint8_t* mask, Size count) {
+    Size result = 0;
+    
+    // 8-way unrolled scalar (compiler will auto-vectorize)
+    Size k = 0;
+    for (; k + 8 <= count; k += 8) {
+        result += mask[k + 0];
+        result += mask[k + 1];
+        result += mask[k + 2];
+        result += mask[k + 3];
+        result += mask[k + 4];
+        result += mask[k + 5];
+        result += mask[k + 6];
+        result += mask[k + 7];
+    }
+    
+    for (; k < count; ++k) {
+        result += mask[k];
+    }
+    
+    return result;
+}
+
+/// @brief Count masked elements in sparse indices (SIMD-friendly)
+SCL_FORCE_INLINE Index count_masked_indices(
+    const Index* indices,
+    Size len,
+    const uint8_t* mask
+) {
+    Index count = 0;
+    
+    // 4-way unrolled for better ILP
+    Size k = 0;
+    for (; k + 4 <= len; k += 4) {
+        count += mask[indices[k + 0]];
+        count += mask[indices[k + 1]];
+        count += mask[indices[k + 2]];
+        count += mask[indices[k + 3]];
+    }
+    
+    for (; k < len; ++k) {
+        count += mask[indices[k]];
+    }
+    
+    return count;
+}
+
+/// @brief Build new index mapping from mask (returns count of set bits)
+SCL_FORCE_INLINE Index build_index_mapping(
+    const uint8_t* mask,
+    Index* new_indices,
+    Index size
+) {
+    Index new_idx = 0;
+    for (Index i = 0; i < size; ++i) {
+        if (mask[i]) {
+            new_indices[i] = new_idx++;
+        } else {
+            new_indices[i] = -1;
+        }
+    }
+    return new_idx;
+}
+
+/// @brief Parallel prefix sum
+inline void parallel_prefix_sum(Index* arr, Size n) {
+    // For small arrays, sequential is faster
+    if (n < 10000) {
+        for (Size i = 1; i < n; ++i) {
+            arr[i] += arr[i - 1];
+        }
+        return;
+    }
+    
+    // Block-based parallel prefix sum
+    const Size num_threads = scl::threading::Scheduler::get_num_threads();
+    const Size block_size = (n + num_threads - 1) / num_threads;
+    
+    // Phase 1: Local prefix sums
+    std::vector<Index> block_sums(num_threads, 0);
+    
+    scl::threading::parallel_for(Size(0), num_threads, [&](size_t tid) {
+        Size start = tid * block_size;
+        Size end = std::min(start + block_size, n);
+        
+        if (start >= n) return;
+        
+        for (Size i = start + 1; i < end; ++i) {
+            arr[i] += arr[i - 1];
+        }
+        
+        if (end > start) {
+            block_sums[tid] = arr[end - 1];
+        }
+    });
+    
+    // Phase 2: Scan block sums
+    for (Size i = 1; i < num_threads; ++i) {
+        block_sums[i] += block_sums[i - 1];
+    }
+    
+    // Phase 3: Add block offsets
+    scl::threading::parallel_for(Size(1), num_threads, [&](size_t tid) {
+        Size start = tid * block_size;
+        Size end = std::min(start + block_size, n);
+        
+        Index offset = block_sums[tid - 1];
+        for (Size i = start; i < end; ++i) {
+            arr[i] += offset;
+        }
+    });
+}
+
+} // namespace detail
+
+// =============================================================================
 // Inspection Functions (Compute Output Size)
 // =============================================================================
 
@@ -72,11 +201,15 @@ Index inspect_slice_primary(
     const MatrixT& matrix,
     Array<const Index> keep_indices
 ) {
+    const Size n_keep = keep_indices.size();
+    const Index n_primary = scl::primary_size(matrix);
+    
+    if (n_keep == 0) return 0;
+    
     Index total_nnz = 0;
-
-    for (Size i = 0; i < keep_indices.size(); ++i) {
+    for (Size i = 0; i < n_keep; ++i) {
         Index idx = keep_indices[i];
-        SCL_CHECK_ARG(idx >= 0 && idx < scl::primary_size(matrix),
+        SCL_CHECK_ARG(idx >= 0 && idx < n_primary,
                       "Slice: Index out of bounds");
         total_nnz += scl::primary_length(matrix, idx);
     }
@@ -85,6 +218,8 @@ Index inspect_slice_primary(
 }
 
 /// @brief Compute output nnz for secondary dimension filter (mask-based)
+///
+/// Uses optimized counting with SIMD-friendly loop
 ///
 /// @param matrix Input CustomSparse matrix
 /// @param mask Boolean mask for secondary dimension [size = secondary_dim]
@@ -100,11 +235,14 @@ Index inspect_filter_secondary(
     for (Index p = 0; p < primary_dim; ++p) {
         Index start = matrix.indptr[p];
         Index end = matrix.indptr[p + 1];
-
-        for (Index k = start; k < end; ++k) {
-            if (mask[matrix.indices[k]]) {
-                total_nnz++;
-            }
+        Index len = end - start;
+        
+        if (len > 0) {
+            total_nnz += detail::count_masked_indices(
+                matrix.indices + start,
+                static_cast<Size>(len),
+                mask.data()
+            );
         }
     }
 
@@ -145,10 +283,14 @@ void materialize_slice_primary(
         Index src_end = matrix.indptr[src_idx + 1];
         Index len = src_end - src_start;
 
-        // Copy data and indices
-        for (Index k = 0; k < len; ++k) {
-            out_data[write_pos + k] = matrix.data[src_start + k];
-            out_indices[write_pos + k] = matrix.indices[src_start + k];
+        // Bulk copy using memcpy for efficiency
+        if (len > 0) {
+            std::memcpy(out_data.data() + write_pos,
+                       matrix.data + src_start,
+                       len * sizeof(T));
+            std::memcpy(out_indices.data() + write_pos,
+                       matrix.indices + src_start,
+                       len * sizeof(Index));
         }
 
         write_pos += len;
@@ -296,14 +438,11 @@ SliceResult<T> filter_secondary_unsafe(
     auto new_indices_handle = scl::core::mem::alloc_array<Index>(static_cast<Size>(secondary_dim));
     auto new_indices = new_indices_handle.template as_span<Index>();
 
-    Index new_secondary = 0;
-    for (Index i = 0; i < secondary_dim; ++i) {
-        if (mask[i]) {
-            new_indices[i] = new_secondary++;
-        } else {
-            new_indices[i] = -1;
-        }
-    }
+    Index new_secondary = detail::build_index_mapping(
+        mask.data(),
+        new_indices.data(),
+        secondary_dim
+    );
 
     // Compute output nnz
     Index out_nnz = inspect_filter_secondary(matrix, mask);
@@ -370,7 +509,7 @@ inline void compute_lengths_from_indptr(
 
     const Size n = output.size();
 
-    scl::threading::parallel_for(0, n, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n, [&](size_t i) {
         output[i] = indptr[i + 1] - indptr[i];
     });
 }
@@ -392,7 +531,7 @@ inline void build_indptr_from_lengths(
     }
 }
 
-/// @brief Build mask from indices
+/// @brief Build mask from indices (SIMD-optimized zero-fill)
 ///
 /// @param indices Indices to set to 1
 /// @param total_size Size of output mask
@@ -405,10 +544,8 @@ inline void build_mask_from_indices(
     SCL_CHECK_DIM(mask.size() >= static_cast<Size>(total_size),
                   "build_mask: Mask too small");
 
-    // Zero out mask
-    for (Size i = 0; i < static_cast<Size>(total_size); ++i) {
-        mask[i] = 0;
-    }
+    // Zero out mask using memset (fastest)
+    std::memset(mask.data(), 0, static_cast<Size>(total_size));
 
     // Set selected indices
     for (Size i = 0; i < indices.size(); ++i) {
@@ -417,6 +554,11 @@ inline void build_mask_from_indices(
                       "build_mask: Index out of bounds");
         mask[idx] = 1;
     }
+}
+
+/// @brief Count non-zero elements in mask
+inline Size count_mask(Array<const uint8_t> mask) {
+    return detail::popcount_mask_simd(mask.data(), mask.size());
 }
 
 } // namespace scl::kernel::slice

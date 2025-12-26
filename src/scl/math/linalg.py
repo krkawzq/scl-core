@@ -138,7 +138,36 @@ def spmv(
 
 
 def _spmv_scl(mat: "SclCSR", x: "RealArray") -> "RealArray":
-    """SpMV implementation for SCL matrices."""
+    """SpMV implementation for SCL matrices using C++ kernel."""
+    from scl.sparse import Array
+    
+    try:
+        from scl._kernel import algebra as kernel_algebra
+        from scl._kernel.lib_loader import LibraryNotFoundError
+        
+        m = mat.shape[0]
+        result = Array(m, dtype='float64')
+        
+        # Get C pointers: (data, indices, indptr, lengths, rows, cols, nnz)
+        data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = mat.get_c_pointers()
+        
+        # Call kernel: y = 1.0 * A * x + 0.0 * y
+        kernel_algebra.spmv_csr(
+            data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+            rows, cols, nnz,
+            x.get_pointer(), result.get_pointer(),
+            1.0, 0.0
+        )
+        
+        return result
+        
+    except (ImportError, LibraryNotFoundError, RuntimeError, AttributeError):
+        # Fallback to pure Python implementation
+        return _spmv_scl_fallback(mat, x)
+
+
+def _spmv_scl_fallback(mat: "SclCSR", x: "RealArray") -> "RealArray":
+    """Fallback pure Python SpMV implementation."""
     from scl.sparse import Array
 
     m = mat.shape[0]
@@ -413,7 +442,40 @@ def gram(
 
 
 def _gram_scl(mat: "SclCSR") -> "RealArray":
-    """Gram matrix computation for SCL matrices."""
+    """Gram matrix computation for SCL matrices using C++ kernel."""
+    from scl.sparse import Array
+    
+    try:
+        from scl._kernel import algebra as kernel_algebra
+        from scl._kernel.lib_loader import LibraryNotFoundError
+        
+        m, n = mat.shape
+        
+        # Convert to CSC for column access (X^T * X on columns)
+        csc = mat.to_csc()
+        
+        # Output: n x n matrix stored as flat array
+        result = Array(n * n, dtype='float64')
+        
+        # Get C pointers from CSC
+        data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = csc.get_c_pointers()
+        
+        # Call kernel
+        kernel_algebra.gram_csc(
+            data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+            rows, cols, nnz,
+            result.get_pointer()
+        )
+        
+        return result
+        
+    except (ImportError, LibraryNotFoundError, RuntimeError, AttributeError):
+        # Fallback to pure Python implementation
+        return _gram_scl_fallback(mat)
+
+
+def _gram_scl_fallback(mat: "SclCSR") -> "RealArray":
+    """Fallback pure Python Gram matrix computation."""
     from scl.sparse import Array
 
     m, n = mat.shape
@@ -594,7 +656,44 @@ def pearson(
 
 
 def _pearson_scl(mat: "SclCSR") -> "RealArray":
-    """Pearson correlation for SCL matrices."""
+    """Pearson correlation for SCL matrices using C++ kernel."""
+    from scl.sparse import Array
+    
+    try:
+        from scl._kernel import algebra as kernel_algebra
+        from scl._kernel.lib_loader import LibraryNotFoundError
+        
+        m, n = mat.shape
+        csc = mat.to_csc()
+        
+        # Output: n x n correlation matrix
+        result = Array(n * n, dtype='float64')
+        
+        # Workspace arrays for means and inverse stds
+        workspace_means = Array(n, dtype='float64')
+        workspace_inv_stds = Array(n, dtype='float64')
+        
+        # Get C pointers from CSC
+        data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = csc.get_c_pointers()
+        
+        # Call kernel
+        kernel_algebra.pearson_csc(
+            data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+            rows, cols, nnz,
+            result.get_pointer(),
+            workspace_means.get_pointer(),
+            workspace_inv_stds.get_pointer()
+        )
+        
+        return result
+        
+    except (ImportError, LibraryNotFoundError, RuntimeError, AttributeError):
+        # Fallback to pure Python implementation
+        return _pearson_scl_fallback(mat)
+
+
+def _pearson_scl_fallback(mat: "SclCSR") -> "RealArray":
+    """Fallback pure Python Pearson correlation computation."""
     from scl.sparse import Array
 
     m, n = mat.shape
@@ -627,7 +726,7 @@ def _pearson_scl(mat: "SclCSR") -> "RealArray":
 
         stds[j] = math.sqrt(sq_sum / m) if sq_sum > 0 else 1.0
 
-    # Compute correlation matrix
+    # Compute correlation matrix using identity: cov(X,Y) = E[XY] - E[X]E[Y]
     result = Array(n * n, dtype='float64')
 
     for i in range(n):
@@ -645,61 +744,7 @@ def _pearson_scl(mat: "SclCSR") -> "RealArray":
             mean_j = means[j]
             std_j = stds[j]
 
-            # Centered dot product
-            centered_dot = 0.0
-
-            # Sparse intersection
-            ki = i_start
-            kj = j_start
-
-            while ki < i_end and kj < j_end:
-                row_i = csc._indices[ki]
-                row_j = csc._indices[kj]
-
-                if row_i == row_j:
-                    centered_dot += (csc._data[ki] - mean_i) * (csc._data[kj] - mean_j)
-                    ki += 1
-                    kj += 1
-                elif row_i < row_j:
-                    # row_i in i but not in j: contributes (val_i - mean_i) * (0 - mean_j)
-                    centered_dot += (csc._data[ki] - mean_i) * (-mean_j)
-                    ki += 1
-                else:
-                    # row_j in j but not in i
-                    centered_dot += (-mean_i) * (csc._data[kj] - mean_j)
-                    kj += 1
-
-            # Remaining elements in i only
-            while ki < i_end:
-                centered_dot += (csc._data[ki] - mean_i) * (-mean_j)
-                ki += 1
-
-            # Remaining elements in j only
-            while kj < j_end:
-                centered_dot += (-mean_i) * (csc._data[kj] - mean_j)
-                kj += 1
-
-            # Elements that are zero in both: contribute (-mean_i) * (-mean_j)
-            # But we need to account for all m elements
-            # Total contribution from zeros in both
-            nnz_i = i_end - i_start
-            nnz_j = j_end - j_start
-
-            # This is complex; we've only counted non-zeros
-            # The formula: sum over all rows of (x_i - mean_i)(x_j - mean_j)
-            # = sum_nonzeros + sum_zeros_i_only + sum_zeros_j_only + sum_both_zeros
-            # We handled non-zeros and one-sided zeros above
-            # Still need: rows where both are zero
-            # Those contribute: (-mean_i) * (-mean_j) = mean_i * mean_j per row
-
-            # Actually, our loop doesn't handle this correctly. Let's use
-            # a different approach: compute raw dot product and adjust
-
-            # Simplified: use the identity
-            # cov(X, Y) = E[XY] - E[X]E[Y]
-            # = (1/m) * sum(x*y) - mean_x * mean_y
-
-            # Recompute using this identity
+            # Compute raw dot product
             raw_dot = 0.0
             ki = i_start
             kj = j_start

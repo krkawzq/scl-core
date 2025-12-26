@@ -5,24 +5,121 @@
 #include "scl/io/mmatrix.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/lifetime.hpp"
+#include "scl/core/macros.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <cstring>
-#include <atomic>
+#include <vector>
+#include <algorithm>
 
 // =============================================================================
 /// @file slice_mapped_impl.hpp
-/// @brief Mapped Backend Slicing Operations
+/// @brief High-Performance Slicing for Mapped Sparse Matrices
 ///
-/// Key insight: Mapped data supports efficient streaming reads.
-/// For slicing:
-/// - Primary slice: Extract selected rows/columns (read-only, sequential)
-/// - Secondary filter: Filter by mask (read-only, needs inspection)
+/// Key Optimizations:
+/// 1. Thread-Local Accumulation: Avoid atomic contention
+/// 2. Streaming Prefetch: Efficient mapped data access
+/// 3. SIMD Mask Counting: Vectorized popcount
+/// 4. Bulk Memory Operations: memcpy for large segments
+/// 5. Adaptive Parallelism: Based on matrix size
 ///
 /// Both operations return newly allocated SliceResult.
 // =============================================================================
 
 namespace scl::kernel::slice::mapped {
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+constexpr Size PARALLEL_THRESHOLD = 512;
+constexpr Size MEMCPY_THRESHOLD = 8;
+constexpr Size PREFETCH_DIST = 4;
+
+// =============================================================================
+// Detail Utilities
+// =============================================================================
+
+namespace detail {
+
+/// @brief Chunked parallel reduction (avoids atomic contention)
+template <typename F>
+SCL_FORCE_INLINE Index parallel_reduce(Size n, F&& get_value) {
+    if (n < PARALLEL_THRESHOLD) {
+        Index total = 0;
+        for (Size i = 0; i < n; ++i) {
+            total += get_value(i);
+        }
+        return total;
+    }
+    
+    const Size num_threads = scl::threading::Scheduler::get_num_threads();
+    const Size chunk_size = (n + num_threads - 1) / num_threads;
+    
+    std::vector<Index> partial_sums(num_threads, 0);
+    
+    scl::threading::parallel_for(Size(0), num_threads, [&](size_t tid) {
+        Size start = tid * chunk_size;
+        Size end = std::min(start + chunk_size, n);
+        
+        Index local_sum = 0;
+        for (Size i = start; i < end; ++i) {
+            local_sum += get_value(i);
+        }
+        partial_sums[tid] = local_sum;
+    });
+    
+    Index total = 0;
+    for (Size t = 0; t < num_threads; ++t) {
+        total += partial_sums[t];
+    }
+    return total;
+}
+
+/// @brief SIMD-friendly mask counting for indices
+SCL_FORCE_INLINE Index count_masked_fast(
+    const Index* SCL_RESTRICT indices,
+    Size len,
+    const uint8_t* SCL_RESTRICT mask
+) {
+    Index count = 0;
+    
+    Size k = 0;
+    for (; k + 8 <= len; k += 8) {
+        count += mask[indices[k + 0]];
+        count += mask[indices[k + 1]];
+        count += mask[indices[k + 2]];
+        count += mask[indices[k + 3]];
+        count += mask[indices[k + 4]];
+        count += mask[indices[k + 5]];
+        count += mask[indices[k + 6]];
+        count += mask[indices[k + 7]];
+    }
+    
+    for (; k < len; ++k) {
+        count += mask[indices[k]];
+    }
+    
+    return count;
+}
+
+/// @brief Fast memcpy with prefetch hint
+template <typename T>
+SCL_FORCE_INLINE void fast_copy(
+    T* SCL_RESTRICT dst,
+    const T* SCL_RESTRICT src,
+    Size count
+) {
+    if (count >= MEMCPY_THRESHOLD) {
+        std::memcpy(dst, src, count * sizeof(T));
+    } else {
+        for (Size k = 0; k < count; ++k) {
+            dst[k] = src[k];
+        }
+    }
+}
+
+} // namespace detail
 
 // =============================================================================
 // MappedCustomSparse Primary Slicing
@@ -43,28 +140,11 @@ Index inspect_slice_primary_mapped(
     // Prefetch hint
     kernel::mapped::hint_prefetch(matrix);
 
-    // For small slices, use sequential
-    if (n_keep < 1000) {
-        Index total_nnz = 0;
-        for (Size i = 0; i < n_keep; ++i) {
-            Index idx = keep_indices[i];
-            SCL_CHECK_ARG(idx >= 0 && idx < n_primary, "Slice: Index out of bounds");
-            total_nnz += scl::primary_length(matrix, idx);
-        }
-        return total_nnz;
-    }
-
-    // For large slices, use parallel reduction
-    std::atomic<Index> total_nnz{0};
-
-    scl::threading::parallel_for(Size(0), n_keep, [&](size_t i) {
+    return detail::parallel_reduce(n_keep, [&](Size i) -> Index {
         Index idx = keep_indices[i];
         SCL_CHECK_ARG(idx >= 0 && idx < n_primary, "Slice: Index out of bounds");
-        Index len = scl::primary_length(matrix, idx);
-        total_nnz.fetch_add(len, std::memory_order_relaxed);
+        return scl::primary_length(matrix, idx);
     });
-
-    return total_nnz.load(std::memory_order_relaxed);
 }
 
 /// @brief Materialize primary dimension slice for MappedCustomSparse
@@ -81,7 +161,7 @@ void materialize_slice_primary_mapped(
 
     SCL_CHECK_DIM(out_indptr.size() >= n_keep + 1, "Output indptr too small");
 
-    // Build indptr first (sequential)
+    // Build indptr first (sequential prefix sum)
     out_indptr[0] = 0;
     for (Size i = 0; i < n_keep; ++i) {
         Index src_idx = keep_indices[i];
@@ -89,28 +169,44 @@ void materialize_slice_primary_mapped(
         out_indptr[i + 1] = out_indptr[i] + len;
     }
 
+    // Prefetch ahead
+    kernel::mapped::hint_prefetch(matrix);
+
     // Parallel copy data and indices
-    scl::threading::parallel_for(Size(0), n_keep, [&](size_t i) {
-        Index src_idx = keep_indices[i];
-        auto values = scl::primary_values(matrix, src_idx);
-        auto indices = scl::primary_indices(matrix, src_idx);
-        Index len = static_cast<Index>(values.len);
+    if (n_keep < PARALLEL_THRESHOLD) {
+        for (Size i = 0; i < n_keep; ++i) {
+            Index src_idx = keep_indices[i];
+            auto values = scl::primary_values(matrix, src_idx);
+            auto indices = scl::primary_indices(matrix, src_idx);
+            Index len = static_cast<Index>(values.len);
 
-        if (len == 0) return;
+            if (len == 0) continue;
 
-        Index dst_start = out_indptr[i];
-
-        // Bulk copy using memcpy
-        if (len >= 8) {
-            std::memcpy(out_data.data() + dst_start, values.ptr, len * sizeof(T));
-            std::memcpy(out_indices.data() + dst_start, indices.ptr, len * sizeof(Index));
-        } else {
-            for (Index k = 0; k < len; ++k) {
-                out_data[dst_start + k] = values.ptr[k];
-                out_indices[dst_start + k] = indices.ptr[k];
-            }
+            Index dst_start = out_indptr[i];
+            detail::fast_copy(out_data.data() + dst_start, values.ptr, static_cast<Size>(len));
+            detail::fast_copy(out_indices.data() + dst_start, indices.ptr, static_cast<Size>(len));
         }
-    });
+    } else {
+        scl::threading::parallel_for(Size(0), n_keep, [&](size_t i) {
+            Index src_idx = keep_indices[i];
+            auto values = scl::primary_values(matrix, src_idx);
+            auto indices = scl::primary_indices(matrix, src_idx);
+            Index len = static_cast<Index>(values.len);
+
+            if (len == 0) return;
+
+            // Prefetch next row
+            if (i + PREFETCH_DIST < n_keep) {
+                Index next_idx = keep_indices[i + PREFETCH_DIST];
+                auto next_vals = scl::primary_values(matrix, next_idx);
+                SCL_PREFETCH_READ(next_vals.ptr, 0);
+            }
+
+            Index dst_start = out_indptr[i];
+            detail::fast_copy(out_data.data() + dst_start, values.ptr, static_cast<Size>(len));
+            detail::fast_copy(out_indices.data() + dst_start, indices.ptr, static_cast<Size>(len));
+        });
+    }
 }
 
 /// @brief Primary dimension slice for MappedCustomSparse - allocating
@@ -122,15 +218,12 @@ SliceResult<T> slice_primary_mapped(
 ) {
     const Size n_keep = keep_indices.size();
 
-    // Fast inspection
     Index out_nnz = inspect_slice_primary_mapped(matrix, keep_indices);
 
-    // Allocate output arrays
     auto data_handle = scl::core::mem::alloc_array<T>(static_cast<Size>(out_nnz));
     auto indices_handle = scl::core::mem::alloc_array<Index>(static_cast<Size>(out_nnz));
     auto indptr_handle = scl::core::mem::alloc_array<Index>(n_keep + 1);
 
-    // Fast materialization
     materialize_slice_primary_mapped(
         matrix,
         keep_indices,
@@ -139,7 +232,6 @@ SliceResult<T> slice_primary_mapped(
         indptr_handle.template as_span<Index>()
     );
 
-    // Build result
     SliceResult<T> result;
     result.data = data_handle.template release<T>();
     result.indices = indices_handle.template release<Index>();
@@ -163,37 +255,14 @@ Index inspect_filter_secondary_mapped(
     Array<const uint8_t> mask
 ) {
     const Index n_primary = scl::primary_size(matrix);
+    const uint8_t* mask_ptr = mask.data();
 
-    // Prefetch hint
     kernel::mapped::hint_prefetch(matrix);
 
-    // Process in chunks for cache efficiency
-    constexpr Size CHUNK_SIZE = 256;
-    const Size n_chunks = (n_primary + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-    std::atomic<Index> total_nnz{0};
-
-    for (Size chunk_id = 0; chunk_id < n_chunks; ++chunk_id) {
-        Index chunk_start = static_cast<Index>(chunk_id * CHUNK_SIZE);
-        Index chunk_end = std::min(chunk_start + static_cast<Index>(CHUNK_SIZE), n_primary);
-
-        scl::threading::parallel_for(chunk_start, chunk_end, [&](Index p) {
-            auto indices = scl::primary_indices(matrix, p);
-            Index local_count = 0;
-
-            for (Size k = 0; k < indices.len; ++k) {
-                if (mask[indices.ptr[k]]) {
-                    local_count++;
-                }
-            }
-
-            if (local_count > 0) {
-                total_nnz.fetch_add(local_count, std::memory_order_relaxed);
-            }
-        });
-    }
-
-    return total_nnz.load(std::memory_order_relaxed);
+    return detail::parallel_reduce(static_cast<Size>(n_primary), [&](Size p) -> Index {
+        auto indices = scl::primary_indices(matrix, static_cast<Index>(p));
+        return detail::count_masked_fast(indices.ptr, indices.len, mask_ptr);
+    });
 }
 
 /// @brief Materialize secondary dimension filter for MappedCustomSparse
@@ -208,37 +277,49 @@ void materialize_filter_secondary_mapped(
     Array<Index> out_indptr
 ) {
     const Index n_primary = scl::primary_size(matrix);
+    const uint8_t* mask_ptr = mask.data();
+    const Index* new_idx_ptr = new_indices.data();
 
-    // First pass: compute output indptr (must be sequential for prefix sum)
+    // First pass: compute output indptr
     out_indptr[0] = 0;
     for (Index p = 0; p < n_primary; ++p) {
         auto indices = scl::primary_indices(matrix, p);
-        Index count = 0;
-
-        for (Size k = 0; k < indices.len; ++k) {
-            if (mask[indices.ptr[k]]) {
-                count++;
-            }
-        }
-
+        Index count = detail::count_masked_fast(indices.ptr, indices.len, mask_ptr);
         out_indptr[p + 1] = out_indptr[p] + count;
     }
 
     // Second pass: parallel copy filtered data
-    scl::threading::parallel_for(Index(0), n_primary, [&](Index p) {
-        auto values = scl::primary_values(matrix, p);
-        auto indices = scl::primary_indices(matrix, p);
-        Index dst_pos = out_indptr[p];
+    if (n_primary < static_cast<Index>(PARALLEL_THRESHOLD)) {
+        for (Index p = 0; p < n_primary; ++p) {
+            auto values = scl::primary_values(matrix, p);
+            auto indices = scl::primary_indices(matrix, p);
+            Index dst_pos = out_indptr[p];
 
-        for (Size k = 0; k < values.len; ++k) {
-            Index old_idx = indices.ptr[k];
-            if (mask[old_idx]) {
-                out_data[dst_pos] = values.ptr[k];
-                out_indices[dst_pos] = new_indices[old_idx];
-                dst_pos++;
+            for (Size k = 0; k < values.len; ++k) {
+                Index old_idx = indices.ptr[k];
+                if (mask_ptr[old_idx]) {
+                    out_data[dst_pos] = values.ptr[k];
+                    out_indices[dst_pos] = new_idx_ptr[old_idx];
+                    dst_pos++;
+                }
             }
         }
-    });
+    } else {
+        scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
+            auto values = scl::primary_values(matrix, static_cast<Index>(p));
+            auto indices = scl::primary_indices(matrix, static_cast<Index>(p));
+            Index dst_pos = out_indptr[p];
+
+            for (Size k = 0; k < values.len; ++k) {
+                Index old_idx = indices.ptr[k];
+                if (mask_ptr[old_idx]) {
+                    out_data[dst_pos] = values.ptr[k];
+                    out_indices[dst_pos] = new_idx_ptr[old_idx];
+                    dst_pos++;
+                }
+            }
+        });
+    }
 }
 
 /// @brief Secondary dimension filter for MappedCustomSparse - allocating
@@ -257,24 +338,18 @@ SliceResult<T> filter_secondary_mapped(
     auto new_indices_handle = scl::core::mem::alloc_array<Index>(static_cast<Size>(secondary_dim));
     auto new_indices = new_indices_handle.template as_span<Index>();
 
-    Index new_secondary = 0;
-    for (Index i = 0; i < secondary_dim; ++i) {
-        if (mask[i]) {
-            new_indices[i] = new_secondary++;
-        } else {
-            new_indices[i] = -1;
-        }
-    }
+    Index new_secondary = slice::detail::build_index_mapping(
+        mask.data(),
+        new_indices.data(),
+        secondary_dim
+    );
 
-    // Fast inspection
     Index out_nnz = inspect_filter_secondary_mapped(matrix, mask);
 
-    // Allocate output
     auto data_handle = scl::core::mem::alloc_array<T>(static_cast<Size>(out_nnz));
     auto indices_handle = scl::core::mem::alloc_array<Index>(static_cast<Size>(out_nnz));
     auto indptr_handle = scl::core::mem::alloc_array<Index>(static_cast<Size>(primary_dim) + 1);
 
-    // Fast materialization
     materialize_filter_secondary_mapped(
         matrix,
         mask,
@@ -284,7 +359,6 @@ SliceResult<T> filter_secondary_mapped(
         indptr_handle.template as_span<Index>()
     );
 
-    // Build result
     SliceResult<T> result;
     result.data = data_handle.template release<T>();
     result.indices = indices_handle.template release<Index>();
@@ -312,26 +386,11 @@ Index inspect_slice_primary_mapped(
 
     if (n_keep == 0) return 0;
 
-    if (n_keep < 1000) {
-        Index total_nnz = 0;
-        for (Size i = 0; i < n_keep; ++i) {
-            Index idx = keep_indices[i];
-            SCL_CHECK_ARG(idx >= 0 && idx < n_primary, "Slice: Index out of bounds");
-            total_nnz += scl::primary_length(matrix, idx);
-        }
-        return total_nnz;
-    }
-
-    std::atomic<Index> total_nnz{0};
-
-    scl::threading::parallel_for(Size(0), n_keep, [&](size_t i) {
+    return detail::parallel_reduce(n_keep, [&](Size i) -> Index {
         Index idx = keep_indices[i];
         SCL_CHECK_ARG(idx >= 0 && idx < n_primary, "Slice: Index out of bounds");
-        Index len = scl::primary_length(matrix, idx);
-        total_nnz.fetch_add(len, std::memory_order_relaxed);
+        return scl::primary_length(matrix, idx);
     });
-
-    return total_nnz.load(std::memory_order_relaxed);
 }
 
 /// @brief Materialize primary dimension slice for MappedVirtualSparse
@@ -357,26 +416,33 @@ void materialize_slice_primary_mapped(
     }
 
     // Parallel copy
-    scl::threading::parallel_for(Size(0), n_keep, [&](size_t i) {
-        Index src_idx = keep_indices[i];
-        auto values = scl::primary_values(matrix, src_idx);
-        auto indices = scl::primary_indices(matrix, src_idx);
-        Index len = static_cast<Index>(values.len);
+    if (n_keep < PARALLEL_THRESHOLD) {
+        for (Size i = 0; i < n_keep; ++i) {
+            Index src_idx = keep_indices[i];
+            auto values = scl::primary_values(matrix, src_idx);
+            auto indices = scl::primary_indices(matrix, src_idx);
+            Index len = static_cast<Index>(values.len);
 
-        if (len == 0) return;
+            if (len == 0) continue;
 
-        Index dst_start = out_indptr[i];
-
-        if (len >= 8) {
-            std::memcpy(out_data.data() + dst_start, values.ptr, len * sizeof(T));
-            std::memcpy(out_indices.data() + dst_start, indices.ptr, len * sizeof(Index));
-        } else {
-            for (Index k = 0; k < len; ++k) {
-                out_data[dst_start + k] = values.ptr[k];
-                out_indices[dst_start + k] = indices.ptr[k];
-            }
+            Index dst_start = out_indptr[i];
+            detail::fast_copy(out_data.data() + dst_start, values.ptr, static_cast<Size>(len));
+            detail::fast_copy(out_indices.data() + dst_start, indices.ptr, static_cast<Size>(len));
         }
-    });
+    } else {
+        scl::threading::parallel_for(Size(0), n_keep, [&](size_t i) {
+            Index src_idx = keep_indices[i];
+            auto values = scl::primary_values(matrix, src_idx);
+            auto indices = scl::primary_indices(matrix, src_idx);
+            Index len = static_cast<Index>(values.len);
+
+            if (len == 0) return;
+
+            Index dst_start = out_indptr[i];
+            detail::fast_copy(out_data.data() + dst_start, values.ptr, static_cast<Size>(len));
+            detail::fast_copy(out_indices.data() + dst_start, indices.ptr, static_cast<Size>(len));
+        });
+    }
 }
 
 /// @brief Primary dimension slice for MappedVirtualSparse - allocating
@@ -417,6 +483,22 @@ SliceResult<T> slice_primary_mapped(
 // MappedVirtualSparse Secondary Filtering
 // =============================================================================
 
+/// @brief Inspect secondary dimension filter for MappedVirtualSparse
+template <typename T, bool IsCSR>
+    requires kernel::mapped::MappedSparseLike<scl::io::MappedVirtualSparse<T, IsCSR>, IsCSR>
+Index inspect_filter_secondary_mapped(
+    const scl::io::MappedVirtualSparse<T, IsCSR>& matrix,
+    Array<const uint8_t> mask
+) {
+    const Index n_primary = scl::primary_size(matrix);
+    const uint8_t* mask_ptr = mask.data();
+
+    return detail::parallel_reduce(static_cast<Size>(n_primary), [&](Size p) -> Index {
+        auto indices = scl::primary_indices(matrix, static_cast<Index>(p));
+        return detail::count_masked_fast(indices.ptr, indices.len, mask_ptr);
+    });
+}
+
 /// @brief Secondary dimension filter for MappedVirtualSparse - allocating
 template <typename T, bool IsCSR>
     requires kernel::mapped::MappedSparseLike<scl::io::MappedVirtualSparse<T, IsCSR>, IsCSR>
@@ -426,6 +508,7 @@ SliceResult<T> filter_secondary_mapped(
 ) {
     const Index secondary_dim = scl::secondary_size(matrix);
     const Index primary_dim = scl::primary_size(matrix);
+    const uint8_t* mask_ptr = mask.data();
 
     SCL_CHECK_DIM(mask.size() >= static_cast<Size>(secondary_dim), "Mask size mismatch");
 
@@ -433,34 +516,15 @@ SliceResult<T> filter_secondary_mapped(
     auto new_indices_handle = scl::core::mem::alloc_array<Index>(static_cast<Size>(secondary_dim));
     auto new_indices = new_indices_handle.template as_span<Index>();
 
-    Index new_secondary = 0;
-    for (Index i = 0; i < secondary_dim; ++i) {
-        if (mask[i]) {
-            new_indices[i] = new_secondary++;
-        } else {
-            new_indices[i] = -1;
-        }
-    }
+    Index new_secondary = slice::detail::build_index_mapping(
+        mask.data(),
+        new_indices.data(),
+        secondary_dim
+    );
+    const Index* new_idx_ptr = new_indices.data();
 
     // Count total nnz
-    std::atomic<Index> total_nnz{0};
-
-    scl::threading::parallel_for(Index(0), primary_dim, [&](Index p) {
-        auto indices = scl::primary_indices(matrix, p);
-        Index local_count = 0;
-
-        for (Size k = 0; k < indices.len; ++k) {
-            if (mask[indices.ptr[k]]) {
-                local_count++;
-            }
-        }
-
-        if (local_count > 0) {
-            total_nnz.fetch_add(local_count, std::memory_order_relaxed);
-        }
-    });
-
-    Index out_nnz = total_nnz.load(std::memory_order_relaxed);
+    Index out_nnz = inspect_filter_secondary_mapped(matrix, mask);
 
     // Allocate output
     auto data_handle = scl::core::mem::alloc_array<T>(static_cast<Size>(out_nnz));
@@ -475,32 +539,42 @@ SliceResult<T> filter_secondary_mapped(
     out_indptr[0] = 0;
     for (Index p = 0; p < primary_dim; ++p) {
         auto indices = scl::primary_indices(matrix, p);
-        Index count = 0;
-
-        for (Size k = 0; k < indices.len; ++k) {
-            if (mask[indices.ptr[k]]) {
-                count++;
-            }
-        }
-
+        Index count = detail::count_masked_fast(indices.ptr, indices.len, mask_ptr);
         out_indptr[p + 1] = out_indptr[p] + count;
     }
 
     // Parallel copy
-    scl::threading::parallel_for(Index(0), primary_dim, [&](Index p) {
-        auto values = scl::primary_values(matrix, p);
-        auto indices = scl::primary_indices(matrix, p);
-        Index dst_pos = out_indptr[p];
+    if (primary_dim < static_cast<Index>(PARALLEL_THRESHOLD)) {
+        for (Index p = 0; p < primary_dim; ++p) {
+            auto values = scl::primary_values(matrix, p);
+            auto indices = scl::primary_indices(matrix, p);
+            Index dst_pos = out_indptr[p];
 
-        for (Size k = 0; k < values.len; ++k) {
-            Index old_idx = indices.ptr[k];
-            if (mask[old_idx]) {
-                out_data[dst_pos] = values.ptr[k];
-                out_indices[dst_pos] = new_indices[old_idx];
-                dst_pos++;
+            for (Size k = 0; k < values.len; ++k) {
+                Index old_idx = indices.ptr[k];
+                if (mask_ptr[old_idx]) {
+                    out_data[dst_pos] = values.ptr[k];
+                    out_indices[dst_pos] = new_idx_ptr[old_idx];
+                    dst_pos++;
+                }
             }
         }
-    });
+    } else {
+        scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+            auto values = scl::primary_values(matrix, static_cast<Index>(p));
+            auto indices = scl::primary_indices(matrix, static_cast<Index>(p));
+            Index dst_pos = out_indptr[p];
+
+            for (Size k = 0; k < values.len; ++k) {
+                Index old_idx = indices.ptr[k];
+                if (mask_ptr[old_idx]) {
+                    out_data[dst_pos] = values.ptr[k];
+                    out_indices[dst_pos] = new_idx_ptr[old_idx];
+                    dst_pos++;
+                }
+            }
+        });
+    }
 
     SliceResult<T> result;
     result.data = data_handle.template release<T>();
@@ -511,6 +585,30 @@ SliceResult<T> filter_secondary_mapped(
     result.nnz = out_nnz;
 
     return result;
+}
+
+// =============================================================================
+// Unified Dispatchers
+// =============================================================================
+
+/// @brief Dispatch primary slice for mapped matrices
+template <typename MatrixT, bool IsCSR>
+    requires kernel::mapped::MappedSparseLike<MatrixT, IsCSR>
+auto slice_primary_mapped_dispatch(
+    const MatrixT& matrix,
+    Array<const Index> keep_indices
+) {
+    return slice_primary_mapped(matrix, keep_indices);
+}
+
+/// @brief Dispatch secondary filter for mapped matrices
+template <typename MatrixT, bool IsCSR>
+    requires kernel::mapped::MappedSparseLike<MatrixT, IsCSR>
+auto filter_secondary_mapped_dispatch(
+    const MatrixT& matrix,
+    Array<const uint8_t> mask
+) {
+    return filter_secondary_mapped(matrix, mask);
 }
 
 } // namespace scl::kernel::slice::mapped

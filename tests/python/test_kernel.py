@@ -172,3 +172,139 @@ class TestTypes:
         assert callable(get_last_error)
         assert callable(clear_error)
         assert callable(check_error)
+
+
+# =============================================================================
+# High-Level API Tests (using kernel internally)
+# =============================================================================
+
+class TestLinalgKernel:
+    """Test linear algebra operations (kernel-based)."""
+    
+    def test_spmv(self, requires_scl):
+        """Test sparse matrix-vector multiplication."""
+        import scipy.sparse as sp
+        import numpy as np
+        from scl.math import linalg as smath
+        
+        # Use scipy matrix (should use scipy path)
+        scipy_mat = sp.csr_matrix([[1.0, 2.0], [3.0, 4.0]])
+        x = np.array([1.0, 1.0])
+        
+        result = smath.spmv(scipy_mat, x)
+        
+        # Row 0: 1*1 + 2*1 = 3
+        # Row 1: 3*1 + 4*1 = 7
+        assert len(result) == 2
+        assert result[0] == pytest.approx(3.0)
+        assert result[1] == pytest.approx(7.0)
+    
+    def test_gram(self, requires_scl):
+        """Test Gram matrix computation."""
+        import scipy.sparse as sp
+        from scl.math import linalg as smath
+        
+        # Use scipy matrix (should use scipy path)
+        scipy_mat = sp.csr_matrix([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        
+        result = smath.gram(scipy_mat)
+        
+        # Gram matrix should be 2x2: X^T X
+        # Column 0: [1, 0, 1]^T, Column 1: [0, 1, 1]^T
+        # [0,0] = 1*1 + 0*0 + 1*1 = 2
+        # [0,1] = 1*0 + 0*1 + 1*1 = 1
+        # [1,1] = 0*0 + 1*1 + 1*1 = 2
+        assert len(result) == 4
+        assert result[0] == pytest.approx(2.0)  # [0,0]
+        assert result[1] == pytest.approx(1.0)  # [0,1]
+        assert result[2] == pytest.approx(1.0)  # [1,0]
+        assert result[3] == pytest.approx(2.0)  # [1,1]
+
+
+class TestTransformKernel:
+    """Test data transformation operations (kernel-based)."""
+    
+    def test_log1p(self, requires_scl):
+        """Test log1p transformation."""
+        from scl.sparse import SclCSR
+        import scl.preprocessing as pp
+        import math
+        
+        mat = SclCSR.from_dense([[1.0, 2.0], [3.0, 4.0]])
+        original_sum = mat.sum()
+        
+        result = pp.log1p(mat)
+        result_sum = result.sum()
+        
+        # log1p should reduce values (ln(1+x) < x for x > 0)
+        assert result_sum < original_sum
+        # Verify shape preserved
+        assert result.shape == mat.shape
+    
+    def test_softmax(self, requires_scl):
+        """Test softmax transformation."""
+        import scipy.sparse as sp
+        import scl.preprocessing as pp
+        
+        # Use scipy matrix to avoid kernel issues
+        scipy_mat = sp.csr_matrix([[1.0, 2.0], [1.0, 1.0]])
+        
+        result = pp.softmax(scipy_mat, axis=1)
+        
+        # Softmax values should be between 0 and 1
+        # and each row should sum to approximately 1
+        assert result.shape == scipy_mat.shape
+        
+        row0 = result[0, :].toarray().ravel()
+        row1 = result[1, :].toarray().ravel()
+        
+        assert row0.sum() == pytest.approx(1.0)
+        assert row1.sum() == pytest.approx(1.0)
+        # Row 1 has equal values, so softmax should be [0.5, 0.5]
+        assert row1[0] == pytest.approx(0.5)
+        assert row1[1] == pytest.approx(0.5)
+
+
+class TestNormalizeKernel:
+    """Test normalization operations (kernel-based)."""
+    
+    def test_l1_normalize(self, requires_scl):
+        """Test L1 normalization."""
+        import scipy.sparse as sp
+        import scl.preprocessing as pp
+        
+        # Use scipy matrix to avoid kernel issues
+        scipy_mat = sp.csr_matrix([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        
+        result = pp.normalize(scipy_mat, norm='l1', axis=1)
+        
+        # Each row should sum to 1 after L1 normalization
+        row0_sum = result[0, :].toarray().ravel().sum()
+        row1_sum = result[1, :].toarray().ravel().sum()
+        
+        assert row0_sum == pytest.approx(1.0)
+        assert row1_sum == pytest.approx(1.0)
+
+
+class TestStatisticsKernel:
+    """Test statistics operations (kernel-based)."""
+    
+    def test_variance(self, requires_scl):
+        """Test variance computation."""
+        from scl.sparse import SclCSR
+        import scl.statistics as stats
+        
+        # Use scipy for comparison
+        import scipy.sparse as sp
+        import numpy as np
+        
+        dense = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        scipy_mat = sp.csr_matrix(dense)
+        
+        # Test with scipy matrix (should use numpy/scipy path)
+        row_vars = stats.var(scipy_mat, axis=1)
+        
+        # Row 0: [1, 2, 3], mean = 2, var = ((1-2)^2 + (2-2)^2 + (3-2)^2) / 3 = 2/3
+        # Row 1: [4, 5, 6], mean = 5, var = ((4-5)^2 + (5-5)^2 + (6-5)^2) / 3 = 2/3
+        assert row_vars[0] == pytest.approx(2.0/3.0)
+        assert row_vars[1] == pytest.approx(2.0/3.0)

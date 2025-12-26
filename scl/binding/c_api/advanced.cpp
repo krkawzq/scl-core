@@ -3,15 +3,21 @@
 /// @brief Advanced Operations (softmax.hpp, mmd.hpp, spatial.hpp, algebra.hpp)
 ///
 /// Provides advanced computational functions including softmax, MMD, and spatial statistics.
+/// Includes both standard (CustomSparse) and mapped (MappedCustomSparse) versions.
 // =============================================================================
 
 #include "error.hpp"
 #include "scl/kernel/core.hpp"
+#include "scl/kernel/softmax_mapped_impl.hpp"
+#include "scl/kernel/algebra_mapped_impl.hpp"
+#include "scl/io/mmatrix.hpp"
+
+#include <cstring>
 
 extern "C" {
 
 // =============================================================================
-// Softmax
+// Softmax - Standard
 // =============================================================================
 
 int scl_softmax_inplace_csr(
@@ -33,7 +39,7 @@ int scl_softmax_inplace_csr(
 }
 
 // =============================================================================
-// MMD (Maximum Mean Discrepancy)
+// MMD (Maximum Mean Discrepancy) - Standard
 // =============================================================================
 
 int scl_mmd_rbf_csc(
@@ -72,7 +78,7 @@ int scl_mmd_rbf_csc(
 }
 
 // =============================================================================
-// Spatial Statistics
+// Spatial Statistics - Standard
 // =============================================================================
 
 int scl_morans_i(
@@ -108,7 +114,7 @@ int scl_morans_i(
 }
 
 // =============================================================================
-// Linear Algebra
+// Linear Algebra - Standard
 // =============================================================================
 
 int scl_spmv_csr(
@@ -157,9 +163,123 @@ int scl_spmv_trans_csc(
             const_cast<scl::Index*>(A_indptr),
             A_rows, A_cols
         );
-        // For CSC matrix, spmv computes y = A^T * x naturally
-        // because primary_dim = cols, secondary_dim = rows
         scl::kernel::algebra::spmv(
+            A,
+            scl::Array<const scl::Real>(x, static_cast<scl::Size>(A_rows)),
+            scl::Array<scl::Real>(y, static_cast<scl::Size>(A_cols)),
+            alpha,
+            beta
+        );
+    )
+}
+
+// =============================================================================
+// Softmax - Mapped
+// =============================================================================
+
+int scl_softmax_mapped_csr(
+    const scl::Real* data,
+    const scl::Index* indices,
+    const scl::Index* indptr,
+    scl::Index rows,
+    scl::Index cols,
+    scl::Index nnz,
+    scl::Real* out_data,
+    scl::Index* out_indices,
+    scl::Index* out_indptr
+) {
+    SCL_C_API_WRAPPER(
+        auto mapped_data = scl::io::MappedArray<scl::Real>::from_ptr(
+            const_cast<scl::Real*>(data), static_cast<scl::Size>(nnz));
+        auto mapped_indices = scl::io::MappedArray<scl::Index>::from_ptr(
+            const_cast<scl::Index*>(indices), static_cast<scl::Size>(nnz));
+        auto mapped_indptr = scl::io::MappedArray<scl::Index>::from_ptr(
+            const_cast<scl::Index*>(indptr), static_cast<scl::Size>(rows + 1));
+        
+        scl::io::MappedCustomSparse<scl::Real, true> matrix(
+            std::move(mapped_data),
+            std::move(mapped_indices),
+            std::move(mapped_indptr),
+            rows, cols
+        );
+        
+        auto result = scl::kernel::softmax::mapped::softmax_mapped_custom(matrix);
+        
+        std::memcpy(out_data, result.data.data(), result.data.size() * sizeof(scl::Real));
+        std::memcpy(out_indices, result.indices.data(), result.indices.size() * sizeof(scl::Index));
+        std::memcpy(out_indptr, result.indptr.data(), result.indptr.size() * sizeof(scl::Index));
+    )
+}
+
+// =============================================================================
+// Linear Algebra - Mapped
+// =============================================================================
+
+int scl_spmv_mapped_csr(
+    const scl::Real* A_data,
+    const scl::Index* A_indices,
+    const scl::Index* A_indptr,
+    scl::Index A_rows,
+    scl::Index A_cols,
+    scl::Index A_nnz,
+    const scl::Real* x,
+    scl::Real* y,
+    scl::Real alpha,
+    scl::Real beta
+) {
+    SCL_C_API_WRAPPER(
+        auto mapped_data = scl::io::MappedArray<scl::Real>::from_ptr(
+            const_cast<scl::Real*>(A_data), static_cast<scl::Size>(A_nnz));
+        auto mapped_indices = scl::io::MappedArray<scl::Index>::from_ptr(
+            const_cast<scl::Index*>(A_indices), static_cast<scl::Size>(A_nnz));
+        auto mapped_indptr = scl::io::MappedArray<scl::Index>::from_ptr(
+            const_cast<scl::Index*>(A_indptr), static_cast<scl::Size>(A_rows + 1));
+        
+        scl::io::MappedCustomSparse<scl::Real, true> A(
+            std::move(mapped_data),
+            std::move(mapped_indices),
+            std::move(mapped_indptr),
+            A_rows, A_cols
+        );
+        
+        scl::kernel::algebra::mapped::spmv_mapped(
+            A,
+            scl::Array<const scl::Real>(x, static_cast<scl::Size>(A_cols)),
+            scl::Array<scl::Real>(y, static_cast<scl::Size>(A_rows)),
+            alpha,
+            beta
+        );
+    )
+}
+
+int scl_spmv_trans_mapped_csc(
+    const scl::Real* A_data,
+    const scl::Index* A_indices,
+    const scl::Index* A_indptr,
+    scl::Index A_rows,
+    scl::Index A_cols,
+    scl::Index A_nnz,
+    const scl::Real* x,
+    scl::Real* y,
+    scl::Real alpha,
+    scl::Real beta
+) {
+    SCL_C_API_WRAPPER(
+        auto mapped_data = scl::io::MappedArray<scl::Real>::from_ptr(
+            const_cast<scl::Real*>(A_data), static_cast<scl::Size>(A_nnz));
+        auto mapped_indices = scl::io::MappedArray<scl::Index>::from_ptr(
+            const_cast<scl::Index*>(A_indices), static_cast<scl::Size>(A_nnz));
+        auto mapped_indptr = scl::io::MappedArray<scl::Index>::from_ptr(
+            const_cast<scl::Index*>(A_indptr), static_cast<scl::Size>(A_cols + 1));
+        
+        scl::io::MappedCustomSparse<scl::Real, false> A(
+            std::move(mapped_data),
+            std::move(mapped_indices),
+            std::move(mapped_indptr),
+            A_rows, A_cols
+        );
+        
+        scl::kernel::algebra::mapped::spmv_mapped(
             A,
             scl::Array<const scl::Real>(x, static_cast<scl::Size>(A_rows)),
             scl::Array<scl::Real>(y, static_cast<scl::Size>(A_cols)),

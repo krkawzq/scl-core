@@ -178,8 +178,9 @@ def _mwu_scl(
     alternative: str,
     continuity: bool,
 ) -> Tuple["RealArray", "RealArray", "RealArray"]:
-    """Mann-Whitney U implementation for SCL matrices."""
+    """Mann-Whitney U implementation for SCL matrices using C++ kernel."""
     from scl.sparse import Array
+    import ctypes
 
     n_features = mat.shape[1]
     n_cells = mat.shape[0]
@@ -191,9 +192,65 @@ def _mwu_scl(
     if n0 == 0 or n1 == 0:
         raise ValueError("Both groups must have at least one sample")
 
-    u_stats = RealArray(n_features)
-    p_values = RealArray(n_features)
-    effect_sizes = RealArray(n_features)
+    # Try to use C++ kernel
+    try:
+        from scl._kernel import stats as kernel_stats
+        from scl._kernel.lib_loader import LibraryNotFoundError
+        
+        # Get C pointers from CSC matrix
+        data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = mat.get_c_pointers()
+        
+        # Convert groups to int32 array for kernel
+        group_ids = (ctypes.c_int32 * n_cells)()
+        for i in range(n_cells):
+            group_ids[i] = int(groups[i])
+        
+        # Allocate output arrays
+        u_stats = Array(n_features, dtype='float64')
+        p_values = Array(n_features, dtype='float64')
+        log2_fc = Array(n_features, dtype='float64')
+        
+        # Call kernel
+        kernel_stats.mwu_test_csc(
+            data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+            rows, cols, nnz,
+            ctypes.cast(group_ids, ctypes.POINTER(ctypes.c_int32)),
+            u_stats.get_pointer(),
+            p_values.get_pointer(),
+            log2_fc.get_pointer()
+        )
+        
+        # Kernel returns log2_fc, but we want effect_sizes (rank-biserial correlation)
+        # effect_size = 2 * U / (n0 * n1) - 1
+        effect_sizes = Array(n_features, dtype='float64')
+        for j in range(n_features):
+            effect_sizes[j] = 2.0 * u_stats[j] / (n0 * n1) - 1.0
+        
+        return u_stats, p_values, effect_sizes
+        
+    except (ImportError, LibraryNotFoundError, RuntimeError, AttributeError):
+        pass  # Fall through to Python implementation
+    
+    # Fallback to pure Python implementation
+    return _mwu_scl_fallback(mat, groups, alternative, continuity, n0, n1)
+
+
+def _mwu_scl_fallback(
+    mat: "SclCSC",
+    groups: "IndexArray",
+    alternative: str,
+    continuity: bool,
+    n0: int,
+    n1: int,
+) -> Tuple["RealArray", "RealArray", "RealArray"]:
+    """Fallback pure Python MWU implementation."""
+    from scl.sparse import Array
+    
+    n_features = mat.shape[1]
+
+    u_stats = Array(n_features, dtype='float64')
+    p_values = Array(n_features, dtype='float64')
+    effect_sizes = Array(n_features, dtype='float64')
 
     # Compute for each feature
     for j in range(n_features):
@@ -430,8 +487,9 @@ def _ttest_scl(
     groups: "IndexArray",
     equal_var: bool,
 ) -> Tuple["RealArray", "RealArray", "RealArray", "RealArray"]:
-    """T-test implementation for SCL matrices."""
+    """T-test implementation for SCL matrices using C++ kernel."""
     from scl.sparse import Array
+    import ctypes
 
     n_features = mat.shape[1]
     n_cells = mat.shape[0]
@@ -443,10 +501,75 @@ def _ttest_scl(
     if n0 < 2 or n1 < 2:
         raise ValueError("Both groups must have at least 2 samples")
 
-    t_stats = RealArray(n_features)
-    p_values = RealArray(n_features)
-    mean_diff = RealArray(n_features)
-    log2fc = RealArray(n_features)
+    # Try to use C++ kernel
+    try:
+        from scl._kernel import stats as kernel_stats
+        from scl._kernel.lib_loader import LibraryNotFoundError, get_lib
+        
+        # Get C pointers from CSC matrix
+        data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = mat.get_c_pointers()
+        
+        # Convert groups to int32 array for kernel
+        group_ids = (ctypes.c_int32 * n_cells)()
+        for i in range(n_cells):
+            group_ids[i] = int(groups[i])
+        
+        # Allocate output arrays
+        t_stats = Array(n_features, dtype='float64')
+        p_values = Array(n_features, dtype='float64')
+        log2fc = Array(n_features, dtype='float64')
+        mean_diff = Array(n_features, dtype='float64')
+        
+        # Calculate workspace size
+        n_groups = 2
+        lib = get_lib()
+        lib.scl_ttest_workspace_size.argtypes = [ctypes.c_size_t, ctypes.c_size_t]
+        lib.scl_ttest_workspace_size.restype = ctypes.c_size_t
+        workspace_size = lib.scl_ttest_workspace_size(n_features, n_groups)
+        
+        # Allocate workspace
+        workspace = (ctypes.c_uint8 * workspace_size)()
+        
+        # Call kernel
+        kernel_stats.ttest_csc(
+            data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+            rows, cols, nnz,
+            ctypes.cast(group_ids, ctypes.POINTER(ctypes.c_int32)),
+            n_groups,
+            t_stats.get_pointer(),
+            p_values.get_pointer(),
+            log2fc.get_pointer(),
+            mean_diff.get_pointer(),
+            ctypes.cast(workspace, ctypes.POINTER(ctypes.c_uint8)),
+            workspace_size,
+            not equal_var  # use_welch = True when equal_var = False
+        )
+        
+        return t_stats, p_values, mean_diff, log2fc
+        
+    except (ImportError, LibraryNotFoundError, RuntimeError, AttributeError):
+        pass  # Fall through to Python implementation
+    
+    # Fallback to pure Python implementation
+    return _ttest_scl_fallback(mat, groups, equal_var, n0, n1)
+
+
+def _ttest_scl_fallback(
+    mat: "SclCSC",
+    groups: "IndexArray",
+    equal_var: bool,
+    n0: int,
+    n1: int,
+) -> Tuple["RealArray", "RealArray", "RealArray", "RealArray"]:
+    """Fallback pure Python t-test implementation."""
+    from scl.sparse import Array
+    
+    n_features = mat.shape[1]
+
+    t_stats = Array(n_features, dtype='float64')
+    p_values = Array(n_features, dtype='float64')
+    mean_diff = Array(n_features, dtype='float64')
+    log2fc = Array(n_features, dtype='float64')
 
     for j in range(n_features):
         t, p, md, lfc = _compute_ttest_feature(

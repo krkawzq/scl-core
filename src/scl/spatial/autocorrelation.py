@@ -205,74 +205,34 @@ def _morans_i_scipy(X, W):
 
 
 def _morans_i_scl(X: "SclCSC", W: "SclCSC") -> "RealArray":
-    """Moran's I for SCL matrices."""
+    """Moran's I for SCL matrices using C++ kernel."""
     from scl.sparse import Array
+    from scl._kernel import spatial as kernel_spatial
 
     n = X.shape[0]
     n_features = X.shape[1]
 
-    # Compute S0
-    S0 = 0.0
-    for k in range(W.nnz):
-        S0 += W._data[k]
-
-    if S0 == 0:
-        result = Array(n_features, dtype='float64')
-        for j in range(n_features):
-            result[j] = 0.0
-        return result
-
     results = Array(n_features, dtype='float64')
 
-    for j in range(n_features):
-        start = X._indptr[j]
-        end = X._indptr[j + 1]
+    # Get C pointers - W needs to be CSR for graph format expected by kernel
+    W_csr = W.to_csr()
 
-        # Build dense column (needed for spatial lag)
-        col = [0.0] * n
-        col_sum = 0.0
-        for k in range(start, end):
-            row = X._indices[k]
-            val = X._data[k]
-            col[row] = val
-            col_sum += val
+    graph_data_ptr = W_csr.data.get_pointer()
+    graph_indices_ptr = W_csr.indices.get_pointer()
+    graph_indptr_ptr = W_csr.indptr.get_pointer()
 
-        # Mean and center
-        mean_x = col_sum / n
-        for i in range(n):
-            col[i] -= mean_x
+    feat_data_ptr = X.data.get_pointer()
+    feat_indices_ptr = X.indices.get_pointer()
+    feat_indptr_ptr = X.indptr.get_pointer()
 
-        # Compute denominator
-        denom = 0.0
-        for i in range(n):
-            denom += col[i] ** 2
+    output_ptr = results.get_pointer()
 
-        if denom == 0:
-            results[j] = 0.0
-            continue
-
-        # Compute W @ z (spatial lag)
-        Wz = [0.0] * n
-        # W is CSC: column k contains weights W[*, k] = weights TO location k
-        # We need W @ z which is: (W @ z)_i = sum_k W_ik * z_k
-        # In CSC, we iterate over columns k and accumulate W_ik * z_k into row i
-
-        for k in range(n):
-            w_start = W._indptr[k]
-            w_end = W._indptr[k + 1]
-            z_k = col[k]
-
-            for w_idx in range(w_start, w_end):
-                i = W._indices[w_idx]
-                w_ik = W._data[w_idx]
-                Wz[i] += w_ik * z_k
-
-        # Compute z^T @ (W @ z)
-        numer = 0.0
-        for i in range(n):
-            numer += col[i] * Wz[i]
-
-        results[j] = (n / S0) * (numer / denom)
+    # Call C++ kernel
+    kernel_spatial.morans_i(
+        graph_data_ptr, graph_indices_ptr, graph_indptr_ptr, n,
+        feat_data_ptr, feat_indices_ptr, feat_indptr_ptr, n_features,
+        output_ptr
+    )
 
     return results
 
@@ -437,7 +397,10 @@ def _mmd_rbf_scipy(X, Y, gamma: float) -> float:
 
 
 def _mmd_rbf_scl(X: "SclCSC", Y: "SclCSC", gamma: float) -> float:
-    """MMD-RBF for SCL matrices."""
+    """MMD-RBF for SCL matrices using C++ kernel."""
+    from scl.sparse import Array
+    from scl._kernel import mmd as kernel_mmd
+
     m = X.shape[0]
     n = Y.shape[0]
     d = X.shape[1]
@@ -445,67 +408,27 @@ def _mmd_rbf_scl(X: "SclCSC", Y: "SclCSC", gamma: float) -> float:
     if m < 2 or n < 2:
         return 0.0
 
-    # Convert to row-major for efficient row access
-    X_csr = X.to_csr()
-    Y_csr = Y.to_csr()
+    output = Array(1, dtype='float64')
 
-    def get_row_dense(mat, i: int, dim: int):
-        """Extract row as dense list."""
-        row = [0.0] * dim
-        start = mat._indptr[i]
-        end = mat._indptr[i + 1]
-        for k in range(start, end):
-            col = mat._indices[k]
-            row[col] = mat._data[k]
-        return row
+    # Get C pointers
+    data_x_ptr = X.data.get_pointer()
+    indices_x_ptr = X.indices.get_pointer()
+    indptr_x_ptr = X.indptr.get_pointer()
 
-    def squared_distance(row_a, row_b):
-        """Compute squared Euclidean distance."""
-        dist_sq = 0.0
-        for k in range(len(row_a)):
-            diff = row_a[k] - row_b[k]
-            dist_sq += diff * diff
-        return dist_sq
+    data_y_ptr = Y.data.get_pointer()
+    indices_y_ptr = Y.indices.get_pointer()
+    indptr_y_ptr = Y.indptr.get_pointer()
 
-    def rbf(dist_sq):
-        """RBF kernel value."""
-        return math.exp(-gamma * dist_sq)
+    output_ptr = output.get_pointer()
 
-    # Compute K_XX (excluding diagonal)
-    sum_XX = 0.0
-    for i in range(m):
-        row_i = get_row_dense(X_csr, i, d)
-        for j in range(i + 1, m):
-            row_j = get_row_dense(X_csr, j, d)
-            k_val = rbf(squared_distance(row_i, row_j))
-            sum_XX += 2 * k_val  # Symmetric, count twice
+    # Call C++ kernel
+    kernel_mmd.mmd_rbf_csc(
+        data_x_ptr, indices_x_ptr, indptr_x_ptr, m, d,
+        data_y_ptr, indices_y_ptr, indptr_y_ptr, n,
+        output_ptr, gamma
+    )
 
-    sum_XX /= (m * (m - 1))
-
-    # Compute K_YY (excluding diagonal)
-    sum_YY = 0.0
-    for i in range(n):
-        row_i = get_row_dense(Y_csr, i, d)
-        for j in range(i + 1, n):
-            row_j = get_row_dense(Y_csr, j, d)
-            k_val = rbf(squared_distance(row_i, row_j))
-            sum_YY += 2 * k_val
-
-    sum_YY /= (n * (n - 1))
-
-    # Compute K_XY
-    sum_XY = 0.0
-    for i in range(m):
-        row_x = get_row_dense(X_csr, i, d)
-        for j in range(n):
-            row_y = get_row_dense(Y_csr, j, d)
-            sum_XY += rbf(squared_distance(row_x, row_y))
-
-    sum_XY /= (m * n)
-
-    mmd_sq = sum_XX - 2 * sum_XY + sum_YY
-
-    return math.sqrt(max(0.0, mmd_sq))
+    return float(output[0])
 
 
 # =============================================================================

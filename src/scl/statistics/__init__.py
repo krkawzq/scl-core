@@ -47,6 +47,10 @@ from scl.statistics.group import (
     count_group_sizes,
 )
 
+from scl.statistics.distance import (
+    mmd,
+)
+
 __all__ = [
     # Descriptive
     "sum",
@@ -65,4 +69,6 @@ __all__ = [
     "group_var",
     "group_stats",
     "count_group_sizes",
+    # Distance
+    "mmd",
 ]

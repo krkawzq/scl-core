@@ -7,273 +7,341 @@
 #include "scl/threading/parallel_for.hpp"
 
 #include <cmath>
+#include <vector>
+#include <algorithm>
 
 // =============================================================================
 /// @file correlation_mapped_impl.hpp
-/// @brief Mapped Backend Correlation Statistics
+/// @brief Pearson Correlation for Memory-Mapped Sparse Matrices
 ///
-/// Correlation statistics are read-only operations, can stream directly from
-/// mapped data. No materialization needed.
+/// ## Key Optimizations
 ///
-/// Key optimizations:
-/// - Single-pass fused mean/variance computation
-/// - Chunk-based processing for cache efficiency
+/// 1. Streaming Access Pattern
+///    - Sequential row access for cache efficiency
+///    - Prefetch hints for OS page cache
+///
+/// 2. Direct Correlation Computation
+///    - Sparse-sparse centered dot product
+///    - No Gram matrix intermediate step
+///
+/// 3. Symmetric Matrix Optimization
+///    - Only compute upper triangle
+///    - Mirror to lower triangle
+///
+/// Performance: Near-RAM performance for cached data
 // =============================================================================
 
 namespace scl::kernel::correlation::mapped {
 
 // =============================================================================
-// MappedCustomSparse Correlation Statistics
+// SECTION 1: Configuration
 // =============================================================================
 
-/// @brief Compute correlation statistics for MappedCustomSparse
-///
-/// Single-pass streaming algorithm with fused mean + variance accumulation.
-template <typename T, bool IsCSR>
-    requires kernel::mapped::MappedSparseLike<scl::io::MappedCustomSparse<T, IsCSR>, IsCSR>
-void compute_stats_mapped(
-    const scl::io::MappedCustomSparse<T, IsCSR>& matrix,
-    Array<Real> out_means,
-    Array<Real> out_inv_stds
+namespace config {
+    constexpr Size CHUNK_SIZE = 64;
+    constexpr Size STAT_CHUNK = 256;
+}
+
+// =============================================================================
+// SECTION 2: Utilities
+// =============================================================================
+
+namespace detail {
+
+/// @brief SIMD fused sum + sum_sq
+template <typename T>
+SCL_FORCE_INLINE void compute_sum_sq_simd(
+    const T* SCL_RESTRICT vals,
+    Size len,
+    T& out_sum,
+    T& out_sq_sum
 ) {
-    const Index n_primary = scl::primary_size(matrix);
-    const Size secondary_dim = static_cast<Size>(scl::secondary_size(matrix));
-    const Real inv_n = static_cast<Real>(1.0) / static_cast<Real>(secondary_dim);
-
-    SCL_CHECK_DIM(out_means.len == static_cast<Size>(n_primary), "Means size mismatch");
-    SCL_CHECK_DIM(out_inv_stds.len == static_cast<Size>(n_primary), "Inv_stds size mismatch");
-
     namespace s = scl::simd;
     const s::Tag d;
     const size_t lanes = s::lanes();
 
-    // Prefetch hint
-    kernel::mapped::hint_prefetch(matrix);
+    auto v_sum = s::Zero(d);
+    auto v_sq = s::Zero(d);
 
-    // Process in chunks for cache efficiency
-    constexpr Size CHUNK_SIZE = 256;
-    const Size n_chunks = (n_primary + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-    for (Size chunk_id = 0; chunk_id < n_chunks; ++chunk_id) {
-        Index chunk_start = static_cast<Index>(chunk_id * CHUNK_SIZE);
-        Index chunk_end = std::min(chunk_start + static_cast<Index>(CHUNK_SIZE), n_primary);
-
-        scl::threading::parallel_for(chunk_start, chunk_end, [&](Index p) {
-            auto values = scl::primary_values(matrix, p);
-
-            const T* SCL_RESTRICT vals = values.ptr;
-            const Size len = values.len;
-
-            // Fused SIMD accumulation
-            auto v_sum = s::Zero(d);
-            auto v_sq_sum = s::Zero(d);
-
-            Size k = 0;
-
-            // 4-way unrolled
-            for (; k + 4 * lanes <= len; k += 4 * lanes) {
-                auto v0 = s::Load(d, vals + k + 0 * lanes);
-                auto v1 = s::Load(d, vals + k + 1 * lanes);
-                auto v2 = s::Load(d, vals + k + 2 * lanes);
-                auto v3 = s::Load(d, vals + k + 3 * lanes);
-
-                v_sum = s::Add(v_sum, v0);
-                v_sum = s::Add(v_sum, v1);
-                v_sum = s::Add(v_sum, v2);
-                v_sum = s::Add(v_sum, v3);
-
-                v_sq_sum = s::MulAdd(v0, v0, v_sq_sum);
-                v_sq_sum = s::MulAdd(v1, v1, v_sq_sum);
-                v_sq_sum = s::MulAdd(v2, v2, v_sq_sum);
-                v_sq_sum = s::MulAdd(v3, v3, v_sq_sum);
-            }
-
-            for (; k + lanes <= len; k += lanes) {
-                auto v = s::Load(d, vals + k);
-                v_sum = s::Add(v_sum, v);
-                v_sq_sum = s::MulAdd(v, v, v_sq_sum);
-            }
-
-            Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
-            Real sq_sum = s::GetLane(s::SumOfLanes(d, v_sq_sum));
-
-            for (; k < len; ++k) {
-                Real v = static_cast<Real>(vals[k]);
-                sum += v;
-                sq_sum += v * v;
-            }
-
-            Real mean = sum * inv_n;
-            Real var = (sq_sum * inv_n) - (mean * mean);
-            if (var < 0) var = 0;
-
-            out_means[p] = mean;
-            out_inv_stds[p] = (var > 0) ? (1.0 / std::sqrt(var)) : 0.0;
-        });
+    Size k = 0;
+    for (; k + lanes <= len; k += lanes) {
+        auto v = s::Load(d, vals + k);
+        v_sum = s::Add(v_sum, v);
+        v_sq = s::MulAdd(v, v, v_sq);
     }
+
+    T sum = s::GetLane(s::SumOfLanes(d, v_sum));
+    T sq_sum = s::GetLane(s::SumOfLanes(d, v_sq));
+
+    for (; k < len; ++k) {
+        T v = vals[k];
+        sum += v;
+        sq_sum += v * v;
+    }
+
+    out_sum = sum;
+    out_sq_sum = sq_sum;
 }
 
-/// @brief Compute centered correlation matrix for MappedCustomSparse
-///
-/// Uses precomputed statistics for centering.
+/// @brief Sparse-sparse centered dot product
+template <typename T>
+SCL_FORCE_INLINE T sparse_centered_dot(
+    const T* vals_a, const Index* inds_a, Size len_a, T mean_a,
+    const T* vals_b, const Index* inds_b, Size len_b, T mean_b,
+    Size total_dim
+) {
+    T dot = T(0);
+    Size matched = 0;
+    Size i = 0, j = 0;
+
+    while (i < len_a && j < len_b) {
+        Index ia = inds_a[i];
+        Index ib = inds_b[j];
+
+        if (ia == ib) {
+            dot += (vals_a[i] - mean_a) * (vals_b[j] - mean_b);
+            ++matched;
+            ++i; ++j;
+        } else if (ia < ib) {
+            dot += (vals_a[i] - mean_a) * (-mean_b);
+            ++i;
+        } else {
+            dot += (-mean_a) * (vals_b[j] - mean_b);
+            ++j;
+        }
+    }
+
+    while (i < len_a) {
+        dot += (vals_a[i] - mean_a) * (-mean_b);
+        ++i;
+    }
+
+    while (j < len_b) {
+        dot += (-mean_a) * (vals_b[j] - mean_b);
+        ++j;
+    }
+
+    Size zeros_both = total_dim - len_a - len_b + matched;
+    dot += static_cast<T>(zeros_both) * mean_a * mean_b;
+
+    return dot;
+}
+
+} // namespace detail
+
+// =============================================================================
+// SECTION 3: Statistics - MappedCustomSparse
+// =============================================================================
+
+/// @brief Compute statistics for MappedCustomSparse
 template <typename T, bool IsCSR>
     requires kernel::mapped::MappedSparseLike<scl::io::MappedCustomSparse<T, IsCSR>, IsCSR>
-void correlation_matrix_mapped(
+void compute_stats_mapped(
     const scl::io::MappedCustomSparse<T, IsCSR>& matrix,
-    Array<const Real> means,
-    Array<const Real> inv_stds,
-    Array<Real> output
+    Array<T> out_means,
+    Array<T> out_inv_stds
 ) {
-    const Index N = scl::primary_size(matrix);
-    const Size N_size = static_cast<Size>(N);
-    const Size M = static_cast<Size>(scl::secondary_size(matrix));
-    const Real inv_m = 1.0 / static_cast<Real>(M);
+    const Index n_primary = scl::primary_size(matrix);
+    const Size secondary_dim = static_cast<Size>(scl::secondary_size(matrix));
+    const T inv_n = T(1) / static_cast<T>(secondary_dim);
 
-    SCL_CHECK_DIM(output.len == N_size * N_size, "Output size mismatch");
+    SCL_CHECK_DIM(out_means.len >= static_cast<Size>(n_primary), "Means size mismatch");
+    SCL_CHECK_DIM(out_inv_stds.len >= static_cast<Size>(n_primary), "Inv_stds size mismatch");
 
     kernel::mapped::hint_prefetch(matrix);
 
-    constexpr Size CHUNK_SIZE = 64;
-    const Size n_chunks = (N_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    scl::threading::parallel_for(Index(0), n_primary, [&](Index p) {
+        auto values = scl::primary_values(matrix, p);
 
-    for (Size chunk_id = 0; chunk_id < n_chunks; ++chunk_id) {
-        Size chunk_start = chunk_id * CHUNK_SIZE;
-        Size chunk_end = std::min(chunk_start + CHUNK_SIZE, N_size);
+        T sum, sq_sum;
+        detail::compute_sum_sq_simd(values.ptr, values.len, sum, sq_sum);
 
-        scl::threading::parallel_for(chunk_start, chunk_end, [&](size_t i) {
-            auto values_i = scl::primary_values(matrix, static_cast<Index>(i));
-            auto indices_i = scl::primary_indices(matrix, static_cast<Index>(i));
+        T mean = sum * inv_n;
+        T var = (sq_sum * inv_n) - (mean * mean);
+        if (var < T(0)) var = T(0);
 
-            Real mean_i = means[i];
-            Real inv_std_i = inv_stds[i];
-
-            Real* row_ptr = output.ptr + (i * N_size);
-
-            // Diagonal is always 1 (self-correlation)
-            row_ptr[i] = 1.0;
-
-            // Upper triangle
-            for (Size j = i + 1; j < N_size; ++j) {
-                auto values_j = scl::primary_values(matrix, static_cast<Index>(j));
-                auto indices_j = scl::primary_indices(matrix, static_cast<Index>(j));
-
-                Real mean_j = means[j];
-                Real inv_std_j = inv_stds[j];
-
-                // Sparse dot product with centering
-                Real sum = 0.0;
-                Size pi = 0, pj = 0;
-
-                while (pi < values_i.len && pj < values_j.len) {
-                    Index idx_i = indices_i.ptr[pi];
-                    Index idx_j = indices_j.ptr[pj];
-
-                    if (idx_i == idx_j) {
-                        Real vi = (static_cast<Real>(values_i.ptr[pi]) - mean_i) * inv_std_i;
-                        Real vj = (static_cast<Real>(values_j.ptr[pj]) - mean_j) * inv_std_j;
-                        sum += vi * vj;
-                        ++pi; ++pj;
-                    } else if (idx_i < idx_j) {
-                        // Zero contribution from centered mean
-                        sum += (-mean_i * inv_std_i) * (-mean_j * inv_std_j);
-                        ++pi;
-                    } else {
-                        sum += (-mean_i * inv_std_i) * (-mean_j * inv_std_j);
-                        ++pj;
-                    }
-                }
-
-                // Account for remaining zeros
-                Size remaining = M - std::max(values_i.len, values_j.len);
-                sum += remaining * mean_i * inv_std_i * mean_j * inv_std_j;
-
-                Real corr = sum * inv_m;
-                row_ptr[j] = corr;
-                output.ptr[j * N_size + i] = corr;  // Mirror
-            }
-        });
-    }
+        out_means[p] = mean;
+        out_inv_stds[p] = (var > T(0)) ? (T(1) / std::sqrt(var)) : T(0);
+    });
 }
 
-// =============================================================================
-// MappedVirtualSparse Correlation Statistics
-// =============================================================================
-
-/// @brief Compute correlation statistics for MappedVirtualSparse
+/// @brief Compute statistics for MappedVirtualSparse
 template <typename T, bool IsCSR>
     requires kernel::mapped::MappedSparseLike<scl::io::MappedVirtualSparse<T, IsCSR>, IsCSR>
 void compute_stats_mapped(
     const scl::io::MappedVirtualSparse<T, IsCSR>& matrix,
-    Array<Real> out_means,
-    Array<Real> out_inv_stds
+    Array<T> out_means,
+    Array<T> out_inv_stds
 ) {
     const Index n_primary = scl::primary_size(matrix);
     const Size secondary_dim = static_cast<Size>(scl::secondary_size(matrix));
-    const Real inv_n = static_cast<Real>(1.0) / static_cast<Real>(secondary_dim);
+    const T inv_n = T(1) / static_cast<T>(secondary_dim);
 
-    SCL_CHECK_DIM(out_means.len == static_cast<Size>(n_primary), "Means size mismatch");
-    SCL_CHECK_DIM(out_inv_stds.len == static_cast<Size>(n_primary), "Inv_stds size mismatch");
+    SCL_CHECK_DIM(out_means.len >= static_cast<Size>(n_primary), "Means size mismatch");
+    SCL_CHECK_DIM(out_inv_stds.len >= static_cast<Size>(n_primary), "Inv_stds size mismatch");
 
-    namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    scl::threading::parallel_for(Index(0), n_primary, [&](Index p) {
+        auto values = scl::primary_values(matrix, p);
 
-    constexpr Size CHUNK_SIZE = 256;
-    const Size n_chunks = (n_primary + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        T sum, sq_sum;
+        detail::compute_sum_sq_simd(values.ptr, values.len, sum, sq_sum);
 
-    for (Size chunk_id = 0; chunk_id < n_chunks; ++chunk_id) {
-        Index chunk_start = static_cast<Index>(chunk_id * CHUNK_SIZE);
-        Index chunk_end = std::min(chunk_start + static_cast<Index>(CHUNK_SIZE), n_primary);
+        T mean = sum * inv_n;
+        T var = (sq_sum * inv_n) - (mean * mean);
+        if (var < T(0)) var = T(0);
 
-        scl::threading::parallel_for(chunk_start, chunk_end, [&](Index p) {
-            auto values = scl::primary_values(matrix, p);
-
-            const T* SCL_RESTRICT vals = values.ptr;
-            const Size len = values.len;
-
-            auto v_sum = s::Zero(d);
-            auto v_sq_sum = s::Zero(d);
-
-            Size k = 0;
-
-            for (; k + lanes <= len; k += lanes) {
-                auto v = s::Load(d, vals + k);
-                v_sum = s::Add(v_sum, v);
-                v_sq_sum = s::MulAdd(v, v, v_sq_sum);
-            }
-
-            Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
-            Real sq_sum = s::GetLane(s::SumOfLanes(d, v_sq_sum));
-
-            for (; k < len; ++k) {
-                Real v = static_cast<Real>(vals[k]);
-                sum += v;
-                sq_sum += v * v;
-            }
-
-            Real mean = sum * inv_n;
-            Real var = (sq_sum * inv_n) - (mean * mean);
-            if (var < 0) var = 0;
-
-            out_means[p] = mean;
-            out_inv_stds[p] = (var > 0) ? (1.0 / std::sqrt(var)) : 0.0;
-        });
-    }
+        out_means[p] = mean;
+        out_inv_stds[p] = (var > T(0)) ? (T(1) / std::sqrt(var)) : T(0);
+    });
 }
 
 // =============================================================================
-// Unified Dispatcher
+// SECTION 4: Pearson Correlation - MappedCustomSparse
 // =============================================================================
 
-/// @brief Auto-dispatch to appropriate mapped fast path
+/// @brief Compute correlation matrix for MappedCustomSparse
+template <typename T, bool IsCSR>
+    requires kernel::mapped::MappedSparseLike<scl::io::MappedCustomSparse<T, IsCSR>, IsCSR>
+void pearson_mapped(
+    const scl::io::MappedCustomSparse<T, IsCSR>& matrix,
+    Array<const T> means,
+    Array<const T> inv_stds,
+    Array<T> output
+) {
+    const Index N = scl::primary_size(matrix);
+    const Size N_size = static_cast<Size>(N);
+    const Size M = static_cast<Size>(scl::secondary_size(matrix));
+    const T inv_m = T(1) / static_cast<T>(M);
+
+    SCL_CHECK_DIM(output.len >= N_size * N_size, "Output size mismatch");
+
+    kernel::mapped::hint_prefetch(matrix);
+
+    const Size n_chunks = (N_size + config::CHUNK_SIZE - 1) / config::CHUNK_SIZE;
+
+    scl::threading::parallel_for(Size(0), n_chunks, [&](size_t chunk_idx) {
+        Size i_start = chunk_idx * config::CHUNK_SIZE;
+        Size i_end = std::min(i_start + config::CHUNK_SIZE, N_size);
+
+        for (Size i = i_start; i < i_end; ++i) {
+            auto vals_i = scl::primary_values(matrix, static_cast<Index>(i));
+            auto inds_i = scl::primary_indices(matrix, static_cast<Index>(i));
+            T mean_i = means[i];
+            T inv_std_i = inv_stds[i];
+
+            T* row_ptr = output.ptr + i * N_size;
+
+            // Diagonal
+            row_ptr[i] = (inv_std_i > T(0)) ? T(1) : T(0);
+
+            // Upper triangle
+            for (Size j = i + 1; j < N_size; ++j) {
+                auto vals_j = scl::primary_values(matrix, static_cast<Index>(j));
+                auto inds_j = scl::primary_indices(matrix, static_cast<Index>(j));
+                T mean_j = means[j];
+                T inv_std_j = inv_stds[j];
+
+                T cov = detail::sparse_centered_dot(
+                    vals_i.ptr, inds_i.ptr, vals_i.len, mean_i,
+                    vals_j.ptr, inds_j.ptr, vals_j.len, mean_j,
+                    M
+                ) * inv_m;
+
+                T corr = cov * inv_std_i * inv_std_j;
+
+                if (corr > T(1)) corr = T(1);
+                if (corr < T(-1)) corr = T(-1);
+                if (inv_std_i == T(0) || inv_std_j == T(0)) corr = T(0);
+
+                row_ptr[j] = corr;
+                output.ptr[j * N_size + i] = corr;
+            }
+        }
+    });
+}
+
+/// @brief Compute correlation matrix for MappedVirtualSparse
+template <typename T, bool IsCSR>
+    requires kernel::mapped::MappedSparseLike<scl::io::MappedVirtualSparse<T, IsCSR>, IsCSR>
+void pearson_mapped(
+    const scl::io::MappedVirtualSparse<T, IsCSR>& matrix,
+    Array<const T> means,
+    Array<const T> inv_stds,
+    Array<T> output
+) {
+    const Index N = scl::primary_size(matrix);
+    const Size N_size = static_cast<Size>(N);
+    const Size M = static_cast<Size>(scl::secondary_size(matrix));
+    const T inv_m = T(1) / static_cast<T>(M);
+
+    SCL_CHECK_DIM(output.len >= N_size * N_size, "Output size mismatch");
+
+    const Size n_chunks = (N_size + config::CHUNK_SIZE - 1) / config::CHUNK_SIZE;
+
+    scl::threading::parallel_for(Size(0), n_chunks, [&](size_t chunk_idx) {
+        Size i_start = chunk_idx * config::CHUNK_SIZE;
+        Size i_end = std::min(i_start + config::CHUNK_SIZE, N_size);
+
+        for (Size i = i_start; i < i_end; ++i) {
+            auto vals_i = scl::primary_values(matrix, static_cast<Index>(i));
+            auto inds_i = scl::primary_indices(matrix, static_cast<Index>(i));
+            T mean_i = means[i];
+            T inv_std_i = inv_stds[i];
+
+            T* row_ptr = output.ptr + i * N_size;
+
+            row_ptr[i] = (inv_std_i > T(0)) ? T(1) : T(0);
+
+            for (Size j = i + 1; j < N_size; ++j) {
+                auto vals_j = scl::primary_values(matrix, static_cast<Index>(j));
+                auto inds_j = scl::primary_indices(matrix, static_cast<Index>(j));
+                T mean_j = means[j];
+                T inv_std_j = inv_stds[j];
+
+                T cov = detail::sparse_centered_dot(
+                    vals_i.ptr, inds_i.ptr, vals_i.len, mean_i,
+                    vals_j.ptr, inds_j.ptr, vals_j.len, mean_j,
+                    M
+                ) * inv_m;
+
+                T corr = cov * inv_std_i * inv_std_j;
+
+                if (corr > T(1)) corr = T(1);
+                if (corr < T(-1)) corr = T(-1);
+                if (inv_std_i == T(0) || inv_std_j == T(0)) corr = T(0);
+
+                row_ptr[j] = corr;
+                output.ptr[j * N_size + i] = corr;
+            }
+        }
+    });
+}
+
+// =============================================================================
+// SECTION 5: Unified Dispatchers
+// =============================================================================
+
+/// @brief Statistics dispatcher
 template <typename MatrixT, bool IsCSR>
     requires kernel::mapped::MappedSparseLike<MatrixT, IsCSR>
 SCL_FORCE_INLINE void compute_stats_mapped_dispatch(
     const MatrixT& matrix,
-    Array<Real> out_means,
-    Array<Real> out_inv_stds
+    Array<typename MatrixT::ValueType> out_means,
+    Array<typename MatrixT::ValueType> out_inv_stds
 ) {
     compute_stats_mapped(matrix, out_means, out_inv_stds);
+}
+
+/// @brief Correlation dispatcher
+template <typename MatrixT, bool IsCSR>
+    requires kernel::mapped::MappedSparseLike<MatrixT, IsCSR>
+SCL_FORCE_INLINE void pearson_mapped_dispatch(
+    const MatrixT& matrix,
+    Array<const typename MatrixT::ValueType> means,
+    Array<const typename MatrixT::ValueType> inv_stds,
+    Array<typename MatrixT::ValueType> output
+) {
+    pearson_mapped(matrix, means, inv_stds, output);
 }
 
 } // namespace scl::kernel::correlation::mapped

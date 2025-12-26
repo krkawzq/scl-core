@@ -551,14 +551,14 @@ def var(
 
 
 def _var_full(mat, axis: Optional[int], ddof: int) -> Union[float, "Array"]:
-    """Compute variance including implicit zeros."""
+    """Compute variance including implicit zeros using C++ kernel where available."""
     from scl.sparse import Array
     from scl._typing import is_scl_csc
 
     mat.materialize()
 
     if axis is None:
-        # Global variance
+        # Global variance - no direct kernel support, use fallback
         n_total = mat.shape[0] * mat.shape[1]
         mean_val = mat.mean()
 
@@ -574,6 +574,26 @@ def _var_full(mat, axis: Optional[int], ddof: int) -> Union[float, "Array"]:
         return sq_sum / denom if denom > 0 else 0.0
 
     elif axis == 1:  # Row variance
+        # Try to use C++ kernel
+        try:
+            from scl._kernel import sparse as kernel_sparse
+            from scl._kernel.lib_loader import LibraryNotFoundError
+            
+            result = Array(mat.shape[0], dtype='float64')
+            data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = mat.get_c_pointers()
+            
+            kernel_sparse.primary_variances_csr(
+                data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+                rows, cols, nnz, ddof,
+                result.get_pointer()
+            )
+            
+            return result
+            
+        except (ImportError, LibraryNotFoundError, RuntimeError, AttributeError):
+            pass  # Fall through to Python implementation
+        
+        # Fallback to Python
         means = mat.mean(axis=1)
         result = Array.zeros(mat.shape[0], dtype='float64')
 
@@ -600,6 +620,26 @@ def _var_full(mat, axis: Optional[int], ddof: int) -> Union[float, "Array"]:
         else:
             csc = mat.to_csc()
 
+        # Try to use C++ kernel
+        try:
+            from scl._kernel import sparse as kernel_sparse
+            from scl._kernel.lib_loader import LibraryNotFoundError
+            
+            result = Array(mat.shape[1], dtype='float64')
+            data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = csc.get_c_pointers()
+            
+            kernel_sparse.primary_variances_csc(
+                data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+                rows, cols, nnz, ddof,
+                result.get_pointer()
+            )
+            
+            return result
+            
+        except (ImportError, LibraryNotFoundError, RuntimeError, AttributeError):
+            pass  # Fall through to Python implementation
+
+        # Fallback to Python
         means = csc.mean(axis=0)
         result = Array.zeros(mat.shape[1], dtype='float64')
 

@@ -160,6 +160,90 @@ int scl_primary_nnz_counts_csc(
     scl_index_t* output
 );
 
+// --- Mapped Versions ---
+
+int scl_primary_sums_mapped_csr(
+    const scl_real_t* data,
+    const scl_index_t* indices,
+    const scl_index_t* indptr,
+    scl_index_t rows,
+    scl_index_t cols,
+    scl_index_t nnz,
+    scl_real_t* output
+);
+
+int scl_primary_sums_mapped_csc(
+    const scl_real_t* data,
+    const scl_index_t* indices,
+    const scl_index_t* indptr,
+    scl_index_t rows,
+    scl_index_t cols,
+    scl_index_t nnz,
+    scl_real_t* output
+);
+
+int scl_primary_means_mapped_csr(
+    const scl_real_t* data,
+    const scl_index_t* indices,
+    const scl_index_t* indptr,
+    scl_index_t rows,
+    scl_index_t cols,
+    scl_index_t nnz,
+    scl_real_t* output
+);
+
+int scl_primary_means_mapped_csc(
+    const scl_real_t* data,
+    const scl_index_t* indices,
+    const scl_index_t* indptr,
+    scl_index_t rows,
+    scl_index_t cols,
+    scl_index_t nnz,
+    scl_real_t* output
+);
+
+int scl_primary_variances_mapped_csr(
+    const scl_real_t* data,
+    const scl_index_t* indices,
+    const scl_index_t* indptr,
+    scl_index_t rows,
+    scl_index_t cols,
+    scl_index_t nnz,
+    int ddof,
+    scl_real_t* output
+);
+
+int scl_primary_variances_mapped_csc(
+    const scl_real_t* data,
+    const scl_index_t* indices,
+    const scl_index_t* indptr,
+    scl_index_t rows,
+    scl_index_t cols,
+    scl_index_t nnz,
+    int ddof,
+    scl_real_t* output
+);
+
+int scl_primary_nnz_counts_mapped_csr(
+    const scl_real_t* data,
+    const scl_index_t* indices,
+    const scl_index_t* indptr,
+    scl_index_t rows,
+    scl_index_t cols,
+    scl_index_t nnz,
+    scl_index_t* output
+);
+
+int scl_primary_nnz_counts_mapped_csc(
+    const scl_real_t* data,
+    const scl_index_t* indices,
+    const scl_index_t* indptr,
+    scl_index_t rows,
+    scl_index_t cols,
+    scl_index_t nnz,
+    scl_index_t* output
+);
+
 // =============================================================================
 // Quality Control Metrics (qc.hpp)
 // =============================================================================

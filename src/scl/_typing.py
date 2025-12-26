@@ -699,11 +699,6 @@ def dispatch_sparse(
 #   - IndexArray: Array with dtype='int64'
 #   - ByteArray: Array with dtype='uint8'
 
-def _lazy_array_type():
-    """Lazy import to avoid circular dependency."""
-    from scl.sparse import Array
-    return Array
-
 # Create type aliases that resolve to Array
 RealArray = "Array"  # For type hints only
 IndexArray = "Array"  # For type hints only

@@ -18,6 +18,7 @@ try:
         vstack_csr, hstack_csc,
         from_scipy,
         RefChain, OwnershipTracker,
+        VirtualCSR, VirtualCSC,  # Aliases
     )
     HAS_SCL = True
 except ImportError:
@@ -28,6 +29,44 @@ try:
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
+
+
+# =============================================================================
+# Virtual Alias Tests
+# =============================================================================
+
+class TestVirtualAliases:
+    """Test VirtualCSR and VirtualCSC type aliases."""
+    
+    def test_virtual_csr_is_scl_csr(self, requires_scl):
+        """Test VirtualCSR is an alias for SclCSR."""
+        assert VirtualCSR is SclCSR
+    
+    def test_virtual_csc_is_scl_csc(self, requires_scl):
+        """Test VirtualCSC is an alias for SclCSC."""
+        assert VirtualCSC is SclCSC
+    
+    def test_virtual_csr_creation(self, requires_scl):
+        """Test creating matrix via VirtualCSR alias."""
+        mat = VirtualCSR.from_dense([[1, 2], [3, 4]])
+        assert isinstance(mat, SclCSR)
+        assert mat.shape == (2, 2)
+    
+    def test_virtual_csc_creation(self, requires_scl):
+        """Test creating matrix via VirtualCSC alias."""
+        mat = VirtualCSC.from_dense([[1, 2], [3, 4]])
+        assert isinstance(mat, SclCSC)
+        assert mat.shape == (2, 2)
+    
+    def test_isinstance_virtual_csr(self, requires_scl):
+        """Test isinstance works with VirtualCSR alias."""
+        mat = SclCSR.from_dense([[1, 2]])
+        assert isinstance(mat, VirtualCSR)
+    
+    def test_isinstance_virtual_csc(self, requires_scl):
+        """Test isinstance works with VirtualCSC alias."""
+        mat = SclCSC.from_dense([[1, 2]])
+        assert isinstance(mat, VirtualCSC)
 
 
 # =============================================================================
@@ -235,6 +274,86 @@ class TestVirtualBackendOperations:
         # Row 1 of view = row 2 of original
         assert owned[1, 0] == pytest.approx(5.0)
         assert owned[1, 1] == pytest.approx(6.0)
+
+
+# =============================================================================
+# Materialize Method Tests
+# =============================================================================
+
+class TestMaterializeMethod:
+    """Test materialize() method for SclCSR and SclCSC."""
+    
+    def test_materialize_csr_custom_backend(self, requires_scl):
+        """Test materialize() on Custom backend is no-op."""
+        mat = SclCSR.from_dense([[1, 2], [3, 4]])
+        assert mat.backend == Backend.CUSTOM
+        
+        result = mat.materialize()
+        
+        assert result is mat  # Returns self
+        assert mat.backend == Backend.CUSTOM
+    
+    def test_materialize_csr_virtual_backend(self, requires_scl):
+        """Test materialize() on Virtual backend."""
+        mat1 = SclCSR.from_dense([[1, 2]])
+        mat2 = SclCSR.from_dense([[3, 4]])
+        
+        stacked = vstack_csr([mat1, mat2])
+        assert stacked.backend == Backend.VIRTUAL
+        
+        result = stacked.materialize()
+        
+        assert result is stacked  # Returns self
+        assert stacked.backend == Backend.CUSTOM  # Now materialized
+        assert stacked.ownership == Ownership.OWNED
+    
+    def test_materialize_csc_custom_backend(self, requires_scl):
+        """Test materialize() on CSC Custom backend."""
+        mat = SclCSC.from_dense([[1, 2], [3, 4]])
+        assert mat.backend == Backend.CUSTOM
+        
+        result = mat.materialize()
+        
+        assert result is mat
+        assert mat.backend == Backend.CUSTOM
+    
+    def test_materialize_csc_virtual_backend(self, requires_scl):
+        """Test materialize() on CSC Virtual backend."""
+        mat1 = SclCSC.from_dense([[1], [2]])
+        mat2 = SclCSC.from_dense([[3], [4]])
+        
+        stacked = hstack_csc([mat1, mat2])
+        assert stacked.backend == Backend.VIRTUAL
+        
+        stacked.materialize()
+        
+        assert stacked.backend == Backend.CUSTOM
+    
+    def test_materialize_preserves_values(self, requires_scl):
+        """Test materialize() preserves data values."""
+        mat1 = SclCSR.from_dense([[1.5, 2.5]])
+        mat2 = SclCSR.from_dense([[3.5, 4.5]])
+        
+        stacked = vstack_csr([mat1, mat2])
+        stacked.materialize()
+        
+        assert stacked[0, 0] == pytest.approx(1.5)
+        assert stacked[0, 1] == pytest.approx(2.5)
+        assert stacked[1, 0] == pytest.approx(3.5)
+        assert stacked[1, 1] == pytest.approx(4.5)
+    
+    def test_materialize_chaining(self, requires_scl):
+        """Test materialize() supports method chaining."""
+        mat1 = SclCSR.from_dense([[1, 2]])
+        mat2 = SclCSR.from_dense([[3, 4]])
+        
+        stacked = vstack_csr([mat1, mat2])
+        
+        # Chain: materialize().copy()
+        copy = stacked.materialize().copy()
+        
+        assert copy.backend == Backend.CUSTOM
+        assert copy.shape == (2, 2)
 
 
 # =============================================================================

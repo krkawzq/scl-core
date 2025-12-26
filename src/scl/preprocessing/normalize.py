@@ -223,7 +223,55 @@ def _normalize_scipy(mat, norm: str, axis: int, inplace: bool):
 
 
 def _normalize_csr_rows(mat: "SclCSR", norm: str, inplace: bool) -> "SclCSR":
-    """Normalize CSR rows."""
+    """Normalize CSR rows using C++ kernel where available."""
+    from scl.sparse import Array, SclCSR
+    
+    # Try to use C++ kernel for L1 normalization
+    if norm == "l1":
+        try:
+            from scl._kernel import sparse as kernel_sparse
+            from scl._kernel import normalize as kernel_normalize
+            from scl._kernel.lib_loader import LibraryNotFoundError
+            
+            m = mat.shape[0]
+            
+            # Step 1: Compute row sums using kernel
+            row_sums = Array(m, dtype='float64')
+            data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = mat.get_c_pointers()
+            
+            kernel_sparse.primary_sums_csr(
+                data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+                rows, cols, nnz,
+                row_sums.get_pointer()
+            )
+            
+            # Step 2: Compute inverse scales (1/sum), handle zeros
+            scales = Array(m, dtype='float64')
+            for i in range(m):
+                scales[i] = 1.0 / row_sums[i] if row_sums[i] > 0 else 0.0
+            
+            # Step 3: Apply scaling using kernel
+            if not inplace:
+                result_mat = mat.copy()
+                data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = result_mat.get_c_pointers()
+            
+            kernel_normalize.scale_primary_csr(
+                data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+                rows, cols, nnz,
+                scales.get_pointer()
+            )
+            
+            return mat if inplace else result_mat
+            
+        except (ImportError, LibraryNotFoundError, RuntimeError, AttributeError):
+            pass  # Fall through to Python implementation
+    
+    # Fallback to pure Python for L2/Max or if kernel not available
+    return _normalize_csr_rows_fallback(mat, norm, inplace)
+
+
+def _normalize_csr_rows_fallback(mat: "SclCSR", norm: str, inplace: bool) -> "SclCSR":
+    """Fallback pure Python CSR row normalization."""
     from scl.sparse import Array, SclCSR
 
     m = mat.shape[0]
@@ -269,7 +317,55 @@ def _normalize_csr_rows(mat: "SclCSR", norm: str, inplace: bool) -> "SclCSR":
 
 
 def _normalize_csc_cols(mat: "SclCSC", norm: str, inplace: bool) -> "SclCSC":
-    """Normalize CSC columns."""
+    """Normalize CSC columns using C++ kernel where available."""
+    from scl.sparse import Array, SclCSC
+    
+    # Try to use C++ kernel for L1 normalization
+    if norm == "l1":
+        try:
+            from scl._kernel import sparse as kernel_sparse
+            from scl._kernel import normalize as kernel_normalize
+            from scl._kernel.lib_loader import LibraryNotFoundError
+            
+            n = mat.shape[1]
+            
+            # Step 1: Compute column sums using kernel
+            col_sums = Array(n, dtype='float64')
+            data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = mat.get_c_pointers()
+            
+            kernel_sparse.primary_sums_csc(
+                data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+                rows, cols, nnz,
+                col_sums.get_pointer()
+            )
+            
+            # Step 2: Compute inverse scales (1/sum), handle zeros
+            scales = Array(n, dtype='float64')
+            for j in range(n):
+                scales[j] = 1.0 / col_sums[j] if col_sums[j] > 0 else 0.0
+            
+            # Step 3: Apply scaling using kernel
+            if not inplace:
+                result_mat = mat.copy()
+                data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = result_mat.get_c_pointers()
+            
+            kernel_normalize.scale_primary_csc(
+                data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
+                rows, cols, nnz,
+                scales.get_pointer()
+            )
+            
+            return mat if inplace else result_mat
+            
+        except (ImportError, LibraryNotFoundError, RuntimeError, AttributeError):
+            pass  # Fall through to Python implementation
+    
+    # Fallback to pure Python for L2/Max or if kernel not available
+    return _normalize_csc_cols_fallback(mat, norm, inplace)
+
+
+def _normalize_csc_cols_fallback(mat: "SclCSC", norm: str, inplace: bool) -> "SclCSC":
+    """Fallback pure Python CSC column normalization."""
     from scl.sparse import Array, SclCSC
 
     n = mat.shape[1]

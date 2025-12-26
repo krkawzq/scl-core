@@ -44,6 +44,15 @@ from scl.preprocessing.filter import (
     downsample,
 )
 
+from scl.preprocessing.transform import (
+    log1p,
+    softmax,
+)
+
+from scl.preprocessing.resample import (
+    downsample_counts,
+)
+
 __all__ = [
     # Normalization
     "normalize",
@@ -54,4 +63,9 @@ __all__ = [
     "filter_threshold",
     "top_k",
     "downsample",
+    # Transforms
+    "log1p",
+    "softmax",
+    # Resampling
+    "downsample_counts",
 ]

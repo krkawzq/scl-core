@@ -92,6 +92,33 @@ public:
           _file_handle(SCL_INVALID_FILE_HANDLE), _map_handle(SCL_INVALID_MAP_HANDLE)
     {}
 
+    /// @brief Create a non-owning view from raw pointer (C API bridge).
+    ///
+    /// This creates a MappedArray that wraps an existing memory region WITHOUT
+    /// taking ownership. The destructor will NOT free the memory.
+    ///
+    /// Use Case: C API functions receive raw pointers from Python/other languages.
+    /// This allows using the mapped kernel implementations with external memory.
+    ///
+    /// WARNING: The caller is responsible for ensuring the pointer remains valid
+    /// for the lifetime of this MappedArray!
+    ///
+    /// @param ptr Pointer to existing memory (must not be null if count > 0)
+    /// @param count Number of elements
+    /// @param writable Whether the memory can be written to
+    /// @return Non-owning MappedArray view
+    [[nodiscard]] static MappedArray from_ptr(T* ptr, Size count, bool writable = false) noexcept {
+        MappedArray arr;
+        arr._ptr = ptr;
+        arr._num_elements = count;
+        arr._byte_size = count * sizeof(T);
+        arr._writable = writable;
+        // Keep handles invalid - destructor won't try to close/unmap
+        arr._file_handle = SCL_INVALID_FILE_HANDLE;
+        arr._map_handle = SCL_INVALID_MAP_HANDLE;
+        return arr;
+    }
+
     /// @brief Construct from file path (convenience, read-only).
     ///
     /// Opens file, queries size, and creates read-only mapping in one step.

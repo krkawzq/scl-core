@@ -29,6 +29,9 @@ if TYPE_CHECKING:
     from scipy import sparse as sp
     from scl.sparse import SclCSR, SclCSC, Array
 
+# Type alias for backward compatibility (use Array with dtype parameter)
+RealArray = "Array"
+
 
 # =============================================================================
 # Scale
@@ -204,8 +207,9 @@ def _scale_scipy(mat, row_factors, col_factors, inplace: bool):
 
 
 def _scale_scl(mat, row_factors, col_factors, inplace: bool, is_csc: bool):
-    """Scale SCL matrix."""
+    """Scale SCL matrix using C++ kernel when possible."""
     from scl.sparse import Array, SclCSR, SclCSC
+    from scl._kernel import normalize as kernel_normalize
 
     m, n = mat.shape
 
@@ -220,6 +224,7 @@ def _scale_scl(mat, row_factors, col_factors, inplace: bool, is_csc: bool):
     else:
         cf = None
 
+    # Prepare output
     if inplace:
         new_data = mat._data
     else:
@@ -228,17 +233,30 @@ def _scale_scl(mat, row_factors, col_factors, inplace: bool, is_csc: bool):
             new_data[k] = mat._data[k]
 
     if is_csc:
-        # CSC format: indptr indexes columns, indices are rows
-        for j in range(n):
-            start = mat._indptr[j]
-            end = mat._indptr[j + 1]
+        # CSC format: use kernel for column scaling (primary axis)
+        if cf is not None and rf is None:
+            # Pure column scaling - use kernel
+            data_ptr = new_data.get_pointer()
+            indices_ptr = mat._indices.get_pointer()
+            indptr_ptr = mat._indptr.get_pointer()
+            scales_ptr = cf.get_pointer()
 
-            col_factor = cf[j] if cf is not None else 1.0
+            kernel_normalize.scale_primary_csc(
+                data_ptr, indices_ptr, indptr_ptr,
+                m, n, scales_ptr
+            )
+        else:
+            # Mixed scaling - use Python loop
+            for j in range(n):
+                start = mat._indptr[j]
+                end = mat._indptr[j + 1]
 
-            for k in range(start, end):
-                i = mat._indices[k]
-                row_factor = rf[i] if rf is not None else 1.0
-                new_data[k] *= row_factor * col_factor
+                col_factor = cf[j] if cf is not None else 1.0
+
+                for k in range(start, end):
+                    i = mat._indices[k]
+                    row_factor = rf[i] if rf is not None else 1.0
+                    new_data[k] *= row_factor * col_factor
 
         if inplace:
             return mat
@@ -247,17 +265,30 @@ def _scale_scl(mat, row_factors, col_factors, inplace: bool, is_csc: bool):
                 new_data, mat._indices.copy(), mat._indptr.copy(), mat.shape
             )
     else:
-        # CSR format: indptr indexes rows, indices are columns
-        for i in range(m):
-            start = mat._indptr[i]
-            end = mat._indptr[i + 1]
+        # CSR format: use kernel for row scaling (primary axis)
+        if rf is not None and cf is None:
+            # Pure row scaling - use kernel
+            data_ptr = new_data.get_pointer()
+            indices_ptr = mat._indices.get_pointer()
+            indptr_ptr = mat._indptr.get_pointer()
+            scales_ptr = rf.get_pointer()
 
-            row_factor = rf[i] if rf is not None else 1.0
+            kernel_normalize.scale_primary_csr(
+                data_ptr, indices_ptr, indptr_ptr,
+                m, n, scales_ptr
+            )
+        else:
+            # Mixed scaling - use Python loop
+            for i in range(m):
+                start = mat._indptr[i]
+                end = mat._indptr[i + 1]
 
-            for k in range(start, end):
-                j = mat._indices[k]
-                col_factor = cf[j] if cf is not None else 1.0
-                new_data[k] *= row_factor * col_factor
+                row_factor = rf[i] if rf is not None else 1.0
+
+                for k in range(start, end):
+                    j = mat._indices[k]
+                    col_factor = cf[j] if cf is not None else 1.0
+                    new_data[k] *= row_factor * col_factor
 
         if inplace:
             return mat

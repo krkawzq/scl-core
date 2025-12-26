@@ -146,24 +146,28 @@ def _compute_qc_scipy(mat):
 
 
 def _compute_qc_scl(mat: "SclCSR") -> Tuple["IndexArray", "RealArray"]:
-    """QC for SCL matrices."""
+    """QC for SCL matrices using C++ kernel."""
     from scl.sparse import Array
+    from scl._kernel import qc as kernel_qc
 
     n_cells = mat.shape[0]
 
     n_genes = Array(n_cells, dtype='int64')
     total_counts = Array(n_cells, dtype='float64')
 
-    for i in range(n_cells):
-        start = mat._indptr[i]
-        end = mat._indptr[i + 1]
+    # Get C pointers
+    data_ptr = mat.data.get_pointer()
+    indices_ptr = mat.indices.get_pointer()
+    indptr_ptr = mat.indptr.get_pointer()
+    n_genes_ptr = n_genes.get_pointer()
+    total_counts_ptr = total_counts.get_pointer()
 
-        n_genes[i] = end - start
-
-        total = 0.0
-        for k in range(start, end):
-            total += mat._data[k]
-        total_counts[i] = total
+    # Call C++ kernel
+    kernel_qc.compute_basic_qc_csr(
+        data_ptr, indices_ptr, indptr_ptr,
+        mat.shape[0], mat.shape[1],
+        n_genes_ptr, total_counts_ptr
+    )
 
     return n_genes, total_counts
 
@@ -304,8 +308,9 @@ def _standard_moments_scipy(mat, ddof: int):
 
 
 def _standard_moments_scl(mat: "SclCSC", ddof: int):
-    """Standard moments for SCL matrices."""
+    """Standard moments for SCL matrices using C++ kernel."""
     from scl.sparse import Array
+    from scl._kernel import feature as kernel_feature
 
     n = mat.shape[0]
     n_feat = mat.shape[1]
@@ -315,33 +320,31 @@ def _standard_moments_scl(mat: "SclCSC", ddof: int):
     skewness = Array(n_feat, dtype='float64')
     kurtosis = Array(n_feat, dtype='float64')
 
+    # Get C pointers
+    data_ptr = mat.data.get_pointer()
+    indices_ptr = mat.indices.get_pointer()
+    indptr_ptr = mat.indptr.get_pointer()
+    means_ptr = means.get_pointer()
+    vars_ptr = variances.get_pointer()
+
+    # Call C++ kernel for mean/variance
+    kernel_feature.standard_moments_csc(
+        data_ptr, indices_ptr, indptr_ptr,
+        mat.shape[0], mat.shape[1],
+        means_ptr, vars_ptr, ddof
+    )
+
+    # Compute skewness and kurtosis (no kernel available, use Python)
     for j in range(n_feat):
-        start = mat._indptr[j]
-        end = mat._indptr[j + 1]
+        var = variances[j]
+        mean = means[j]
 
-        # First pass: sum
-        total = 0.0
-        for k in range(start, end):
-            total += mat._data[k]
-
-        mean = total / n
-        means[j] = mean
-
-        # Second pass: variance
-        sq_sum = 0.0
-        for k in range(start, end):
-            sq_sum += (mat._data[k] - mean) ** 2
-
-        # Zero contributions
-        n_zeros = n - (end - start)
-        sq_sum += n_zeros * mean ** 2
-
-        var = sq_sum / (n - ddof) if n > ddof else 0.0
-        variances[j] = var
-
-        # Third/fourth pass: skewness and kurtosis
         if var > 0:
             std = math.sqrt(var)
+            start = mat._indptr[j]
+            end = mat._indptr[j + 1]
+            n_zeros = n - (end - start)
+
             m3 = 0.0
             m4 = 0.0
 
@@ -475,23 +478,28 @@ def _clipped_moments_scipy(mat, clip_max):
 
 
 def _clipped_moments_scl(mat: "SclCSC", clip_max):
-    """Clipped moments for SCL matrices."""
+    """Clipped moments for SCL matrices using C++ kernel."""
     from scl.sparse import Array
+    from scl._kernel import feature as kernel_feature, sparse as kernel_sparse
 
     n = mat.shape[0]
     n_feat = mat.shape[1]
 
     # Compute default clip_max if not provided
     if clip_max is None:
-        # First compute raw means
+        # First compute raw means using kernel
         raw_means = Array(n_feat, dtype='float64')
-        for j in range(n_feat):
-            start = mat._indptr[j]
-            end = mat._indptr[j + 1]
-            total = 0.0
-            for k in range(start, end):
-                total += mat._data[k]
-            raw_means[j] = total / n
+
+        data_ptr = mat.data.get_pointer()
+        indices_ptr = mat.indices.get_pointer()
+        indptr_ptr = mat.indptr.get_pointer()
+        raw_means_ptr = raw_means.get_pointer()
+
+        kernel_sparse.primary_means_csc(
+            data_ptr, indices_ptr, indptr_ptr,
+            mat.shape[0], mat.shape[1],
+            raw_means_ptr
+        )
 
         # Set clip_max = 10 * sqrt(mean)
         clip_arr = Array(n_feat, dtype='float64')
@@ -503,32 +511,20 @@ def _clipped_moments_scl(mat: "SclCSC", clip_max):
     clipped_means = Array(n_feat, dtype='float64')
     clipped_vars = Array(n_feat, dtype='float64')
 
-    for j in range(n_feat):
-        start = mat._indptr[j]
-        end = mat._indptr[j + 1]
-        clip_val = clip_arr[j]
+    # Get C pointers
+    data_ptr = mat.data.get_pointer()
+    indices_ptr = mat.indices.get_pointer()
+    indptr_ptr = mat.indptr.get_pointer()
+    clip_ptr = clip_arr.get_pointer()
+    clipped_means_ptr = clipped_means.get_pointer()
+    clipped_vars_ptr = clipped_vars.get_pointer()
 
-        # First pass: clipped sum
-        total = 0.0
-        for k in range(start, end):
-            val = min(mat._data[k], clip_val)
-            total += val
-
-        # Zeros are clipped to 0 (which is min(0, clip_val) = 0)
-        mean = total / n
-        clipped_means[j] = mean
-
-        # Second pass: clipped variance
-        sq_sum = 0.0
-        for k in range(start, end):
-            val = min(mat._data[k], clip_val)
-            sq_sum += (val - mean) ** 2
-
-        # Zero contributions
-        n_zeros = n - (end - start)
-        sq_sum += n_zeros * mean ** 2
-
-        clipped_vars[j] = sq_sum / n
+    # Call C++ kernel
+    kernel_feature.clipped_moments_csc(
+        data_ptr, indices_ptr, indptr_ptr,
+        mat.shape[0], mat.shape[1],
+        clip_ptr, clipped_means_ptr, clipped_vars_ptr
+    )
 
     return clipped_means, clipped_vars
 

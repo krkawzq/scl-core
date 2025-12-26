@@ -107,6 +107,11 @@ from ._ownership import (
 from ._csr import SclCSR, CSR
 from ._csc import SclCSC, CSC
 
+# Aliases for Virtual matrices (same as base classes, for backward compatibility)
+# Virtual behavior is handled via Backend.VIRTUAL, not separate classes
+VirtualCSR = SclCSR
+VirtualCSC = SclCSC
+
 # =============================================================================
 # Operations
 # =============================================================================
@@ -176,6 +181,8 @@ __all__ = [
     'SclCSC',
     'CSR',  # Alias
     'CSC',  # Alias
+    'VirtualCSR',  # Alias for SclCSR (backward compatibility)
+    'VirtualCSC',  # Alias for SclCSC (backward compatibility)
     
     # ---- Backend/Ownership (advanced) ----
     'Backend',

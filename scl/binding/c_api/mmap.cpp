@@ -6,7 +6,8 @@
 /// Uses handle-based object management for Python/FFI interoperability.
 // =============================================================================
 
-#include "error.hpp"
+#include "scl/binding/c_api/error.hpp"
+#include "scl/core/error.hpp"
 #include "scl/mmap/core.hpp"
 
 #include <memory>

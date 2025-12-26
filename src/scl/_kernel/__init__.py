@@ -42,6 +42,7 @@ Usage (Internal only):
 from . import lib_loader
 from . import types
 from . import sparse
+from . import sparse_mapped
 from . import qc
 from . import normalize
 from . import feature
@@ -57,11 +58,13 @@ from . import reorder
 from . import resample
 from . import memory
 from . import utils
+from . import mmap
 
 __all__ = [
     'lib_loader',
     'types',
     'sparse',
+    'sparse_mapped',
     'qc',
     'normalize',
     'feature',
@@ -77,6 +80,7 @@ __all__ = [
     'resample',
     'memory',
     'utils',
+    'mmap',
 ]
 
 __version__ = '0.1.0'

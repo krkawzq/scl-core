@@ -84,10 +84,14 @@ inline void scl_clear_error() {
 ///
 /// - 0 on success
 /// - -1 on failure (error message stored in buffer)
-#define SCL_C_API_WRAPPER(func_call) \
+///
+/// Note: Uses variadic macro (__VA_ARGS__) to handle code containing commas
+/// such as template arguments like MappedArray<scl::Real> or function calls
+/// with multiple parameters.
+#define SCL_C_API_WRAPPER(...) \
     try { \
         scl::binding::detail::clear_error(); \
-        func_call; \
+        __VA_ARGS__; \
         return 0; \
     } catch (const std::exception& e) { \
         scl::binding::detail::store_error(e); \

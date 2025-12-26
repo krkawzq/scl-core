@@ -208,32 +208,41 @@ def _highly_variable_scipy(mat, n_top: int, min_mean: float, max_mean: float,
 
 def _highly_variable_scl(mat: "SclCSR", n_top: int, min_mean: float,
                          max_mean: float, min_dispersion: float) -> "IndexArray":
-    """HVG selection for SCL matrices."""
+    """HVG selection for SCL matrices using C++ kernel."""
     from scl.sparse import Array
+    from scl._kernel import hvg as kernel_hvg, sparse as kernel_sparse
 
     csc = mat.to_csc()
     n_cells = csc.shape[0]
     n_genes = csc.shape[1]
 
-    # Compute statistics per gene
+    # First compute means and dispersions using kernel
     means = Array(n_genes, dtype='float64')
+
+    data_ptr = csc.data.get_pointer()
+    indices_ptr = csc.indices.get_pointer()
+    indptr_ptr = csc.indptr.get_pointer()
+    means_ptr = means.get_pointer()
+
+    kernel_sparse.primary_means_csc(
+        data_ptr, indices_ptr, indptr_ptr,
+        n_cells, n_genes, means_ptr
+    )
+
+    # Compute dispersion
     dispersions = Array(n_genes, dtype='float64')
 
     for j in range(n_genes):
         start = csc._indptr[j]
         end = csc._indptr[j + 1]
 
-        # Sum and sum of squares
-        total = 0.0
+        # Sum of squares
         sq_total = 0.0
         for k in range(start, end):
             val = csc._data[k]
-            total += val
             sq_total += val * val
 
-        mean = total / n_cells
-        means[j] = mean
-
+        mean = means[j]
         if mean > 0:
             var = sq_total / n_cells - mean ** 2
             dispersions[j] = var / mean
@@ -369,8 +378,9 @@ def _dispersion_scipy(mat, axis: int):
 
 
 def _dispersion_scl(mat: "SclCSR", axis: int) -> "RealArray":
-    """Dispersion for SCL matrices."""
+    """Dispersion for SCL matrices using C++ kernel."""
     from scl.sparse import Array
+    from scl._kernel import sparse as kernel_sparse, feature as kernel_feature
 
     if axis == 0:
         # Per column
@@ -378,22 +388,26 @@ def _dispersion_scl(mat: "SclCSR", axis: int) -> "RealArray":
         n = csc.shape[0]
         n_feat = csc.shape[1]
 
+        # Compute means and variances
+        means = Array(n_feat, dtype='float64')
+        variances = Array(n_feat, dtype='float64')
+
+        data_ptr = csc.data.get_pointer()
+        indices_ptr = csc.indices.get_pointer()
+        indptr_ptr = csc.indptr.get_pointer()
+        means_ptr = means.get_pointer()
+        vars_ptr = variances.get_pointer()
+
+        kernel_feature.standard_moments_csc(
+            data_ptr, indices_ptr, indptr_ptr,
+            n, n_feat, means_ptr, vars_ptr, 0
+        )
+
+        # Compute dispersion
         result = Array(n_feat, dtype='float64')
-
         for j in range(n_feat):
-            start = csc._indptr[j]
-            end = csc._indptr[j + 1]
-
-            total = 0.0
-            sq_total = 0.0
-            for k in range(start, end):
-                val = csc._data[k]
-                total += val
-                sq_total += val * val
-
-            mean = total / n
-            var = sq_total / n - mean ** 2
-
+            mean = means[j]
+            var = variances[j]
             result[j] = var / mean if mean > 0 else 0.0
 
         return result
@@ -403,22 +417,30 @@ def _dispersion_scl(mat: "SclCSR", axis: int) -> "RealArray":
         n = mat.shape[1]
         n_feat = mat.shape[0]
 
+        # Compute means and variances for rows
+        means = Array(n_feat, dtype='float64')
+        variances = Array(n_feat, dtype='float64')
+
+        data_ptr = mat.data.get_pointer()
+        indices_ptr = mat.indices.get_pointer()
+        indptr_ptr = mat.indptr.get_pointer()
+        means_ptr = means.get_pointer()
+        vars_ptr = variances.get_pointer()
+
+        kernel_sparse.primary_means_csr(
+            data_ptr, indices_ptr, indptr_ptr,
+            n_feat, n, means_ptr
+        )
+        kernel_sparse.primary_variances_csr(
+            data_ptr, indices_ptr, indptr_ptr,
+            n_feat, n, 0, vars_ptr
+        )
+
+        # Compute dispersion
         result = Array(n_feat, dtype='float64')
-
         for i in range(n_feat):
-            start = mat._indptr[i]
-            end = mat._indptr[i + 1]
-
-            total = 0.0
-            sq_total = 0.0
-            for k in range(start, end):
-                val = mat._data[k]
-                total += val
-                sq_total += val * val
-
-            mean = total / n
-            var = sq_total / n - mean ** 2
-
+            mean = means[i]
+            var = variances[i]
             result[i] = var / mean if mean > 0 else 0.0
 
         return result
@@ -516,17 +538,23 @@ def _detection_rate_scipy(mat):
 
 
 def _detection_rate_scl(mat: "SclCSC") -> "RealArray":
-    """Detection rate for SCL matrices."""
+    """Detection rate for SCL matrices using C++ kernel."""
     from scl.sparse import Array
+    from scl._kernel import feature as kernel_feature
 
     n_cells = mat.shape[0]
     n_genes = mat.shape[1]
 
     result = Array(n_genes, dtype='float64')
 
-    for j in range(n_genes):
-        nnz = mat._indptr[j + 1] - mat._indptr[j]
-        result[j] = nnz / n_cells
+    # Get C pointers
+    indptr_ptr = mat.indptr.get_pointer()
+    result_ptr = result.get_pointer()
+
+    # Call C++ kernel
+    kernel_feature.detection_rate_csc(
+        indptr_ptr, n_cells, n_genes, result_ptr
+    )
 
     return result
 

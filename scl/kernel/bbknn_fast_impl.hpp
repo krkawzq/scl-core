@@ -201,12 +201,12 @@ SCL_FORCE_INLINE T sparse_dot(
     T dot = T(0);
     Size i = 0, j = 0;
 
-    // 4-way unrolled merge
+    // 4-way skip optimization
     while (i + 4 <= len_a && j + 4 <= len_b) {
-        Index ia0 = inds_a[i], ia1 = inds_a[i+1], ia2 = inds_a[i+2], ia3 = inds_a[i+3];
-        Index ib0 = inds_b[j], ib1 = inds_b[j+1], ib2 = inds_b[j+2], ib3 = inds_b[j+3];
+        Index ia0 = inds_a[i], ia3 = inds_a[i+3];
+        Index ib0 = inds_b[j], ib3 = inds_b[j+3];
 
-        // Check for potential matches
+        // Skip non-overlapping blocks
         if (ia3 < ib0) { i += 4; continue; }
         if (ib3 < ia0) { j += 4; continue; }
 

@@ -1,295 +1,235 @@
-# =============================================================================
-# Makefile for scl-core
-# =============================================================================
+.PHONY: help build compile compile-cpp compile-cython clean test test-fast test-imports test-types test-download test-download-no-network test-verbose test-coverage test-quick test-models format lint all tree cloc
 
-# Project configuration
-PROJECT_NAME := scl-core
-BUILD_DIR := build
-CMAKE := cmake
-CMAKE_GENERATOR := Ninja
-CMAKE_FLAGS := -G $(CMAKE_GENERATOR)
-NINJA := ninja
+# Config
 
-# Default target
-.DEFAULT_GOAL := all
+PYTHON := python3
+PIP := $(PYTHON) -m pip
+CMAKE_BUILD_DIR := build/cmake
+INSTALL_DIR := perturblab/kernels/statistics/backends/cpp
 
-# Detect OS
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    CMAKE_FLAGS += -DCMAKE_BUILD_TYPE=Release
-endif
-ifeq ($(UNAME_S),Darwin)
-    CMAKE_FLAGS += -DCMAKE_BUILD_TYPE=Release
-endif
+.DEFAULT_GOAL := help
 
 # =============================================================================
-# Phony Targets
+# Core Commands
 # =============================================================================
-
-.PHONY: all clean configure build install help compile_commands cloc tree
-.PHONY: python-install python-dev python-test python-clean
-.PHONY: test test-python test-cpp
-.PHONY: debug release
-
-# =============================================================================
-# Main Targets
-# =============================================================================
-
-all: configure build
-	@echo "Build complete!"
-
-configure:
-	@echo "Configuring CMake..."
-	@mkdir -p $(BUILD_DIR)
-	@cd $(BUILD_DIR) && $(CMAKE) .. $(CMAKE_FLAGS)
-
-build: configure
-	@echo "Building with Ninja..."
-	@cd $(BUILD_DIR) && $(NINJA)
-
-install: build
-	@echo "Installing..."
-	@cd $(BUILD_DIR) && $(CMAKE) --install .
-
-clean:
-	@echo "Cleaning..."
-	@rm -rf $(BUILD_DIR)
-	@echo "Clean complete!"
-
-# =============================================================================
-# Python Package Targets (using uv)
-# =============================================================================
-
-python-install:
-	@echo "Installing Python package (development mode with uv)..."
-	@uv pip install -e .
-	@echo "Python package installed!"
-
-python-dev:
-	@echo "Installing Python package with dev dependencies..."
-	@uv pip install -e ".[dev]"
-	@echo "Python dev environment ready!"
-
-python-test:
-	@echo "Running Python tests..."
-	@uv run pytest tests/python/ -v --tb=short
-	@echo "Python tests complete!"
-
-python-test-quick:
-	@echo "Running Python tests (quick mode)..."
-	@uv run pytest tests/python/ -v --tb=short -x
-	@echo "Python tests complete!"
-
-python-clean:
-	@echo "Cleaning Python build artifacts..."
-	@rm -rf src/*.egg-info
-	@rm -rf src/__pycache__
-	@rm -rf src/*/__pycache__
-	@rm -rf src/*/*/__pycache__
-	@rm -rf .pytest_cache
-	@rm -rf build/lib*
-	@rm -rf build/temp*
-	@rm -rf dist/
-	@echo "Python artifacts cleaned!"
-
-# Alternative: Use system python (fallback)
-python-install-system:
-	@echo "Installing with system pip..."
-	@python3 -m pip install -e . --user
-	@echo "Python package installed!"
-
-python-test-system:
-	@echo "Running tests with system python..."
-	@python3 -m pytest tests/python/ -v --tb=short
-	@echo "Python tests complete!"
-
-# =============================================================================
-# Testing Targets
-# =============================================================================
-
-test: test-python
-	@echo "All tests complete!"
-
-test-python: python-test
-
-test-cpp:
-	@echo "Running C++ tests..."
-	@if [ -f $(BUILD_DIR)/tests/test_runner ]; then \
-		$(BUILD_DIR)/tests/test_runner; \
-	else \
-		echo "No C++ tests found. Build with -DBUILD_TESTING=ON"; \
-	fi
-
-# =============================================================================
-# Utility Targets
-# =============================================================================
-
-compile_commands: configure
-	@echo "Generating compile_commands.json..."
-	@if [ -f $(BUILD_DIR)/compile_commands.json ]; then \
-		cp $(BUILD_DIR)/compile_commands.json . && \
-		echo "compile_commands.json copied to project root"; \
-	else \
-		echo "Warning: compile_commands.json not found in $(BUILD_DIR)"; \
-	fi
-
-cloc:
-	@echo "Running cloc on project, filtering by .gitignore..."
-	@if ! command -v cloc >/dev/null 2>&1; then \
-		echo "Error: cloc is not installed."; \
-		exit 1; \
-	fi
-	@if ! command -v git >/dev/null 2>&1; then \
-		echo "Error: git is not installed."; \
-		exit 1; \
-	fi
-	@git ls-files | xargs cloc
-
-tree:
-	@echo "Running tree on tracked files, displaying git repository tree structure..."
-	@git ls-tree -r --name-only HEAD | tree --fromfile .   
 
 help:
-	@echo "╔════════════════════════════════════════════════════════════╗"
-	@echo "║  SCL Core Makefile (Ninja Backend + Python)               ║"
-	@echo "╚════════════════════════════════════════════════════════════╝"
+	@echo "Usage: make [target]"
 	@echo ""
-	@echo "C++ Build Targets:"
-	@echo "  all              - Configure and build (default)"
-	@echo "  configure        - Run CMake configuration with Ninja"
-	@echo "  build            - Build the C++ library using Ninja"
-	@echo "  install          - Install the C++ library"
-	@echo "  clean            - Remove build directory"
-	@echo "  debug            - Build in Debug mode"
-	@echo "  release          - Build in Release mode"
-	@echo ""
-	@echo "Python Package Targets:"
-	@echo "  python-install   - Install Python package (pip install -e .)"
-	@echo "  python-dev       - Install with dev dependencies"
-	@echo "  python-test      - Run Python test suite"
-	@echo "  python-clean     - Clean Python build artifacts"
-	@echo ""
-	@echo "Testing Targets:"
-	@echo "  test             - Run all tests (Python + C++)"
-	@echo "  test-python      - Run Python tests only"
-	@echo "  test-cpp         - Run C++ tests only"
-	@echo ""
-	@echo "Utility Targets:"
-	@echo "  compile_commands - Generate compile_commands.json"
-	@echo "  cloc             - Count lines of code (respects .gitignore)"
-	@echo "  tree             - Display directory tree (respects .gitignore)"
-	@echo "  help             - Show this help message"
-	@echo ""
-	@echo "Threading Backend Targets:"
-	@echo "  backend-serial   - Build with serial backend (no threading)"
-	@echo "  backend-bs       - Build with BS threading backend"
-	@echo "  backend-openmp   - Build with OpenMP backend (default)"
-	@echo "  backend-tbb      - Build with TBB backend"
-	@echo ""
-	@echo "Environment Variables:"
-	@echo "  BUILD_DIR        - Build directory (default: build)"
-	@echo "  CMAKE_FLAGS      - Additional CMake flags"
-	@echo "  CMAKE_GENERATOR  - CMake generator (default: Ninja)"
-	@echo ""
-	@echo "Quick Start Examples:"
-	@echo "  make                          # Build C++ library"
-	@echo "  make python-dev               # Setup Python dev environment"
-	@echo "  make test                     # Run all tests"
-	@echo "  make debug                    # Debug build"
-	@echo "  make compile_commands         # For IDE integration"
-	@echo ""
-	@echo "Complete Workflow:"
-	@echo "  make clean                    # Clean previous builds"
-	@echo "  make release                  # Build optimized C++ lib"
-	@echo "  make python-install           # Install Python package"
-	@echo "  make test                     # Verify everything works"
+	@echo "Targets:"
+	@echo "  build          Build everything (deps + compile)"
+	@echo "  compile        Compile C++ and Cython"
+	@echo "  compile-cpp    Compile C++ only"
+	@echo "  compile-cython Compile Cython only"
+	@echo "  clean          Clean build artifacts"
+	@echo "  format         Format and fix code (all tools)"
+	@echo "  lint           Run linters"
+	@echo "  test                    Run all tests"
+	@echo "  test-fast               Run tests (fail fast)"
+	@echo "  test-imports            Run import tests only"
+	@echo "  test-types              Run type tests only"
+	@echo "  test-metrics            Run metrics tests only"
+	@echo "  test-preprocessing      Run preprocessing tests only"
+	@echo "  test-pp                 Alias for test-preprocessing"
+	@echo "  test-download           Run download & registry tests"
+	@echo "  test-download-no-network Run download tests (skip network)"
+	@echo "  test-verbose            Run tests with verbose output"
+	@echo "  test-coverage           Run tests with coverage report"
+	@echo "  test-quick              Quick sanity test (import check)"
+	@echo "  test-models             Test model registry"
+	@echo "  cloc           Count lines of code"
+	@echo "  tree           Show git-tracked files tree (filtered)"
+
+all: clean build format lint test
 
 # =============================================================================
-# Development Targets
+# Build & Compile
 # =============================================================================
 
-debug:
-	@$(MAKE) CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Debug" all
+setup-deps:
+	@[ -f scripts/setup_cpp_deps.sh ] && ./scripts/setup_cpp_deps.sh || true
 
-release:
-	@$(MAKE) CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release" all
+compile-cpp: setup-deps
+	@mkdir -p $(CMAKE_BUILD_DIR)
+	@cd $(CMAKE_BUILD_DIR) && cmake ../.. -DCMAKE_BUILD_TYPE=Release
+	@cd $(CMAKE_BUILD_DIR) && cmake --build . --config Release -j$$(nproc 2>/dev/null || echo 4)
+	@cd $(CMAKE_BUILD_DIR) && cmake --install .
 
-# Threading backend selection
-backend-serial:
-	@$(MAKE) CMAKE_FLAGS="$(CMAKE_FLAGS) -DSCL_THREADING_BACKEND=SERIAL" configure build
+compile-cython:
+	@$(PYTHON) -c "import numpy, Cython" 2>/dev/null || $(PIP) install numpy cython
+	@$(PYTHON) setup.py build_ext --inplace
 
-backend-bs:
-	@$(MAKE) CMAKE_FLAGS="$(CMAKE_FLAGS) -DSCL_THREADING_BACKEND=BS" configure build
+compile: compile-cpp compile-cython
 
-backend-openmp:
-	@$(MAKE) CMAKE_FLAGS="$(CMAKE_FLAGS) -DSCL_THREADING_BACKEND=OPENMP" configure build
+build: compile
 
-backend-tbb:
-	@$(MAKE) CMAKE_FLAGS="$(CMAKE_FLAGS) -DSCL_THREADING_BACKEND=TBB" configure build
-
-# =============================================================================
-# Formatting and Linting
-# =============================================================================
-
-format-cpp:
-	@echo "Formatting C++ code with clang-format..."
-	@find scl -name "*.hpp" -o -name "*.cpp" | xargs clang-format -i
-	@echo "C++ code formatted!"
-
-format-python:
-	@echo "Formatting Python code with black..."
-	@black src/ tests/python/
-	@echo "Python code formatted!"
-
-format: format-cpp format-python
-	@echo "All code formatted!"
-
-lint-python:
-	@echo "Linting Python code..."
-	@flake8 src/ tests/python/ --max-line-length=100
-	@echo "Python lint complete!"
+rebuild: clean build
 
 # =============================================================================
-# Documentation
+# Code Quality & Formatting
 # =============================================================================
 
-docs:
-	@echo "Generating documentation..."
-	@if [ -d docs ]; then \
-		cd docs && make html; \
-	else \
-		echo "Warning: docs directory not found"; \
-	fi
+format: format-imports format-code fix-lint
+	@echo "✓ Code formatted and fixed"
 
-docs-serve:
-	@echo "Serving documentation..."
-	@python3 -m http.server --directory docs/_build/html 8000
+format-imports:
+	@command -v isort >/dev/null 2>&1 || $(PIP) install isort
+	@isort perturblab/ --profile black
+
+format-code:
+	@command -v black >/dev/null 2>&1 || $(PIP) install black
+	@black perturblab/ --line-length 100
+
+fix-lint:
+	@command -v ruff >/dev/null 2>&1 || $(PIP) install ruff
+	@ruff check perturblab/ --fix --select I,F401,F841,UP,C90,N,E,W
+	@ruff format perturblab/
+
+remove-unused-imports:
+	@command -v autoflake >/dev/null 2>&1 || $(PIP) install autoflake
+	@autoflake --in-place --remove-all-unused-imports --remove-unused-variables \
+		--recursive perturblab/
+
+lint: lint-ruff lint-pyright lint-mypy
+	@echo "✓ All linters passed"
+
+lint-ruff:
+	@command -v ruff >/dev/null 2>&1 || $(PIP) install ruff
+	@ruff check perturblab/
+
+lint-pyright:
+	@command -v pyright >/dev/null 2>&1 || npm install -g pyright 2>/dev/null || echo "pyright not available"
+	@command -v pyright >/dev/null 2>&1 && pyright perturblab/ || true
+
+lint-mypy:
+	@command -v mypy >/dev/null 2>&1 || $(PIP) install mypy
+	@mypy perturblab/ --ignore-missing-imports --no-strict-optional || true
+
+lint-flake8:
+	@command -v flake8 >/dev/null 2>&1 || $(PIP) install flake8
+	@flake8 perturblab/ --max-line-length=100 --ignore=E203,W503,E501
+
+check: format lint test
 
 # =============================================================================
-# Benchmarking
+# Testing & Analysis
 # =============================================================================
 
-benchmark:
-	@echo "Running benchmarks..."
-	@if [ -f $(BUILD_DIR)/benchmarks/benchmark_runner ]; then \
-		$(BUILD_DIR)/benchmarks/benchmark_runner; \
-	else \
-		echo "No benchmarks found. Build with -DBUILD_BENCHMARKS=ON"; \
-	fi
+test:
+	@echo "Running tests..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
+	@uv run pytest tests/ -v --tb=short || $(PYTHON) -m pytest tests/ -v --tb=short
 
-benchmark-python:
-	@echo "Running Python benchmarks..."
-	@python3 -m pytest tests/benchmarks/ -v --benchmark-only
+test-fast:
+	@echo "Running tests (fail fast)..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
+	@uv run pytest tests/ -x -v || $(PYTHON) -m pytest tests/ -x -v
+
+test-imports:
+	@echo "Running import tests..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
+	@uv run pytest tests/test_imports.py -v || $(PYTHON) -m pytest tests/test_imports.py -v
+
+test-types:
+	@echo "Running type tests..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
+	@uv run pytest tests/test_types.py -v || $(PYTHON) -m pytest tests/test_types.py -v
+
+test-download:
+	@echo "Running download and registry tests..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
+	@uv run pytest tests/test_download.py -v || $(PYTHON) -m pytest tests/test_download.py -v
+
+test-download-no-network:
+	@echo "Running download tests (skipping network tests)..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
+	@uv run pytest tests/test_download.py -v -m "not network" || $(PYTHON) -m pytest tests/test_download.py -v -m "not network"
+
+test-metrics:
+	@echo "Running metrics tests..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
+	@uv run pytest tests/test_metrics.py -v
+
+test-preprocessing:
+	@echo "Running preprocessing tests..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
+	@uv run pytest tests/test_preprocessing.py -v
+
+test-pp: test-preprocessing
+
+test-verbose:
+	@echo "Running tests (verbose)..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
+	@uv run pytest tests/ -vv -s || $(PYTHON) -m pytest tests/ -vv -s
+
+test-coverage:
+	@echo "Running tests with coverage..."
+	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest pytest-cov
+	@uv run pytest tests/ --cov=perturblab --cov-report=html --cov-report=term || \
+		$(PYTHON) -m pytest tests/ --cov=perturblab --cov-report=html --cov-report=term
+	@echo "Coverage report generated in htmlcov/index.html"
+
+test-quick:
+	@echo "Running quick sanity test..."
+	@uv run python -c "import perturblab; print(f'✓ PerturbLab v{perturblab.__version__} imported successfully')" || \
+		$(PYTHON) -c "import perturblab; print(f'✓ PerturbLab v{perturblab.__version__} imported successfully')"
+
+test-models:
+	@echo "Testing model imports..."
+	@uv run python -c "from perturblab import MODELS; print(f'✓ Found {len(list(MODELS._child_registries))} model registries: {list(MODELS._child_registries.keys())}')" || \
+		$(PYTHON) -c "from perturblab import MODELS; print(f'✓ Found {len(list(MODELS._child_registries))} model registries: {list(MODELS._child_registries.keys())}')"
+
+cloc:
+	@command -v cloc >/dev/null 2>&1 || { echo "Install: sudo apt install cloc"; exit 1; }
+	@cloc . --exclude-dir=build,dist,__pycache__,.git,.eggs,perturblab.egg-info,external,weights,forks,perturblab_v0.1,perturblab_v0.2,_fast_transformers \
+		--exclude-ext=.pyc,.pyo,.so,.pyd,.o,.a,.dylib,.dll --vcs=git
+
+tree:
+	@git ls-tree -r --name-only HEAD | grep -v '_fast_transformers' | tree --fromfile .
+
+benchmark: compile
+	@[ -f benchmarks/benchmark.py ] && $(PYTHON) benchmarks/benchmark.py || echo "No benchmarks"
 
 # =============================================================================
-# Full Clean (Nuclear Option)
+# Clean
 # =============================================================================
 
-distclean: clean python-clean
-	@echo "Performing deep clean..."
-	@rm -rf compile_commands.json
-	@rm -rf .cache
-	@rm -rf htmlcov
-	@rm -rf .coverage
-	@echo "Deep clean complete!"
+clean: clean-build clean-pyc clean-compiled
 
+clean-build:
+	@rm -rf build/ dist/ *.egg-info .eggs/
+
+clean-pyc:
+	@find . -type f -name '*.py[co]' -delete
+	@find . -type d -name '__pycache__' -delete
+	@find . -type d -name '.pytest_cache' -delete
+	@find . -type d -name '.mypy_cache' -delete
+	@find . -type d -name '.ruff_cache' -delete
+
+clean-compiled:
+	@rm -rf $(INSTALL_DIR)/libmwu_kernel.*
+	@find . -name '*.so' -not -path "./external/*" -delete
+	@find . -name '*.pyd' -not -path "./external/*" -delete
+	@find . -name '*.c' -path "*/perturblab/kernels/*" -delete
+	@find . -name '*.cpp' -path "*/perturblab/kernels/*" -path "*/cython/*" -delete
+
+# =============================================================================
+# Development
+# =============================================================================
+
+dev-install:
+	@$(PIP) install black isort ruff flake8 pytest mypy autoflake autopep8
+
+check-cpp:
+	@[ -f $(INSTALL_DIR)/libmwu_kernel.so ] && echo "✓ C++ library installed" || echo "✗ C++ library missing"
+
+check-cython:
+	@find perturblab -name "*.so" -o -name "*.pyd" | head -5
+
+git-status:
+	@git status --short | grep -v '\.so$$' | grep -v '\.pyd$$' | grep -v '__pycache__' || echo "Clean"
+
+info:
+	@echo "Python:  $$($(PYTHON) --version 2>&1)"
+	@echo "CMake:   $$(cmake --version 2>&1 | head -n1)"
+	@echo "Git:     $$(git --version 2>&1)"

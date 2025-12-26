@@ -5,11 +5,13 @@
 /// Provides memory allocation, deallocation, and utility functions.
 // =============================================================================
 
-#include "error.hpp"
+#include "scl/binding/c_api/error.hpp"
+#include "scl/core/error.hpp"
 #include "scl/core/lifetime.hpp"
 #include "scl/core/sparse.hpp"
 
 #include <cstring>
+#include <cmath>
 
 extern "C" {
 

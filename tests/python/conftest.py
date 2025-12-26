@@ -19,6 +19,7 @@ try:
     import scl
     from scl.sparse import (
         Array, SclCSR, SclCSC,
+        VirtualCSR, VirtualCSC,  # Aliases for backward compatibility
         Backend, Ownership,
         float32, float64, int32, int64,
         vstack_csr, hstack_csc,

@@ -469,6 +469,14 @@ class SclCSC:
         """Return self (already CSC)."""
         return self
     
+    def to_csc(self) -> 'SclCSC':
+        """Return self (alias for tocsc)."""
+        return self
+    
+    def to_csr(self) -> 'SclCSR':
+        """Convert to CSR format (alias for tocsr)."""
+        return self.tocsr()
+    
     def copy(self) -> 'SclCSC':
         """Create deep copy."""
         self._ensure_custom()
@@ -491,6 +499,221 @@ class SclCSC:
             self._materialize_virtual()
         elif self._backend == Backend.MAPPED:
             self._load_mapped()
+    
+    def materialize(self) -> 'SclCSC':
+        """Materialize the matrix (ensure all data is in memory).
+        
+        Returns:
+            self (for chaining).
+        """
+        self._ensure_custom()
+        return self
+    
+    # =========================================================================
+    # Statistical Methods
+    # =========================================================================
+    
+    def sum(self, axis: Optional[int] = None) -> Union[float, 'Array']:
+        """Compute the sum of matrix elements.
+        
+        Args:
+            axis: Axis along which to sum.
+        
+        Returns:
+            Sum value(s).
+        """
+        self._ensure_custom()
+        
+        if axis is None:
+            total = 0.0
+            for k in range(self.nnz):
+                total += self._storage.data[k]
+            return total
+        
+        elif axis == 0:  # Column sums (efficient for CSC)
+            result = zeros(self.cols, dtype='float64')
+            for j in range(self.cols):
+                start = self._storage.indptr[j]
+                end = self._storage.indptr[j + 1]
+                col_sum = 0.0
+                for k in range(start, end):
+                    col_sum += self._storage.data[k]
+                result[j] = col_sum
+            return result
+        
+        else:  # Row sums (axis=1)
+            result = zeros(self.rows, dtype='float64')
+            for k in range(self.nnz):
+                row_idx = self._storage.indices[k]
+                result[row_idx] += self._storage.data[k]
+            return result
+    
+    def mean(self, axis: Optional[int] = None) -> Union[float, 'Array']:
+        """Compute the mean of matrix elements.
+        
+        Args:
+            axis: Axis along which to compute mean.
+        
+        Returns:
+            Mean value(s).
+        """
+        self._ensure_custom()
+        
+        if axis is None:
+            n_total = self.rows * self.cols
+            return self.sum() / n_total if n_total > 0 else 0.0
+        
+        elif axis == 0:  # Column means
+            sums = self.sum(axis=0)
+            result = zeros(self.cols, dtype='float64')
+            for j in range(self.cols):
+                result[j] = sums[j] / self.rows if self.rows > 0 else 0.0
+            return result
+        
+        else:  # Row means (axis=1)
+            sums = self.sum(axis=1)
+            result = zeros(self.rows, dtype='float64')
+            for i in range(self.rows):
+                result[i] = sums[i] / self.cols if self.cols > 0 else 0.0
+            return result
+    
+    def min(self, axis: Optional[int] = None) -> Union[float, 'Array']:
+        """Compute the minimum value of matrix elements.
+        
+        Args:
+            axis: Axis along which to find minimum.
+        
+        Returns:
+            Minimum value(s).
+        """
+        self._ensure_custom()
+        
+        if axis is None:
+            min_val = 0.0
+            for k in range(self.nnz):
+                val = self._storage.data[k]
+                if val < min_val:
+                    min_val = val
+            if self.nnz < self.rows * self.cols:
+                min_val = min(min_val, 0.0)
+            return min_val
+        
+        elif axis == 0:  # Column minimums
+            result = zeros(self.cols, dtype='float64')
+            for j in range(self.cols):
+                start = self._storage.indptr[j]
+                end = self._storage.indptr[j + 1]
+                nnz_col = end - start
+                
+                if nnz_col == 0:
+                    result[j] = 0.0
+                elif nnz_col < self.rows:
+                    col_min = 0.0
+                    for k in range(start, end):
+                        val = self._storage.data[k]
+                        if val < col_min:
+                            col_min = val
+                    result[j] = col_min
+                else:
+                    col_min = self._storage.data[start]
+                    for k in range(start + 1, end):
+                        val = self._storage.data[k]
+                        if val < col_min:
+                            col_min = val
+                    result[j] = col_min
+            return result
+        
+        else:  # Row minimums (axis=1)
+            result = zeros(self.rows, dtype='float64')
+            import math
+            for i in range(self.rows):
+                result[i] = math.inf
+            
+            row_nnz = zeros(self.rows, dtype='int64')
+            
+            for k in range(self.nnz):
+                row_idx = self._storage.indices[k]
+                val = self._storage.data[k]
+                row_nnz[row_idx] += 1
+                if val < result[row_idx]:
+                    result[row_idx] = val
+            
+            for i in range(self.rows):
+                if row_nnz[i] < self.cols:
+                    result[i] = min(result[i], 0.0)
+                elif row_nnz[i] == 0:
+                    result[i] = 0.0
+            
+            return result
+    
+    def max(self, axis: Optional[int] = None) -> Union[float, 'Array']:
+        """Compute the maximum value of matrix elements.
+        
+        Args:
+            axis: Axis along which to find maximum.
+        
+        Returns:
+            Maximum value(s).
+        """
+        self._ensure_custom()
+        
+        if axis is None:
+            max_val = 0.0
+            for k in range(self.nnz):
+                val = self._storage.data[k]
+                if val > max_val:
+                    max_val = val
+            if self.nnz < self.rows * self.cols:
+                max_val = max(max_val, 0.0)
+            return max_val
+        
+        elif axis == 0:  # Column maximums
+            result = zeros(self.cols, dtype='float64')
+            for j in range(self.cols):
+                start = self._storage.indptr[j]
+                end = self._storage.indptr[j + 1]
+                nnz_col = end - start
+                
+                if nnz_col == 0:
+                    result[j] = 0.0
+                elif nnz_col < self.rows:
+                    col_max = 0.0
+                    for k in range(start, end):
+                        val = self._storage.data[k]
+                        if val > col_max:
+                            col_max = val
+                    result[j] = col_max
+                else:
+                    col_max = self._storage.data[start]
+                    for k in range(start + 1, end):
+                        val = self._storage.data[k]
+                        if val > col_max:
+                            col_max = val
+                    result[j] = col_max
+            return result
+        
+        else:  # Row maximums (axis=1)
+            result = zeros(self.rows, dtype='float64')
+            import math
+            for i in range(self.rows):
+                result[i] = -math.inf
+            
+            row_nnz = zeros(self.rows, dtype='int64')
+            
+            for k in range(self.nnz):
+                row_idx = self._storage.indices[k]
+                val = self._storage.data[k]
+                row_nnz[row_idx] += 1
+                if val > result[row_idx]:
+                    result[row_idx] = val
+            
+            for i in range(self.rows):
+                if row_nnz[i] < self.cols:
+                    result[i] = max(result[i], 0.0)
+                elif row_nnz[i] == 0:
+                    result[i] = 0.0
+            
+            return result
     
     def _materialize_virtual(self) -> None:
         """Materialize Virtual backend to Custom."""
