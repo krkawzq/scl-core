@@ -76,6 +76,16 @@ class SclCSR:
         if len(self.indices) != nnz:
             raise ValueError(f"indices size mismatch: expected {nnz}, got {len(self.indices)}")
         
+        # Validate that indptr[-1] matches data size (unless it's an empty matrix)
+        # For empty() allocated matrices, indptr may be all zeros
+        if len(self.indptr) > 0:
+            last_indptr = self.indptr[-1]
+            # Only validate if indptr has been initialized (not all zeros or equals nnz)
+            if last_indptr != 0 and last_indptr != nnz:
+                raise ValueError(
+                    f"Data size mismatch: indptr[-1]={last_indptr} but nnz={nnz}"
+                )
+        
         # Compute or validate row_lengths
         if row_lengths is None:
             self.row_lengths = self._compute_row_lengths()
@@ -93,6 +103,11 @@ class SclCSR:
         This uses parallel diff operation in C++, ~100x faster than Python loop.
         """
         rows = self.shape[0]
+        
+        # Handle empty matrix edge case
+        if rows == 0:
+            return zeros(0, dtype='int64')
+        
         lengths = zeros(rows, dtype='int64')
         
         # Call C++ kernel: parallel diff operation
@@ -255,6 +270,12 @@ class SclCSR:
         else:
             dtype = 'float64'
         
+        # Ensure int64 for indices (required by C API)
+        if mat.indices.dtype != np.int64:
+            mat.indices = mat.indices.astype(np.int64)
+        if mat.indptr.dtype != np.int64:
+            mat.indptr = mat.indptr.astype(np.int64)
+        
         # Create Arrays from numpy arrays
         data = Array.from_buffer(mat.data, dtype, len(mat.data))
         indices = Array.from_buffer(mat.indices, 'int64', len(mat.indices))
@@ -384,6 +405,37 @@ class SclCSR:
             row[col_idx] = self.data[k]
         
         return row
+    
+    def get_row_slice(self, start: int, end: int) -> 'SclCSR':
+        """
+        Get a contiguous slice of rows [start:end).
+        
+        Convenience method for slice_rows() with range indices.
+        
+        Args:
+            start: Starting row index (inclusive)
+            end: Ending row index (exclusive)
+            
+        Returns:
+            New SclCSR matrix with rows [start:end)
+            
+        Example:
+            >>> # Get first 100 rows
+            >>> sub_mat = mat.get_row_slice(0, 100)
+            >>> 
+            >>> # Get rows 50-150
+            >>> sub_mat = mat.get_row_slice(50, 150)
+        """
+        if start < 0 or start > self.rows:
+            raise IndexError(f"Start index {start} out of bounds [0, {self.rows}]")
+        if end < 0 or end > self.rows:
+            raise IndexError(f"End index {end} out of bounds [0, {self.rows}]")
+        if start >= end:
+            raise ValueError(f"Start {start} must be less than end {end}")
+        
+        # Create row indices array
+        row_indices = from_list(list(range(start, end)), dtype='int64')
+        return self.slice_rows(row_indices)
     
     def slice_rows(self, row_indices: Union[List[int], Array]) -> 'SclCSR':
         """
@@ -760,6 +812,12 @@ class SclCSC:
             dtype = 'float32'
         else:
             dtype = 'float64'
+        
+        # Ensure int64 for indices (required by C API)
+        if mat.indices.dtype != np.int64:
+            mat.indices = mat.indices.astype(np.int64)
+        if mat.indptr.dtype != np.int64:
+            mat.indptr = mat.indptr.astype(np.int64)
         
         data = Array.from_buffer(mat.data, dtype, len(mat.data))
         indices = Array.from_buffer(mat.indices, 'int64', len(mat.indices))

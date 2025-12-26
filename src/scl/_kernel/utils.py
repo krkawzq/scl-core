@@ -115,8 +115,23 @@ def compute_lengths(indptr, n, lengths):
         n: Number of rows/columns
         lengths: ctypes pointer to output array [n]
     """
+    import ctypes
+    from scl._kernel.types import c_index
+    
     lib = get_lib()
-    status = lib.scl_compute_lengths(indptr, n, lengths)
+    
+    # Convert c_void_p to appropriate pointer types
+    def to_ptr(ptr, ctype):
+        if ptr is None or ptr == 0:
+            return None
+        if isinstance(ptr, ctypes.c_void_p):
+            return ctypes.cast(ptr, ctypes.POINTER(ctype))
+        return ptr
+    
+    indptr_ptr = to_ptr(indptr, c_index)
+    lengths_ptr = to_ptr(lengths, c_index)
+    
+    status = lib.scl_compute_lengths(indptr_ptr, n, lengths_ptr)
     check_error(status)
 
 
@@ -132,9 +147,24 @@ def inspect_slice_rows(indptr, row_indices, n_keep):
     Returns:
         Output nnz
     """
+    import ctypes
+    from scl._kernel.types import c_index
+    
     lib = get_lib()
+    
+    # Convert c_void_p to appropriate pointer types
+    def to_ptr(ptr, ctype):
+        if ptr is None or ptr == 0:
+            return None
+        if isinstance(ptr, ctypes.c_void_p):
+            return ctypes.cast(ptr, ctypes.POINTER(ctype))
+        return ptr
+    
+    indptr_ptr = to_ptr(indptr, c_index)
+    row_indices_ptr = to_ptr(row_indices, c_index)
+    
     out_nnz = c_index()
-    status = lib.scl_inspect_slice_rows(indptr, row_indices, n_keep, ctypes.byref(out_nnz))
+    status = lib.scl_inspect_slice_rows(indptr_ptr, row_indices_ptr, n_keep, ctypes.byref(out_nnz))
     check_error(status)
     return out_nnz.value
 
@@ -154,10 +184,30 @@ def materialize_slice_rows(src_data, src_indices, src_indptr, row_indices, n_kee
         dst_indices: ctypes pointer to destination indices
         dst_indptr: ctypes pointer to destination indptr
     """
+    import ctypes
+    from scl._kernel.types import c_real, c_index
+    
     lib = get_lib()
+    
+    # Convert c_void_p to appropriate pointer types
+    def to_ptr(ptr, ctype):
+        if ptr is None or ptr == 0:
+            return None
+        if isinstance(ptr, ctypes.c_void_p):
+            return ctypes.cast(ptr, ctypes.POINTER(ctype))
+        return ptr
+    
+    src_data_ptr = to_ptr(src_data, c_real)
+    src_indices_ptr = to_ptr(src_indices, c_index)
+    src_indptr_ptr = to_ptr(src_indptr, c_index)
+    row_indices_ptr = to_ptr(row_indices, c_index)
+    dst_data_ptr = to_ptr(dst_data, c_real)
+    dst_indices_ptr = to_ptr(dst_indices, c_index)
+    dst_indptr_ptr = to_ptr(dst_indptr, c_index)
+    
     status = lib.scl_materialize_slice_rows(
-        src_data, src_indices, src_indptr, row_indices, n_keep,
-        dst_data, dst_indices, dst_indptr
+        src_data_ptr, src_indices_ptr, src_indptr_ptr, row_indices_ptr, n_keep,
+        dst_data_ptr, dst_indices_ptr, dst_indptr_ptr
     )
     check_error(status)
 

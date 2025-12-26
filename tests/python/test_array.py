@@ -154,7 +154,8 @@ class TestArrayConversion:
     def test_array_memoryview(self, requires_scl):
         """Test Array memoryview protocol."""
         arr = from_list([1.0, 2.0, 3.0], dtype='float32')
-        view = memoryview(arr)
+        # Use as_memoryview() for Python < 3.11 compatibility
+        view = arr.as_memoryview()
         
         assert view.nbytes == arr.nbytes
         assert len(view) == arr.size

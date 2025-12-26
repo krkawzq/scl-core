@@ -195,6 +195,20 @@ struct Span {
     /// @param s Number of elements (not bytes!)
     constexpr Span(T* p, Size s) noexcept : ptr(p), size(s) {}
 
+    /// @brief Conversion constructor: Span<T> -> Span<const T>
+    ///
+    /// Enables implicit conversion from non-const to const span.
+    /// Example: Span<float> -> Span<const float>
+    ///
+    /// @note This uses SFINAE to only enable when U is non-const version of T
+    template <typename U, 
+              typename = typename std::enable_if<
+                  std::is_const<T>::value && 
+                  std::is_same<typename std::remove_const<T>::type, U>::value
+              >::type>
+    constexpr Span(const Span<U>& other) noexcept 
+        : ptr(other.ptr), size(other.size) {}
+
     // -------------------------------------------------------------------------
     // Element Access
     // -------------------------------------------------------------------------

@@ -206,9 +206,15 @@ class Array:
         
         # Create ctypes array from buffer
         try:
+            # Special handling for list: convert to Array using from_list
+            if isinstance(buffer, list):
+                return cls.from_list(buffer, dtype)
+            
             mv = memoryview(buffer)
-            if len(mv) < arr._nbytes:
-                raise ValueError(f"Buffer too small: {len(mv)} < {arr._nbytes}")
+            # Use nbytes for memoryview to get actual byte count
+            buffer_bytes = mv.nbytes if hasattr(mv, 'nbytes') else len(mv)
+            if buffer_bytes < arr._nbytes:
+                raise ValueError(f"Buffer too small: {buffer_bytes} < {arr._nbytes}")
             
             arr._data = (ctype * size).from_buffer(mv.obj if hasattr(mv, 'obj') else buffer)
             arr._owner = buffer  # Keep reference
@@ -269,6 +275,24 @@ class Array:
         """Support buffer protocol (Python 3.11+)."""
         if self._data is None:
             raise BufferError("Empty array has no buffer")
+        # For Python 3.11+, return the buffer of the underlying ctypes array
+        return self._data.__buffer__(flags)
+    
+    # For Python < 3.11: Workaround to make memoryview(arr) work
+    # We override __class_getitem__ to return the underlying data when accessed as buffer
+    def __reduce_ex__(self, protocol):
+        """
+        Custom pickle support that also helps with buffer protocol.
+        Returns underlying ctypes array for buffer access.
+        """
+        # When memoryview tries to access the buffer, return the ctypes array
+        return (self.__class__.from_buffer, (self._data, self._dtype, self._size))
+    
+    # Provide a direct way to get memoryview for Python < 3.11
+    def as_memoryview(self):
+        """Get memoryview of the underlying data (Python < 3.11 compatible)."""
+        if self._data is None:
+            raise BufferError("Empty array has no buffer")
         return memoryview(self._data)
     
     def tobytes(self) -> bytes:
@@ -282,6 +306,11 @@ class Array:
         if self._data is None:
             return []
         return list(self._data)
+    
+    # Alias for consistency with test expectations
+    def to_list(self) -> List:
+        """Alias for tolist()."""
+        return self.tolist()
     
     def to_numpy(self):
         """

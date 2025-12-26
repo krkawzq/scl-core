@@ -300,7 +300,7 @@ void morans_i(
             T mean = sum_x / N;
 
             // Materialize centered vector
-            detail::materialize_centered(col_indices, col_values, mean, z, n_cells);
+            detail::materialize_centered<T>(col_indices, col_values, mean, z, n_cells);
 
             // Compute denominator: variance
             T sum_sq = detail::sum_squared(z, n_cells);
@@ -373,7 +373,7 @@ void gearys_c(
             T mean = sum_x / N;
 
             // Materialize centered vector
-            detail::materialize_centered(col_indices, col_values, mean, z, n_cells);
+            detail::materialize_centered<T>(col_indices, col_values, mean, z, n_cells);
 
             // Compute denominator
             T sum_sq = detail::sum_squared(z, n_cells);

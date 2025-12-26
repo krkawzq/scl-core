@@ -62,5 +62,6 @@ Thumbs.db
 *.gcda
 *.gcno
 
-.cache
+.cache/
 uv.lock
+.pytest_cache/

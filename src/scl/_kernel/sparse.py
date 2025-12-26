@@ -98,6 +98,7 @@ def row_sums_csr(
     row_lengths,  # ctypes pointer or Array or None
     rows: int,
     cols: int,
+    nnz: int,
     output  # ctypes pointer or Array
 ) -> None:
     """
@@ -110,6 +111,7 @@ def row_sums_csr(
         row_lengths: Explicit row lengths pointer or None
         rows: Number of rows
         cols: Number of columns
+        nnz: Number of non-zero elements
         output: Output array pointer - modified in-place
         
     Raises:
@@ -117,12 +119,19 @@ def row_sums_csr(
     """
     lib = get_lib()
     
-    # Convert to ctypes pointers if needed
-    data_ptr = data if isinstance(data, (int, type(None))) or hasattr(data, 'value') else data
-    indices_ptr = indices if isinstance(indices, (int, type(None))) or hasattr(indices, 'value') else indices
-    indptr_ptr = indptr if isinstance(indptr, (int, type(None))) or hasattr(indptr, 'value') else indptr
-    row_lengths_ptr = row_lengths if isinstance(row_lengths, (int, type(None))) or hasattr(row_lengths, 'value') else row_lengths
-    output_ptr = output if isinstance(output, (int, type(None))) or hasattr(output, 'value') else output
+    # Convert c_void_p to appropriate pointer types
+    def to_ptr(ptr, ctype):
+        if ptr is None or ptr == 0:
+            return None
+        if isinstance(ptr, ctypes.c_void_p):
+            return ctypes.cast(ptr, ctypes.POINTER(ctype))
+        return ptr
+    
+    data_ptr = to_ptr(data, c_real)
+    indices_ptr = to_ptr(indices, c_index)
+    indptr_ptr = to_ptr(indptr, c_index)
+    row_lengths_ptr = to_ptr(row_lengths, c_index)
+    output_ptr = to_ptr(output, c_real)
     
     status = lib.scl_row_sums_csr(
         data_ptr,
@@ -131,6 +140,7 @@ def row_sums_csr(
         row_lengths_ptr,
         rows,
         cols,
+        nnz,
         output_ptr
     )
     

@@ -166,12 +166,21 @@ def batch_loader(target_format: str):
                     elif self.dtype != item.dtype:
                         raise TypeError(f"Mixed dtypes: {self.dtype} vs {item.dtype}")
                     
-                    self.shape[0] += item.shape[0]
-                    
-                    if self.shape[1] == 0:
-                        self.shape[1] = item.shape[1]
-                    elif self.shape[1] != item.shape[1]:
-                        raise ValueError(f"Column mismatch: {self.shape[1]} vs {item.shape[1]}")
+                    # Update dimensions based on format
+                    if target_format == 'CSR':
+                        # vstack: same columns, accumulate rows
+                        if self.shape[1] == 0:
+                            self.shape[1] = item.shape[1]
+                        elif self.shape[1] != item.shape[1]:
+                            raise ValueError(f"Column mismatch: {self.shape[1]} vs {item.shape[1]}")
+                        self.shape[0] += item.shape[0]
+                    else:  # CSC
+                        # hstack: same rows, accumulate columns
+                        if self.shape[0] == 0:
+                            self.shape[0] = item.shape[0]
+                        elif self.shape[0] != item.shape[0]:
+                            raise ValueError(f"Row mismatch: {self.shape[0]} vs {item.shape[0]}")
+                        self.shape[1] += item.shape[1]
                     
                     continue
                 
@@ -195,6 +204,12 @@ def batch_loader(target_format: str):
                     
                     # Cache Array views on the scipy object
                     if not hasattr(mat, '_scl_view'):
+                        # Ensure int64 for indices (scipy may use int32)
+                        if mat.indices.dtype != np.int64:
+                            mat.indices = mat.indices.astype(np.int64)
+                        if mat.indptr.dtype != np.int64:
+                            mat.indptr = mat.indptr.astype(np.int64)
+                        
                         mat._scl_view_data = Array.from_buffer(
                             mat.data, 
                             'float32' if mat.data.dtype == np.float32 else 'float64',
@@ -223,13 +238,23 @@ def batch_loader(target_format: str):
                 elif self.dtype != current_dtype:
                     raise TypeError(f"Mixed dtypes: {self.dtype} vs {current_dtype}")
                 
-                # Validate dimensions
-                if self.shape[1] == 0:
-                    self.shape[1] = mat.shape[1]
-                elif self.shape[1] != mat.shape[1]:
-                    raise ValueError(f"Column mismatch: {self.shape[1]} vs {mat.shape[1]}")
-                
-                self.shape[0] += mat.shape[0]
+                # Validate dimensions based on format
+                # CSR: vstack (vertical) - check columns match, accumulate rows
+                # CSC: hstack (horizontal) - check rows match, accumulate columns
+                if target_format == 'CSR':
+                    # vstack: same columns, different rows
+                    if self.shape[1] == 0:
+                        self.shape[1] = mat.shape[1]
+                    elif self.shape[1] != mat.shape[1]:
+                        raise ValueError(f"Column mismatch: {self.shape[1]} vs {mat.shape[1]}")
+                    self.shape[0] += mat.shape[0]
+                else:  # CSC
+                    # hstack: same rows, different columns
+                    if self.shape[0] == 0:
+                        self.shape[0] = mat.shape[0]
+                    elif self.shape[0] != mat.shape[0]:
+                        raise ValueError(f"Row mismatch: {self.shape[0]} vs {mat.shape[0]}")
+                    self.shape[1] += mat.shape[1]
                 self._chunks.append(_MatrixChunk(mat, row_map=None))
             
             self.shape = tuple(self.shape)
@@ -793,7 +818,6 @@ class VirtualCSR:
                 mat = chunk.matrix
                 
                 # Direct memory copy
-                import ctypes
                 if hasattr(mat, 'data'):
                     # Scipy
                     ctypes.memmove(

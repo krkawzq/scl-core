@@ -3,24 +3,88 @@ Setup script for scl-core
 
 This setup.py is primarily for compatibility. The main configuration is in pyproject.toml.
 However, this script handles:
-1. Copying compiled libraries from build/lib/ to src/scl/libs/ before packaging
-2. Ensuring both f32 and f64 libraries are included
+1. Automatically building C++ libraries using CMake
+2. Copying compiled libraries from build/lib/ to src/scl/libs/ before packaging
+3. Ensuring both f32 and f64 libraries are included
 """
 
 import os
 import sys
 import shutil
+import subprocess
 from pathlib import Path
 from setuptools import setup, find_packages
 from setuptools.command.build_py import build_py
 from setuptools.command.egg_info import egg_info
+from setuptools.command.develop import develop
+
+
+def build_cmake_libs():
+    """Build C++ libraries using CMake."""
+    build_dir = Path("build")
+    
+    print("=" * 60)
+    print("Building C++ libraries with CMake...")
+    print("=" * 60)
+    
+    # Check if cmake is available
+    try:
+        subprocess.run(["cmake", "--version"], check=True, 
+                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("ERROR: CMake not found. Please install CMake first.")
+        print("  Ubuntu/Debian: sudo apt install cmake")
+        print("  macOS: brew install cmake")
+        print("  Windows: Download from https://cmake.org/")
+        sys.exit(1)
+    
+    # Create build directory if it doesn't exist
+    build_dir.mkdir(exist_ok=True)
+    
+    # Configure with CMake
+    print("\n[1/3] Configuring CMake...")
+    try:
+        subprocess.run(
+            ["cmake", ".."],
+            cwd=build_dir,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        print("✓ CMake configuration completed")
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: CMake configuration failed:\n{e.output}")
+        sys.exit(1)
+    
+    # Build with CMake
+    print("\n[2/3] Building C++ libraries...")
+    try:
+        result = subprocess.run(
+            ["cmake", "--build", ".", "--config", "Release"],
+            cwd=build_dir,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        print("✓ Build completed successfully")
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: Build failed:\n{e.output}")
+        sys.exit(1)
+    
+    print("\n[3/3] Libraries ready for packaging")
+    print("=" * 60)
 
 
 class BuildPyWithLibs(build_py):
-    """Custom build command that copies compiled libraries into the package."""
+    """Custom build command that builds C++ libs and copies them into the package."""
     
     def run(self):
-        # First run the standard build
+        # Build C++ libraries first
+        build_cmake_libs()
+        
+        # Then run the standard build
         super().run()
         
         # Copy libraries from build/ or build/lib/ to src/scl/libs/
@@ -117,6 +181,65 @@ class EggInfoWithLibs(egg_info):
         super().run()
 
 
+class DevelopWithLibs(develop):
+    """Custom develop command that builds C++ libs for editable installs."""
+    
+    def run(self):
+        # Build C++ libraries first
+        build_cmake_libs()
+        
+        # Copy libraries to src/scl/libs/
+        target_dir = Path("src/scl/libs")
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Library names
+        lib_names = ["scl_core_f32", "scl_core_f64"]
+        
+        # Platform-specific extensions
+        if os.name == 'nt':  # Windows
+            extensions = [".dll"]
+        elif sys.platform == 'darwin':  # macOS
+            extensions = [".dylib"]
+        else:  # Linux
+            extensions = [".so"]
+        
+        build_dir = Path("build/lib")
+        if not build_dir.exists():
+            build_dir = Path("build")
+        
+        copied_count = 0
+        for lib_name in lib_names:
+            for ext in extensions:
+                src_with_prefix = build_dir / f"lib{lib_name}{ext}"
+                src_without_prefix = build_dir / f"{lib_name}{ext}"
+                
+                src = None
+                if src_with_prefix.exists():
+                    src = src_with_prefix
+                elif src_without_prefix.exists():
+                    src = src_without_prefix
+                
+                if src is not None:
+                    if ext == ".dll":
+                        dst = target_dir / f"{lib_name}{ext}"
+                    else:
+                        if src.name.startswith("lib"):
+                            dst = target_dir / src.name
+                        else:
+                            dst = target_dir / f"lib{lib_name}{ext}"
+                    
+                    shutil.copy2(src, dst)
+                    print(f"✓ Copied {src.name} -> {dst}")
+                    copied_count += 1
+                    break
+        
+        if copied_count < len(lib_names):
+            print(f"WARNING: Only copied {copied_count}/{len(lib_names)} libraries")
+        
+        # Then run the standard develop
+        super().run()
+
+
 # Read version from src/__init__.py
 def get_version():
     version_file = Path("src/__init__.py")
@@ -136,12 +259,13 @@ def get_long_description():
 
 
 # Configuration is primarily in pyproject.toml
-# This setup.py mainly handles library copying
+# This setup.py mainly handles CMake building and library copying
 # Note: Most configuration should be in pyproject.toml to avoid conflicts
 setup(
     cmdclass={
         "build_py": BuildPyWithLibs,
         "egg_info": EggInfoWithLibs,
+        "develop": DevelopWithLibs,
     },
     zip_safe=False,  # Cannot be zipped due to shared libraries
 )

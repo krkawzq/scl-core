@@ -78,10 +78,15 @@ FetchContent_Declare(
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE) # Force Static
 set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
-set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "" FORCE)
+set(HWY_ENABLE_CONTRIB ON CACHE BOOL "" FORCE)  # Required for VQSort
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+# Critical: Build Highway with PIC so it can be linked into shared libraries
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 FetchContent_MakeAvailable(hwy)
+
+# Ensure Highway is built with PIC
+set_target_properties(hwy PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # --- 3.3 HDF5 (Optional, for native h5ad support) ---
 find_package(HDF5 COMPONENTS C CXX)
@@ -153,6 +158,7 @@ macro(create_scl_backend target_name output_name precision_val)
             $<INSTALL_INTERFACE:include>
         PRIVATE 
             ${BS_THREAD_POOL_INCLUDE_DIR}
+            $<TARGET_PROPERTY:hwy,INTERFACE_INCLUDE_DIRECTORIES>
     )
 
     # 6.2 Backend Configuration
@@ -167,9 +173,30 @@ macro(create_scl_backend target_name output_name precision_val)
     endif()
     
     # 6.4 Linking
-    target_link_libraries(${target_name} PRIVATE 
-        hwy       # Google Highway (Static)
-        ${SCL_BACKEND_LIBS} # Threading Libs
+    # For shared libraries: Link Highway with whole-archive to export all symbols
+    # Need to link both hwy and hwy_contrib for VQSort functionality
+    if(UNIX AND NOT APPLE)
+        # Linux: Use whole-archive (don't also link via target_link_libraries)
+        target_link_options(${target_name} PRIVATE 
+            "LINKER:--whole-archive,$<TARGET_FILE:hwy>,$<TARGET_FILE:hwy_contrib>,--no-whole-archive")
+        target_link_libraries(${target_name} PRIVATE ${SCL_BACKEND_LIBS})
+    elseif(APPLE)
+        # macOS uses -force_load
+        target_link_options(${target_name} PRIVATE 
+            "LINKER:-force_load,$<TARGET_FILE:hwy>"
+            "LINKER:-force_load,$<TARGET_FILE:hwy_contrib>")
+        target_link_libraries(${target_name} PRIVATE ${SCL_BACKEND_LIBS})
+    else()
+        # Windows: Link normally
+        target_link_libraries(${target_name} PRIVATE hwy hwy_contrib ${SCL_BACKEND_LIBS})
+    endif()
+    
+    # Add dependencies so hwy libs are built before our target
+    add_dependencies(${target_name} hwy hwy_contrib)
+    
+    # Ensure Position Independent Code
+    set_target_properties(${target_name} PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
     )
     
     # Link HDF5 if available
@@ -180,9 +207,9 @@ macro(create_scl_backend target_name output_name precision_val)
     endif()
 
     # 6.5 Output Naming
+    # Note: Keep default lib prefix for Linux/Mac, removed by default on Windows
     set_target_properties(${target_name} PROPERTIES 
         OUTPUT_NAME "${output_name}"
-        PREFIX "" 
     )
     
     # 6.6 Output Directory (for both build and install)

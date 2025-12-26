@@ -27,7 +27,8 @@ class TestSclCSRCreation:
         """Test creating empty matrix."""
         mat = SclCSR.empty(10, 20, 50, dtype='float32')
         assert mat.shape == (10, 20)
-        assert mat.nnz == 0  # Empty, but allocated for 50
+        assert mat.nnz == 50  # Allocated space for 50 elements
+        assert len(mat.data) == 50
         assert mat.dtype == 'float32'
     
     def test_create_zeros(self, requires_scl):

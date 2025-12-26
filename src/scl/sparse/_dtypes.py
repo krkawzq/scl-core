@@ -130,5 +130,8 @@ def dtype_itemsize(dtype: Union[str, DType]) -> int:
         'uint64': 8,
     }
     
+    if dtype_str not in size_map:
+        raise ValueError(f"Unknown dtype: {dtype_str}. Valid types are: {', '.join(size_map.keys())}")
+    
     return size_map[dtype_str]
 

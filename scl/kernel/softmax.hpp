@@ -199,7 +199,7 @@ void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> out
         size_t i_end = std::min(static_cast<size_t>(R), i_start + CHUNK_SIZE);
 
         for (size_t i = i_start; i < i_end; ++i) {
-            detail::softmax_unit(
+            detail::softmax_unit<typename MatrixT::ValueType>(
                 matrix.row_values(static_cast<Index>(i)),
                 matrix.row_indices(static_cast<Index>(i)),
                 output.ptr + (i * static_cast<Size>(C)),
@@ -237,7 +237,7 @@ void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> out
         size_t j_end = std::min(static_cast<size_t>(C), j_start + CHUNK_SIZE);
 
         for (size_t j = j_start; j < j_end; ++j) {
-            detail::softmax_unit(
+            detail::softmax_unit<typename MatrixT::ValueType>(
                 matrix.col_values(static_cast<Index>(j)),
                 matrix.col_indices(static_cast<Index>(j)),
                 output.ptr + (j * static_cast<Size>(R)),
