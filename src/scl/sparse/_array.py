@@ -283,6 +283,41 @@ class Array:
             return []
         return list(self._data)
     
+    def to_numpy(self):
+        """
+        Convert to numpy array.
+        
+        Returns:
+            numpy.ndarray
+        
+        Note: Requires numpy to be installed.
+        """
+        try:
+            import numpy as np
+        except ImportError:
+            raise ImportError("numpy is required for to_numpy()")
+        
+        if self._data is None:
+            return np.array([], dtype=self._get_numpy_dtype())
+        
+        # Convert via bytes for efficiency
+        np_dtype = self._get_numpy_dtype()
+        return np.frombuffer(self.tobytes(), dtype=np_dtype)
+    
+    def _get_numpy_dtype(self):
+        """Get numpy dtype equivalent."""
+        import numpy as np
+        dtype_map = {
+            'float32': np.float32,
+            'float64': np.float64,
+            'int32': np.int32,
+            'int64': np.int64,
+            'uint8': np.uint8,
+            'uint32': np.uint32,
+            'uint64': np.uint64,
+        }
+        return dtype_map[self._dtype]
+    
     # -------------------------------------------------------------------------
     # Copy Operations
     # -------------------------------------------------------------------------

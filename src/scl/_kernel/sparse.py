@@ -79,50 +79,59 @@ def _init_signatures():
     lib.scl_col_statistics_csc.restype = ctypes.c_int
 
 
-# Initialize on module import
-_init_signatures()
+# Try to initialize signatures on import, but don't fail
+try:
+    _init_signatures()
+except Exception as e:
+    # Library not available yet - will fail on actual function calls
+    import warnings
+    warnings.warn(f"SCL C++ library not available: {e}. Functions will fail until library is built.")
 
 # =============================================================================
 # Python Wrappers
 # =============================================================================
 
 def row_sums_csr(
-    data: np.ndarray,
-    indices: np.ndarray,
-    indptr: np.ndarray,
-    row_lengths: np.ndarray,
+    data,  # ctypes pointer or Array
+    indices,  # ctypes pointer or Array  
+    indptr,  # ctypes pointer or Array
+    row_lengths,  # ctypes pointer or Array or None
     rows: int,
     cols: int,
-    nnz: int,
-    output: np.ndarray
+    output  # ctypes pointer or Array
 ) -> None:
     """
     Compute row sums for CSR matrix.
     
     Args:
-        data: CSR data array (nnz,)
-        indices: CSR column indices (nnz,)
-        indptr: CSR row pointers (rows+1,)
-        row_lengths: Explicit row lengths or None
+        data: CSR data array pointer
+        indices: CSR column indices pointer
+        indptr: CSR row pointers pointer
+        row_lengths: Explicit row lengths pointer or None
         rows: Number of rows
         cols: Number of columns
-        nnz: Number of non-zeros
-        output: Output array (rows,) - modified in-place
+        output: Output array pointer - modified in-place
         
     Raises:
         RuntimeError: If C function fails
     """
     lib = get_lib()
     
+    # Convert to ctypes pointers if needed
+    data_ptr = data if isinstance(data, (int, type(None))) or hasattr(data, 'value') else data
+    indices_ptr = indices if isinstance(indices, (int, type(None))) or hasattr(indices, 'value') else indices
+    indptr_ptr = indptr if isinstance(indptr, (int, type(None))) or hasattr(indptr, 'value') else indptr
+    row_lengths_ptr = row_lengths if isinstance(row_lengths, (int, type(None))) or hasattr(row_lengths, 'value') else row_lengths
+    output_ptr = output if isinstance(output, (int, type(None))) or hasattr(output, 'value') else output
+    
     status = lib.scl_row_sums_csr(
-        as_c_ptr(data, c_real),
-        as_c_ptr(indices, c_index),
-        as_c_ptr(indptr, c_index),
-        as_c_ptr(row_lengths, c_index) if row_lengths is not None else None,
+        data_ptr,
+        indices_ptr,
+        indptr_ptr,
+        row_lengths_ptr,
         rows,
         cols,
-        nnz,
-        as_c_ptr(output, c_real)
+        output_ptr
     )
     
     check_error(status, "row_sums_csr")

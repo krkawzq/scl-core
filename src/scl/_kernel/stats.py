@@ -77,7 +77,12 @@ def _init_signatures():
     lib.scl_ttest_csc.restype = ctypes.c_int
 
 
-_init_signatures()
+# Initialize signatures lazily
+try:
+    _init_signatures()
+except Exception as e:
+    import warnings
+    warnings.warn(f"SCL library not ready: {e}")
 
 # =============================================================================
 # Python Wrappers

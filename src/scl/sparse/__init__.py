@@ -36,6 +36,8 @@ Usage:
     result = scl_mat.to_scipy()
 """
 
+from typing import List, Any
+
 from ._array import Array, empty, zeros, from_list, from_buffer
 from ._matrix import SclCSR, SclCSC
 from ._virtual_matrix import VirtualCSR, VirtualCSC

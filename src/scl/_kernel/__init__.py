@@ -40,6 +40,7 @@ from . import transform
 from . import algebra
 from . import feature
 from . import spatial
+from . import utils
 
 __all__ = [
     'lib_loader',
@@ -52,5 +53,6 @@ __all__ = [
     'algebra',
     'feature',
     'spatial',
+    'utils',
 ]
 

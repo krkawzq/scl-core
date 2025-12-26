@@ -11,20 +11,14 @@ Design Philosophy:
 4. Single/Multi Block: Optimize for common single-source case
 """
 
-from typing import Tuple, Any, Optional, Union, List, TYPE_CHECKING
+from typing import Tuple, Any, Optional, Union, List
 from functools import wraps
 import ctypes
 
 from ._array import Array, zeros, empty, from_list
+from .._kernel import utils as kernel_utils
 
-# Handle different import contexts
-try:
-    from .._kernel import utils as kernel_utils
-except ImportError:
-    from _kernel import utils as kernel_utils
-
-if TYPE_CHECKING:
-    from ._matrix import SclCSR, SclCSC
+from ._matrix import SclCSR, SclCSC
 
 __all__ = ['VirtualCSR', 'VirtualCSC']
 

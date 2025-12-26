@@ -7,12 +7,7 @@ Python handles business logic, C++ handles computational hot paths.
 
 from typing import Optional, Tuple, Any, List, Union
 from ._array import Array, zeros, from_list, empty
-
-# Handle different import contexts
-try:
-    from .._kernel import utils as kernel_utils
-except ImportError:
-    from _kernel import utils as kernel_utils
+from .._kernel import utils as kernel_utils
 
 __all__ = ['SclCSR', 'SclCSC']
 

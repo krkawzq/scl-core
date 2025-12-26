@@ -7,32 +7,50 @@ name = "scl-core"
 version = "0.1.0"
 description = "High-performance single-cell analysis library with SIMD-optimized C++ kernels"
 readme = "README.md"
-requires-python = ">=3.11"
-license = {text = ""}
+requires-python = ">=3.10"
+license = "MIT"
 authors = []
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: C++",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "anndata>=0.12.7",
-    "numpy>=2.4.0",
-    "scipy>=1.16.3",
+    # Core dependencies (optional scipy/numpy for interop only)
 ]
 
 [project.optional-dependencies]
+# Full dependencies including scipy/anndata
+full = [
+    "anndata>=0.10.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+]
+# Development dependencies
 dev = [
-    "pytest>=9.0.2",
-    "pytest-cov>=5.0.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+]
+# All dependencies
+all = [
+    "anndata>=0.10.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
 ]
 
 [tool.setuptools]
-package-dir = {"scl" = "src"}
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

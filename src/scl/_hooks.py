@@ -147,7 +147,7 @@ def _spoof_scipy():
         import scipy.sparse as sp
         
         # Import our matrix classes (lazy to avoid circular import)
-        from sparse import SclCSR, SclCSC, VirtualCSR, VirtualCSC
+        from .sparse import SclCSR, SclCSC, VirtualCSR, VirtualCSC
         
         # Register as virtual subclasses
         sp.spmatrix.register(SclCSR)
@@ -186,7 +186,7 @@ def _patch_anndata():
     import anndata
     import anndata.utils
     
-    from sparse import SclCSR, SclCSC, VirtualCSR, VirtualCSC
+    from .sparse import SclCSR, SclCSC, VirtualCSR, VirtualCSC
     
     # --- Patch A: issparse utility ---
     if hasattr(anndata.utils, 'issparse'):
@@ -240,7 +240,7 @@ def _patch_anndata_io():
         from anndata._io.specs import write_elem
         from anndata._io.specs.methods import write_csr_matrix, write_csc_matrix
         
-        from sparse import SclCSR, SclCSC, VirtualCSR, VirtualCSC
+        from .sparse import SclCSR, SclCSC, VirtualCSR, VirtualCSC
         
         # Strategy: Reuse scipy's writers
         # Our matrices have compatible layout (data/indices/indptr/shape)

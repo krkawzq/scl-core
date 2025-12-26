@@ -95,7 +95,12 @@ def _init_signatures():
     lib.scl_align_rows.restype = ctypes.c_int
 
 # Initialize on module load
-_init_signatures()
+# Initialize signatures lazily
+try:
+    _init_signatures()
+except Exception as e:
+    import warnings
+    warnings.warn(f"SCL library not ready: {e}")
 
 # =============================================================================
 # Python Functions
