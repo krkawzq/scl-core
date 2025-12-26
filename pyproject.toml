@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scl-core"
+version = "0.1.0"
+description = "High-performance single-cell analysis library with SIMD-optimized C++ kernels"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = ""}
+authors = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "anndata>=0.12.7",
+    "numpy>=2.4.0",
+    "scipy>=1.16.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=5.0.0",
+]
+
+[tool.setuptools]
+package-dir = {"scl" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+# Include compiled libraries in the package
+[tool.setuptools.package-data]
+scl = ["libs/*.so", "libs/*.dylib", "libs/*.dll"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc", "__pycache__"]

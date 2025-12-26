@@ -1,0 +1,14 @@
+# Include compiled libraries
+include src/scl/libs/*.so
+include src/scl/libs/*.dylib
+include src/scl/libs/*.dll
+
+# Include source files
+recursive-include src *.py
+recursive-include scl *.hpp
+
+# Exclude build artifacts
+global-exclude __pycache__
+global-exclude *.py[co]
+global-exclude *.egg-info
+

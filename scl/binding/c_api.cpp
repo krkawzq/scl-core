@@ -38,6 +38,7 @@
 #include "scl/kernel/merge.hpp"
 #include "scl/kernel/spatial.hpp"
 #include "scl/core/lifetime.hpp"
+#include "scl/core/memory.hpp"
 #include "scl/version.hpp"
 
 #include <cstring>
@@ -1278,7 +1279,11 @@ void scl_free_aligned(void* ptr) {
 /// @param bytes Size in bytes
 void scl_memzero(void* ptr, scl::Size bytes) {
     if (ptr && bytes > 0) {
-        std::memset(ptr, 0, bytes);
+        // Use scl::memory for consistent API
+        scl::memory::zero(scl::MutableSpan<uint8_t>(
+            static_cast<uint8_t*>(ptr), 
+            bytes
+        ));
     }
 }
 
@@ -1293,7 +1298,141 @@ int scl_memcpy(const void* src, void* dst, scl::Size bytes) {
         if (!src || !dst) {
             throw scl::ValueError("scl_memcpy: null pointer");
         }
-        std::memcpy(dst, src, bytes);
+        // Use scl::memory::copy for safe copy (handles overlap)
+        scl::memory::copy(
+            scl::Span<const uint8_t>(static_cast<const uint8_t*>(src), bytes),
+            scl::MutableSpan<uint8_t>(static_cast<uint8_t*>(dst), bytes)
+        );
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
+// =============================================================================
+// Matrix Utilities (sparse.hpp wrappers)
+// =============================================================================
+
+/// @brief Compute row/column lengths from indptr
+int scl_compute_lengths(
+    const scl::Index* indptr,
+    scl::Index n,
+    scl::Index* lengths
+) {
+    try {
+        clear_error();
+        scl::kernel::sparse::compute_lengths(indptr, n, lengths);
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
+/// @brief Inspect CSR row slice
+int scl_inspect_slice_rows(
+    const scl::Index* indptr,
+    const scl::Index* row_indices,
+    scl::Index n_keep,
+    scl::Index* out_nnz
+) {
+    try {
+        clear_error();
+        *out_nnz = scl::kernel::sparse::inspect_slice_rows(indptr, row_indices, n_keep);
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
+/// @brief Materialize CSR row slice
+int scl_materialize_slice_rows(
+    const scl::Real* src_data,
+    const scl::Index* src_indices,
+    const scl::Index* src_indptr,
+    const scl::Index* row_indices,
+    scl::Index n_keep,
+    scl::Real* dst_data,
+    scl::Index* dst_indices,
+    scl::Index* dst_indptr
+) {
+    try {
+        clear_error();
+        scl::kernel::sparse::materialize_slice_rows(
+            src_data, src_indices, src_indptr, row_indices, n_keep,
+            dst_data, dst_indices, dst_indptr
+        );
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
+/// @brief Inspect CSR column filter
+int scl_inspect_filter_cols(
+    const scl::Index* src_indices,
+    const scl::Index* src_indptr,
+    scl::Index rows,
+    const uint8_t* col_mask,
+    scl::Index* out_nnz
+) {
+    try {
+        clear_error();
+        *out_nnz = scl::kernel::sparse::inspect_filter_cols(src_indices, src_indptr, rows, col_mask);
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
+/// @brief Materialize CSR column filter
+int scl_materialize_filter_cols(
+    const scl::Real* src_data,
+    const scl::Index* src_indices,
+    const scl::Index* src_indptr,
+    scl::Index rows,
+    const uint8_t* col_mask,
+    const scl::Index* col_mapping,
+    scl::Real* dst_data,
+    scl::Index* dst_indices,
+    scl::Index* dst_indptr
+) {
+    try {
+        clear_error();
+        scl::kernel::sparse::materialize_filter_cols(
+            src_data, src_indices, src_indptr, rows, col_mask, col_mapping,
+            dst_data, dst_indices, dst_indptr
+        );
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
+/// @brief Align rows (with drop and pad)
+int scl_align_rows(
+    const scl::Real* src_data,
+    const scl::Index* src_indices,
+    const scl::Index* src_indptr,
+    scl::Index src_rows,
+    const scl::Index* old_to_new,
+    scl::Index new_rows,
+    scl::Real* dst_data,
+    scl::Index* dst_indices,
+    scl::Index* dst_indptr,
+    scl::Index* dst_row_lengths
+) {
+    try {
+        clear_error();
+        scl::kernel::sparse::align_rows(
+            src_data, src_indices, src_indptr, src_rows, old_to_new, new_rows,
+            dst_data, dst_indices, dst_indptr, dst_row_lengths
+        );
         return 0;
     } catch (const std::exception& e) {
         store_error(e);

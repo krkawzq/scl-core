@@ -83,6 +83,17 @@ set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(hwy)
 
+# --- 3.3 HDF5 (Optional, for native h5ad support) ---
+find_package(HDF5 COMPONENTS C CXX)
+if(HDF5_FOUND)
+    message(STATUS "HDF5 found: ${HDF5_VERSION}")
+    message(STATUS "HDF5 includes: ${HDF5_INCLUDE_DIRS}")
+    message(STATUS "HDF5 libraries: ${HDF5_LIBRARIES}")
+else()
+    message(WARNING "HDF5 not found. Native h5ad support will be disabled.")
+    message(WARNING "Install HDF5 development libraries to enable native h5ad I/O.")
+endif()
+
 # -----------------------------------------------------------------------------
 # 4. Threading Backend Logic
 # -----------------------------------------------------------------------------
@@ -160,6 +171,13 @@ macro(create_scl_backend target_name output_name precision_val)
         hwy       # Google Highway (Static)
         ${SCL_BACKEND_LIBS} # Threading Libs
     )
+    
+    # Link HDF5 if available
+    if(HDF5_FOUND)
+        target_include_directories(${target_name} PRIVATE ${HDF5_INCLUDE_DIRS})
+        target_link_libraries(${target_name} PRIVATE ${HDF5_LIBRARIES})
+        target_compile_definitions(${target_name} PRIVATE SCL_HAS_HDF5)
+    endif()
 
     # 6.5 Output Naming
     set_target_properties(${target_name} PROPERTIES 
@@ -167,10 +185,19 @@ macro(create_scl_backend target_name output_name precision_val)
         PREFIX "" 
     )
     
-    # 6.6 Installation
+    # 6.6 Output Directory (for both build and install)
+    # Build output: build/lib/ (for development)
+    # Install output: src/scl_core/libs/ (for package installation)
+    set_target_properties(${target_name} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    )
+    
+    # 6.7 Installation
+    # Install libraries to scl/libs/ (inside the Python package)
     install(TARGETS ${target_name} 
-        LIBRARY DESTINATION src/scl_core/libs
-        RUNTIME DESTINATION src/scl_core/libs
+        LIBRARY DESTINATION src/scl/libs
+        RUNTIME DESTINATION src/scl/libs
     )
 endmacro()
 
@@ -202,8 +229,10 @@ message(STATUS "  Build Type:      ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard:    ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Threading:       ${CHOSEN_BACKEND}")
 message(STATUS "  SIMD:            ${SCL_ONLY_SCALAR} (ONLY_SCALAR Mode)")
+message(STATUS "  HDF5:            ${HDF5_FOUND}")
 message(STATUS "  Targets:         scl_core_f32, scl_core_f64")
-message(STATUS "  Output Dir:      ${CMAKE_BINARY_DIR}")
+message(STATUS "  Output Dir:      ${CMAKE_BINARY_DIR}/lib")
+message(STATUS "  Install Dir:     src/scl/libs")
 message(STATUS "==========================================")
 message(STATUS "")
 

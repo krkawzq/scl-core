@@ -5,8 +5,9 @@ Maps Python/NumPy types to C types for ctypes bindings.
 """
 
 import ctypes
+import os
 import numpy as np
-from typing import Any
+from typing import Any, Optional
 
 __all__ = [
     'c_real', 'c_index', 'c_size', 'c_byte',
@@ -32,17 +33,25 @@ np_index = np.int64
 # Precision Detection
 # =============================================================================
 
-def detect_precision():
+def detect_precision(precision: Optional[str] = None):
     """
     Detect SCL library precision at runtime.
     
     Updates global c_real and np_real based on library configuration.
+    
+    Args:
+        precision: Optional precision to use ('f32' or 'f64').
+                   If None, uses default from get_lib().
     """
     global c_real, np_real
     
     from .lib_loader import get_lib
     
-    lib = get_lib()
+    # Determine which library to use
+    if precision is None:
+        precision = os.environ.get('SCL_PRECISION', 'f32')
+    
+    lib = get_lib(precision)
     lib.scl_precision_type.restype = ctypes.c_int
     precision_code = lib.scl_precision_type()
     
