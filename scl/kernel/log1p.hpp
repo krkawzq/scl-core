@@ -140,29 +140,29 @@ namespace detail {
 ///
 /// Transforms each element: x_i <- ln(1 + x_i)
 ///
-/// **Applicable to**:
+/// Applicable to:
 /// - Dense arrays (full data buffer)
 /// - Sparse matrix values (non-zero elements only)
 /// - Any contiguous memory region
 ///
-/// **Algorithm**:
+/// Algorithm:
 /// 1. Partition data into cache-friendly blocks (4KB each)
 /// 2. Process blocks in parallel across threads
 /// 3. Within each block:
 ///    - Vectorized loop using SIMD (Highway)
 ///    - Scalar tail for remaining elements
 ///
-/// **Preconditions**:
+/// Preconditions:
 /// - All elements must satisfy x_i > -1 (domain constraint)
 /// - For x_i <= -1, result is NaN or -Inf
 ///
-/// **Complexity**:
+/// Complexity:
 /// - Time: O(N / cores) with SIMD speedup
 /// - Space: O(1) - in-place transformation
 ///
 /// @param data Mutable span to transform [modified in-place]
 ///
-/// **Memory**: Zero heap allocation. Uses stack and thread-local storage only.
+/// Memory: Zero heap allocation. Uses stack and thread-local storage only.
 ///
 SCL_FORCE_INLINE void log1p_inplace(MutableSpan<Real> data) {
     using namespace detail;
@@ -242,7 +242,7 @@ SCL_FORCE_INLINE void log1p(
 /// - After CPM: log2(CPM + 1)
 /// - After TPM: log2(TPM + 1)
 ///
-/// **Formula**: log2(1 + x) = ln(1 + x) / ln(2)
+/// Formula: log2(1 + x) = ln(1 + x) / ln(2)
 ///
 /// @param data Mutable span to transform [modified in-place]
 ///
@@ -319,9 +319,9 @@ SCL_FORCE_INLINE void log2p1(
 ///
 /// Used to reverse log-transformation while maintaining numerical stability:
 ///
-/// **Property**: expm1(log1p(x)) ≈ x for all valid x
+/// Property: expm1(log1p(x)) ≈ x for all valid x
 ///
-/// **Use Case**: De-normalization after log-space computation.
+/// Use Case: De-normalization after log-space computation.
 ///
 /// @param data Mutable span to transform [modified in-place]
 ///

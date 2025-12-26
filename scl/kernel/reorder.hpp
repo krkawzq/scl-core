@@ -18,38 +18,38 @@
 ///
 /// Key Concepts:
 ///
-/// 1. **Indptr Invariant**: We never modify `indptr` (row capacity fixed).
-/// 2. **In-Place Remap**: We modify `indices` and `data` arrays directly.
-/// 3. **Gap Handling**: For filtering, we shift valid data to the front of the
+/// 1. Indptr Invariant: We never modify indptr (row capacity fixed).
+/// 2. In-Place Remap: We modify indices and data arrays directly.
+/// 3. Gap Handling: For filtering, we shift valid data to the front of the
 ///    row slot. The rest becomes garbage (ignored via explicit lengths).
-/// 4. **Explicit Lengths**: We output `new_row_lengths` array to track valid
-///    data size, which `VirtualCSR` uses to ignore garbage tails.
+/// 4. Explicit Lengths: We output new_row_lengths array to track valid
+///    data size, which VirtualCSR uses to ignore garbage tails.
 ///
 /// Design Philosophy:
 ///
 /// Four Scenarios Handled:
 ///
-/// 1. **One-to-One Permutation**: Bijective mapping (no drop, no pad)
+/// 1. One-to-One Permutation: Bijective mapping (no drop, no pad)
 ///    - Algorithm: Remap + Sort
 ///    - Performance: Zero allocation, fastest path
 ///
-/// 2. **General Alignment**: Drop + Pad + Remap
+/// 2. General Alignment: Drop + Pad + Remap
 ///    - Algorithm: Two-pointer filter + Sort + Explicit lengths
 ///    - Memory: O(rows) length array only
 ///
-/// 3. **Physical Compaction**: Remove memory gaps (optional)
+/// 3. Physical Compaction: Remove memory gaps (optional)
 ///    - Algorithm: Prefix sum + Parallel scatter copy
 ///    - Use: Serialization, long-term storage
 ///
-/// 4. **Map Building**: Construct alignment from labels
+/// 4. Map Building: Construct alignment from labels
 ///    - Algorithm: Hash-based lookup
 ///
 /// Use Cases:
 ///
-/// - **Gene Alignment**: Align single-cell datasets to reference gene sets
-/// - **Column Reordering**: Permute features while maintaining sparsity
-/// - **Filtering**: Remove unwanted features without reallocation
-/// - **Integration**: Prepare datasets for batch effect correction
+/// - Gene Alignment: Align single-cell datasets to reference gene sets
+/// - Column Reordering: Permute features while maintaining sparsity
+/// - Filtering: Remove unwanted features without reallocation
+/// - Integration: Prepare datasets for batch effect correction
 ///
 /// Performance:
 ///
@@ -238,9 +238,9 @@ void permute_rows(
 /// @brief General Alignment: Filter, Remap, and Shift.
 ///
 /// Aligns dataset to reference gene set with:
-/// - **Drop**: `map[old] == -1` removes the element
-/// - **Pad 0**: `map[old] = K > old_cols` extends dimension (sparse, no physical 0s)
-/// - **Remap**: `map[old] = j` where `0 <= j < new_cols`
+/// - Drop: map[old] == -1 removes the element
+/// - Pad 0: map[old] = K > old_cols extends dimension (sparse, no physical 0s)
+/// - Remap: map[old] = j where 0 <= j < new_cols
 ///
 /// Algorithm:
 /// 1. Filter & Remap: Two-pointer scan, keep valid entries (O(NNZ))
@@ -346,9 +346,9 @@ void align_cols(
 /// @brief General Alignment for CSC: Filter, Remap, and Shift rows.
 ///
 /// Aligns dataset row indices to reference with:
-/// - **Drop**: `map[old] == -1` removes the element
-/// - **Pad 0**: `map[old] = K > old_rows` extends dimension (sparse, no physical 0s)
-/// - **Remap**: `map[old] = i` where `0 <= i < new_rows`
+/// - Drop: map[old] == -1 removes the element
+/// - Pad 0: map[old] = K > old_rows extends dimension (sparse, no physical 0s)
+/// - Remap: map[old] = i where 0 <= i < new_rows
 ///
 /// Algorithm:
 /// 1. Filter & Remap: Two-pointer scan, keep valid entries (O(NNZ))

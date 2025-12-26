@@ -18,7 +18,7 @@
 ///
 /// Design Philosophy:
 ///
-/// **Virtual-Only**: This module ONLY works with VirtualCSR/VirtualCSC.
+/// Virtual-Only: This module ONLY works with VirtualCSR/VirtualCSC.
 /// We do NOT physically copy data. Instead, we construct new indirection maps.
 ///
 /// Key Insight:
@@ -28,9 +28,9 @@
 ///
 /// Use Cases:
 ///
-/// - **Batch Integration**: Merge aligned datasets (Dataset A + Dataset B)
-/// - **Cross-Validation**: Combine train/test splits
-/// - **Incremental Loading**: Progressively merge data batches
+/// - Batch Integration: Merge aligned datasets (Dataset A + Dataset B)
+/// - Cross-Validation: Combine train/test splits
+/// - Incremental Loading: Progressively merge data batches
 ///
 /// Performance:
 ///

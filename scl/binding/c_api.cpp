@@ -5,20 +5,18 @@
 /// Provides C-compatible function exports for Python/Julia/R bindings.
 ///
 /// Design Principles:
-/// 1. **C Linkage**: All functions use extern "C"
-/// 2. **POD Arguments**: Only plain C types (pointers, integers, floats)
-/// 3. **Error Codes**: Return 0 on success, error code on failure
-/// 4. **Thread-Safe**: Error messages stored in thread-local storage
-/// 5. **Zero-Copy**: No memory allocations, all arrays pre-allocated by caller
+/// 1. C Linkage: All functions use extern "C"
+/// 2. POD Arguments: Only plain C types (pointers, integers, floats)
+/// 3. Error Codes: Return 0 on success, error code on failure
+/// 4. Thread-Safe: Error messages stored in thread-local storage
+/// 5. Zero-Copy: No memory allocations, all arrays pre-allocated by caller
 ///
 /// Error Handling Pattern:
-/// ```c
 /// int status = scl_function(...);
 /// if (status != 0) {
 ///     const char* error = scl_get_last_error();
 ///     // Handle error
 /// }
-/// ```
 // =============================================================================
 
 #include "scl/kernel/sparse.hpp"
@@ -39,6 +37,7 @@
 #include "scl/kernel/reorder.hpp"
 #include "scl/kernel/merge.hpp"
 #include "scl/kernel/spatial.hpp"
+#include "scl/core/lifetime.hpp"
 #include "scl/version.hpp"
 
 #include <cstring>
@@ -1195,5 +1194,113 @@ scl::Size scl_alignment() {
     return 64;  // AVX-512 compatible
 }
 
+// =============================================================================
+// Memory Management API (Using lifetime.hpp)
+// =============================================================================
+
+/// @brief Allocate uninitialized memory (standard malloc)
+/// @param bytes Size in bytes
+/// @param[out] out_ptr Pointer to allocated memory
+/// @return 0 on success, -1 on failure
+int scl_malloc(scl::Size bytes, void** out_ptr) {
+    try {
+        clear_error();
+        if (!out_ptr) {
+            throw scl::ValueError("scl_malloc: out_ptr is null");
+        }
+        auto handle = scl::core::mem::alloc(bytes);
+        *out_ptr = handle.release();
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
+/// @brief Allocate zero-initialized memory (calloc)
+/// @param bytes Size in bytes
+/// @param[out] out_ptr Pointer to allocated memory
+/// @return 0 on success, -1 on failure
+int scl_calloc(scl::Size bytes, void** out_ptr) {
+    try {
+        clear_error();
+        if (!out_ptr) {
+            throw scl::ValueError("scl_calloc: out_ptr is null");
+        }
+        auto handle = scl::core::mem::alloc_zero(bytes);
+        *out_ptr = handle.release();
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
+/// @brief Allocate aligned memory for SIMD
+/// @param bytes Size in bytes
+/// @param alignment Alignment requirement (must be power of 2)
+/// @param[out] out_ptr Pointer to allocated memory
+/// @return 0 on success, -1 on failure
+int scl_malloc_aligned(scl::Size bytes, scl::Size alignment, void** out_ptr) {
+    try {
+        clear_error();
+        if (!out_ptr) {
+            throw scl::ValueError("scl_malloc_aligned: out_ptr is null");
+        }
+        auto handle = scl::core::mem::alloc_aligned(bytes, alignment);
+        *out_ptr = handle.release();
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
+/// @brief Free memory allocated by scl_malloc/scl_calloc
+/// @param ptr Pointer to free
+void scl_free(void* ptr) {
+    if (ptr) std::free(ptr);
+}
+
+/// @brief Free aligned memory allocated by scl_malloc_aligned
+/// @param ptr Pointer to free
+void scl_free_aligned(void* ptr) {
+    if (!ptr) return;
+#if defined(_MSC_VER)
+    _aligned_free(ptr);
+#else
+    std::free(ptr);
+#endif
+}
+
+/// @brief Zero out memory block
+/// @param ptr Memory pointer
+/// @param bytes Size in bytes
+void scl_memzero(void* ptr, scl::Size bytes) {
+    if (ptr && bytes > 0) {
+        std::memset(ptr, 0, bytes);
+    }
+}
+
+/// @brief Copy memory block
+/// @param src Source pointer
+/// @param dst Destination pointer
+/// @param bytes Size in bytes
+/// @return 0 on success, -1 on failure
+int scl_memcpy(const void* src, void* dst, scl::Size bytes) {
+    try {
+        clear_error();
+        if (!src || !dst) {
+            throw scl::ValueError("scl_memcpy: null pointer");
+        }
+        std::memcpy(dst, src, bytes);
+        return 0;
+    } catch (const std::exception& e) {
+        store_error(e);
+        return -1;
+    }
+}
+
 } // extern "C"
+
 

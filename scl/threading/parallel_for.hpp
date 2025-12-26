@@ -32,24 +32,20 @@ namespace scl::threading {
 /// The thread count and pool lifecycle are managed by `scl::threading::Scheduler`.
 ///
 /// Backends:
-/// - **OpenMP**: Uses `#pragma omp parallel for`.
-/// - **TBB**: Uses `tbb::parallel_for` (Work-stealing).
-/// - **BS::thread_pool**: Uses `detach_loop` on the global singleton pool.
-/// - **Serial**: Fallback to simple `for` loop.
+/// - OpenMP: Uses #pragma omp parallel for.
+/// - TBB: Uses tbb::parallel_for (Work-stealing).
+/// - BS::thread_pool: Uses detach_loop on the global singleton pool.
+/// - Serial: Fallback to simple for loop.
 ///
 /// Usage:
-/// ```cpp
 /// scl::threading::parallel_for(0, size, [&](size_t i) {
 ///     data[i] = do_work(i);
 /// });
-/// ```
 ///
 /// @tparam Func Function object type, signature: `void(size_t index)`
 /// @param start Start index (inclusive)
 /// @param end   End index (exclusive)
 /// @param func  The kernel function to execute
-/// 
-/// [Owner: Human] - Infrastructure code.
 template <typename Func>
 SCL_FORCE_INLINE void parallel_for(size_t start, size_t end, Func&& func) {
     // Fast path: Branch prediction hint optimized for non-empty ranges

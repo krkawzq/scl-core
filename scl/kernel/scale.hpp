@@ -111,7 +111,7 @@ SCL_FORCE_INLINE void standardize_dense(
 
 /// @brief Standardize CSC matrix columns in-place (Generic CSC-like matrices).
 ///
-/// **Note**: This modifies ONLY the stored non-zero elements.
+/// Note: This modifies ONLY the stored non-zero elements.
 /// If `zero_center=true`, this operation is mathematically approximate 
 /// for sparse matrices (implicit zeros are not updated), 
 /// which is standard behavior in Scanpy/Seurat to maintain sparsity.
@@ -192,7 +192,7 @@ SCL_FORCE_INLINE void standardize_csc(
 
 /// @brief Standardize CSR matrix columns in-place (Generic CSR-like matrices).
 ///
-/// **Performance Warning**: Row-wise iteration accessing column statistics (means/stds)
+/// Performance Warning: Row-wise iteration accessing column statistics (means/stds)
 /// causes random memory access (gather) on the stats arrays. 
 /// Less efficient than CSC or Dense.
 ///

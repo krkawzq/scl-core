@@ -17,21 +17,21 @@
 /// @brief High-Performance Sparse Softmax Kernel
 ///
 /// Implements Sparse-to-Dense Softmax transformation:
-/// $\sigma(z)_i = \frac{e^{z_i}}{\sum e^{z_j}}$
+/// sigma(z)_i = e^(z_i) / sum(e^(z_j))
 ///
-/// ## Optimization Strategy: "Chunked Reuse & Fused Fill-Scatter"
+/// Optimization Strategy: "Chunked Reuse & Fused Fill-Scatter"
 ///
-/// 1. **Chunked Parallelism**: Processes rows in blocks (e.g., 32 rows/task).
-///    - **Benefit**: Amortizes thread scheduling overhead (~100ns) over many rows.
-///    - **Benefit**: Allows `std::vector` workspace reuse (Zero-alloc hot path).
+/// 1. Chunked Parallelism: Processes rows in blocks (e.g., 32 rows/task).
+///    - Benefit: Amortizes thread scheduling overhead (~100ns) over many rows.
+///    - Benefit: Allows std::vector workspace reuse (Zero-alloc hot path).
 ///
-/// 2. **Cached Exp**: Caches $e^{x_i - max}$ to avoid expensive re-computation.
+/// 2. Cached Exp: Caches e^(x_i - max) to avoid expensive re-computation.
 ///
-/// 3. **Memory Saturation**:
-///    - **Background**: 4-way unrolled SIMD Stream Stores (Non-Temporal) to fill 0s.
-///    - **Explicit**: 8-way batched scatter with SW Prefetching.
+/// 3. Memory Saturation:
+///    - Background: 4-way unrolled SIMD Stream Stores (Non-Temporal) to fill 0s.
+///    - Explicit: 8-way batched scatter with SW Prefetching.
 ///
-/// **Performance**: ~2.0 GB/s output throughput (Memory Bandwidth Bound).
+/// Performance: ~2.0 GB/s output throughput (Memory Bandwidth Bound).
 // =============================================================================
 
 namespace scl::kernel::softmax {

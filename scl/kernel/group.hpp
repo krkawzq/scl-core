@@ -17,7 +17,7 @@
 /// Optimized for CSC layout where each thread processes one column (gene).
 ///
 /// @section Layout
-/// Output buffers are assumed to be flattened in **Column-Major-Group** order:
+/// Output buffers are assumed to be flattened in Column-Major-Group order:
 /// Index = `col_idx * n_groups + group_idx`.
 /// This ensures thread locality when parallelizing over columns.
 // =============================================================================

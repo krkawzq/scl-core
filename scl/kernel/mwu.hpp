@@ -21,23 +21,23 @@
 ///
 /// Optimization Strategy:
 ///
-/// 1. **Split-Sort-Merge** (vs Pool-and-Sort):
+/// 1. Split-Sort-Merge (vs Pool-and-Sort):
 ///    - Separately extract Group 0 and Group 1 non-zero values
 ///    - Sort each group independently: O(n1 log n1) + O(n2 log n2)
 ///    - Linear merge to compute rank sum: O(n1 + n2)
 ///    - Total: O(n log n) but with MUCH better cache locality
 ///
-/// 2. **Implicit Zero Handling** (Critical for Sparse Data):
+/// 2. Implicit Zero Handling (Critical for Sparse Data):
 ///    - Single-cell data is 90%+ zeros
 ///    - Instead of explicitly filling zeros, handle as single tie block
 ///    - Segments: [Negatives] -> [Zeros (implicit)] -> [Positives]
 ///    - Speedup: 10-100x for highly sparse data
 ///
-/// 3. **Thread-Local Workspaces**:
+/// 3. Thread-Local Workspaces:
 ///    - Pre-allocate buffers per thread
 ///    - Avoid malloc/realloc in hot loop
 ///
-/// 4. **VQSort Integration**:
+/// 4. VQSort Integration:
 ///    - Use Highway's vectorized sort (10-20x faster than std::sort)
 ///
 /// Performance:
@@ -441,7 +441,7 @@ SCL_FORCE_INLINE void mwu_test_impl(
 
 /// @brief Mann-Whitney U test for each gene (CSC version).
 ///
-/// **Optimized for sparse single-cell data**.
+/// Optimized for sparse single-cell data.
 ///
 /// @tparam MatrixT Any CSC-like matrix type
 /// @param matrix Input CSC matrix (cells x genes)
@@ -474,7 +474,7 @@ void mwu_test(
 
 /// @brief Mann-Whitney U test for each sample (CSR version).
 ///
-/// **Optimized for sparse data**.
+/// Optimized for sparse data.
 ///
 /// @tparam MatrixT Any CSR-like matrix type
 /// @param matrix Input CSR matrix (samples x features)

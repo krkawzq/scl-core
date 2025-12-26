@@ -13,7 +13,7 @@
 /// algorithm implementation (like Leiden, Pagerank, Diffusion) more readable.
 ///
 /// @section Storage
-/// - **CSRGraph**: Directed/Undirected graph stored as Compressed Sparse Row.
+/// - CSRGraph: Directed/Undirected graph stored as Compressed Sparse Row.
 ///   - Row `i` corresponds to Node `i`.
 ///   - Column indices in Row `i` are the neighbors of Node `i`.
 ///   - Values in Row `i` are the edge weights.
@@ -103,10 +103,10 @@ using WeightedGraph = CSRGraph<Real>;
 
 /// @brief Compatibility Unweighted Graph (Real weights fixed to 1.0).
 ///
-/// **Why Real?**
+/// Why Real?
 /// Although logically boolean, most standard libraries (Scanpy, Seurat, Scipy)
-/// store connectivity matrices as `float32/64` to support direct matrix multiplication.
-/// To maintain **Zero-Copy** layout compatibility with `adata.obsp['connectivities']`,
+/// store connectivity matrices as float32/64 to support direct matrix multiplication.
+/// To maintain Zero-Copy layout compatibility with adata.obsp['connectivities'],
 /// we must use the same type as the storage (Real).
 using UnweightedGraph = CSRGraph<Real>;
 

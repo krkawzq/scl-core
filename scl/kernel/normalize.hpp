@@ -256,7 +256,7 @@ SCL_FORCE_INLINE void scale_cols(
 /// @param max_fraction Threshold (e.g., 0.05 for 5%).
 /// @param out_mask Output boolean mask (Byte array) of size n_cols. 
 ///                 1 if highly expressed, 0 otherwise.
-///                 **Note**: Use uint8_t/Byte instead of bool to avoid bit-vector races.
+///                 Note: Use uint8_t/Byte instead of bool to avoid bit-vector races.
 template <CSRLike MatrixT>
 SCL_FORCE_INLINE void detect_highly_expressed_genes(
     const MatrixT& matrix,
@@ -328,7 +328,7 @@ SCL_FORCE_INLINE void col_sums_masked(
 
 /// @brief Compute median of a dataset.
 ///
-/// **Requires** a temporary buffer to sort.
+/// Requires a temporary buffer to sort.
 /// This is typically used to find the default `target_sum`.
 ///
 /// @param data Input data.

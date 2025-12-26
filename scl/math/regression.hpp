@@ -18,15 +18,15 @@
 /// This module provides optimized implementations of polynomial regression
 /// and locally weighted scatterplot smoothing (LOESS) for real-time analysis.
 ///
-/// ## Performance Features
-/// 1. **SIMD Accumulation**: Vectorized normal equation construction
-/// 2. **Register-Level Solver**: 3×3 linear systems solved in CPU registers
-/// 3. **Zero Heap Allocation**: All computations use stack or external buffers
-/// 4. **Template Unrolling**: Compile-time optimization for small matrices
+/// Performance Features:
+/// 1. SIMD Accumulation: Vectorized normal equation construction
+/// 2. Register-Level Solver: 3x3 linear systems solved in CPU registers
+/// 3. Zero Heap Allocation: All computations use stack or external buffers
+/// 4. Template Unrolling: Compile-time optimization for small matrices
 ///
-/// ## Mathematical Background
+/// Mathematical Background:
 /// 
-/// ### Polynomial Regression
+/// Polynomial Regression:
 /// Given data points (x_i, y_i) with optional weights w_i, fit:
 /// f(x) = sum from j=0 to d of c_j * x^j
 ///
@@ -35,7 +35,7 @@
 ///
 /// where X is the Vandermonde matrix and W = diag(w_i).
 ///
-/// ### LOESS (Locally Estimated Scatterplot Smoothing)
+/// LOESS (Locally Estimated Scatterplot Smoothing):
 /// For each point x_0, fit a local polynomial using tricube weights:
 /// w(d) = (1 - |d|^3)^3 if |d| < 1, else 0
 ///
@@ -48,7 +48,6 @@ namespace scl::math::regression {
 
 // =============================================================================
 // Internal Helpers: Tiny Linear Algebra (Register Level)
-// [Owner: Human]
 // =============================================================================
 
 namespace detail {
@@ -58,20 +57,16 @@ namespace detail {
     /// Uses analytical inverse formula (cofactor expansion) optimized for 
     /// regression matrices. Faster than Cholesky for small N and avoids sqrt.
     ///
-    /// **Matrix Storage**: Symmetric matrix stored as 6-element flat array:
-    /// ```
+    /// Matrix Storage: Symmetric matrix stored as 6-element flat array:
     /// A = [ a00  a01  a02 ]     Storage: [a00, a01, a02, a11, a12, a22]
     ///     [ a01  a11  a12 ]              [ 0    1    2    3    4    5  ]
     ///     [ a02  a12  a22 ]
-    /// ```
     ///
-    /// **Complexity**: O(1) - exactly 27 multiplies, 17 additions
+    /// Complexity: O(1) - exactly 27 multiplies, 17 additions
     ///
     /// @param A_sym Symmetric matrix elements [a00, a01, a02, a11, a12, a22]
     /// @param b Right-hand side vector [b0, b1, b2]
     /// @param x Output solution vector [x0, x1, x2]
-    ///
-    /// [Owner: Human]
     SCL_FORCE_INLINE void solve_sym_3x3_static(
         const Real* A_sym, // Size 6
         const Real* b,     // Size 3
@@ -122,14 +117,12 @@ namespace detail {
     /// Performs in-place LU decomposition without pivoting. Suitable for 
     /// well-conditioned matrices from regression problems with N > 3.
     ///
-    /// **Warning**: Pivot-free implementation. May fail for ill-conditioned systems.
+    /// Warning: Pivot-free implementation. May fail for ill-conditioned systems.
     ///
     /// @tparam N System dimension (must be known at compile time)
     /// @param A Coefficient matrix (modified in-place)
     /// @param b Right-hand side (modified in-place)
     /// @param x Output solution vector
-    ///
-    /// [Owner: AI]
     template <int N>
     SCL_FORCE_INLINE void solve_linear_system_generic(
         std::array<std::array<Real, N>, N>& A,
@@ -164,14 +157,12 @@ namespace detail {
     /// Computes p(x) = c_0 + c_1*x + c_2*x^2 + ... + c_{N-1}*x^{N-1}
     /// with optimal O(N) operations and minimal rounding error.
     ///
-    /// **Algorithm**: p(x) = c_0 + x*(c_1 + x*(c_2 + ...))
+    /// Algorithm: p(x) = c_0 + x*(c_1 + x*(c_2 + ...))
     ///
     /// @tparam N Number of coefficients (polynomial degree + 1)
     /// @param coeffs Polynomial coefficients [c0, c1, ..., c_{N-1}]
     /// @param x Evaluation point
     /// @return p(x)
-    ///
-    /// [Owner: AI]
     template <int N>
     SCL_FORCE_INLINE Real poly_eval(const Real* coeffs, Real x) {
         Real res = coeffs[N - 1];
@@ -191,8 +182,6 @@ namespace detail {
     ///
     /// @param dist Normalized distance in [0, ∞)
     /// @return Weight in [0, 1]
-    ///
-    /// [Owner: Human]
     SCL_FORCE_INLINE Real tricube_weight(Real dist) {
         Real a = std::abs(dist);
         if (a >= 1.0) return 0.0;
@@ -204,33 +193,28 @@ namespace detail {
 
 // =============================================================================
 // 1. Polynomial Regression (SIMD Optimized)
-// [Owner: Human]
 // =============================================================================
 
 /// @brief Accumulates weighted normal equation terms for degree-2 polynomial.
 ///
 /// Computes all unique elements of X^T*W*X and X^T*W*y in a single SIMD pass.
 ///
-/// **Output Layout** (8 elements):
-/// - `sums[0..4]`: sum(w_i), sum(w_i*x_i), sum(w_i*x_i^2), sum(w_i*x_i^3), sum(w_i*x_i^4)
-/// - `sums[5..7]`: sum(w_i*y_i), sum(w_i*x_i*y_i), sum(w_i*x_i^2*y_i)
+/// Output Layout (8 elements):
+/// - sums[0..4]: sum(w_i), sum(w_i*x_i), sum(w_i*x_i^2), sum(w_i*x_i^3), sum(w_i*x_i^4)
+/// - sums[5..7]: sum(w_i*y_i), sum(w_i*x_i*y_i), sum(w_i*x_i^2*y_i)
 ///
-/// **Matrix Construction**:
-/// ```
+/// Matrix Construction:
 /// LHS (Symmetric):          RHS:
 /// [ s0  s1  s2 ]           [ s5 ]
 /// [ s1  s2  s3 ]           [ s6 ]
 /// [ s2  s3  s4 ]           [ s7 ]
-/// ```
 ///
 /// @param x Input X coordinates
 /// @param y Input Y coordinates
 /// @param w Optional weights (empty span = uniform weights)
 /// @param sums Output buffer [8 elements, caller-allocated]
 ///
-/// **Performance**: ~0.5 cycles/element on modern x86 (AVX2)
-///
-/// [Owner: Human]
+/// Performance: ~0.5 cycles/element on modern x86 (AVX2)
 SCL_FORCE_INLINE void accumulate_matrices_deg2_simd(
     Span<const Real> x,
     Span<const Real> y,
@@ -320,12 +304,12 @@ SCL_FORCE_INLINE void accumulate_matrices_deg2_simd(
 /// Fits a polynomial f(x) = sum from j=0 to d of c_j*x^j to data using weighted
 /// least squares. Specialized fast path for DEGREE=2 (quadratic regression).
 ///
-/// **Algorithm**:
+/// Algorithm:
 /// 1. Construct normal equations via SIMD accumulation
 /// 2. Solve using register-level 3×3 solver
 /// 3. Evaluate fitted values in parallel
 ///
-/// **Complexity**: O(N) construction + O(1) solve + O(N/cores) evaluation
+/// Complexity: O(N) construction + O(1) solve + O(N/cores) evaluation
 ///
 /// @tparam DEGREE Polynomial degree (optimized for 2, others use fallback)
 /// @param x Input X coordinates
@@ -334,9 +318,8 @@ SCL_FORCE_INLINE void accumulate_matrices_deg2_simd(
 /// @param fitted Output fitted values [must be pre-allocated, size = x.size]
 /// @param coeffs Output coefficients [must be pre-allocated, size ≥ DEGREE+1]
 ///
-/// **Memory**: Zero heap allocation. All buffers provided by caller.
+/// Memory: Zero heap allocation. All buffers provided by caller.
 ///
-/// [Owner: Human]
 template <int DEGREE = 2>
 void poly_fit(
     Span<const Real> x,
@@ -386,7 +369,6 @@ void poly_fit(
 
 // =============================================================================
 // 2. LOESS (Locally Weighted Scatterplot Smoothing)
-// [Owner: Human]
 // =============================================================================
 
 namespace detail {
@@ -396,7 +378,7 @@ namespace detail {
     /// Unlike global regression, LOESS weights depend on distance to the
     /// target point, computed on-the-fly using tricube kernel.
     ///
-    /// **Distance Weighting**:
+    /// Distance Weighting:
     /// w_i = (1 - |(x_i - x_0)/r|^3)^3 if |x_i - x_0| < r, else 0
     ///
     /// where r = max_dist is the neighborhood radius.
@@ -406,8 +388,6 @@ namespace detail {
     /// @param target_x Center point x_0
     /// @param max_dist Neighborhood radius r
     /// @param sums Output accumulator [8 elements]
-    ///
-    /// [Owner: Human]
     SCL_FORCE_INLINE void accumulate_loess_window_simd(
         Span<const Real> x,
         Span<const Real> y,
@@ -515,20 +495,20 @@ namespace detail {
 /// Fits a local polynomial to data around each point using distance-weighted
 /// regression with tricube kernel. Produces smooth, non-parametric curves.
 ///
-/// **Algorithm**: For each point x_i:
+/// Algorithm: For each point x_i:
 /// 1. Find k nearest neighbors (sliding window search on sorted X)
 /// 2. Compute local weights via tricube kernel
 /// 3. Solve weighted regression in local window
 /// 4. Evaluate fitted value at x_i
 ///
-/// **Precondition**: Input `x` **MUST** be sorted in ascending order.
+/// Precondition: Input x MUST be sorted in ascending order.
 /// Violating this precondition results in undefined behavior.
 ///
-/// **Complexity**: 
+/// Complexity: 
 /// - Time: O(N * K) where K = ceil(span * N)
 /// - Space: O(1) per thread (zero heap allocation)
 ///
-/// **Parallelization**: Each target point computed independently across threads.
+/// Parallelization: Each target point computed independently across threads.
 ///
 /// @tparam DEGREE Local polynomial degree (optimized for 2)
 /// @param x Input X coordinates [MUST BE SORTED]
@@ -536,9 +516,7 @@ namespace detail {
 /// @param fitted Output smoothed values [must be pre-allocated]
 /// @param span Neighborhood fraction ∈ (0, 1], default 0.3
 ///
-/// **Memory**: Zero heap allocation. Parallelized via scl::threading.
-///
-/// [Owner: Human]
+/// Memory: Zero heap allocation. Parallelized via scl::threading.
 template <int DEGREE = 2>
 void loess(
     Span<const Real> x,

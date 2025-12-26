@@ -19,15 +19,15 @@
 ///
 /// Core Functions:
 ///
-/// 1. **count_active_nnz**: Parallel computation of true NNZ in virtual matrices
-/// 2. **compact_copy**: Materialize virtual views to standard matrices
+/// 1. count_active_nnz: Parallel computation of true NNZ in virtual matrices
+/// 2. compact_copy: Materialize virtual views to standard matrices
 ///
 /// Design Philosophy:
 ///
-/// - **Separation of Concerns**: User allocates memory, we fill it
-/// - **Maximum Performance**: SIMD + parallel reduction
-/// - **Type Safety**: Works with any matrix type via concepts
-/// - **Zero State**: Pure functions, thread-safe
+/// - Separation of Concerns: User allocates memory, we fill it
+/// - Maximum Performance: SIMD + parallel reduction
+/// - Type Safety: Works with any matrix type via concepts
+/// - Zero State: Pure functions, thread-safe
 ///
 /// Typical Workflow:
 ///

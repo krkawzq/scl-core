@@ -14,7 +14,7 @@
 ///
 /// Computes Gram matrix G = A^T A (CSC) or G = A A^T (CSR).
 ///
-/// **Fully Generic**: Works with ANY matrix type (Standard, Virtual, Future).
+/// Fully Generic: Works with ANY matrix type (Standard, Virtual, Future).
 /// Requirements: Matrix must provide row_values/row_indices OR col_values/col_indices.
 ///
 /// Algorithm:
@@ -140,11 +140,11 @@ SCL_FORCE_INLINE T dot_product(
 
 /// @brief Compute Gram matrix for ANY sparse matrix type.
 ///
-/// **Compile-time dispatch** based on matrix Tag:
+/// Compile-time dispatch based on matrix Tag:
 /// - TagCSR: Computes G = A × A^T (sample similarity)
 /// - TagCSC: Computes G = A^T × A (feature correlation)
 ///
-/// **Zero overhead**: All abstractions inline to direct pointer arithmetic.
+/// Zero overhead: All abstractions inline to direct pointer arithmetic.
 ///
 /// @tparam MatrixT Any CSR-like or CSC-like matrix type
 /// @param matrix Input sparse matrix

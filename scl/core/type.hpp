@@ -19,10 +19,10 @@
 /// @section Design Philosophy
 ///
 /// The type system follows these principles:
-/// 1. **Zero Overhead**: All types are zero-cost abstractions (no vtables, no RTTI).
-/// 2. **Compile-Time Selection**: Precision chosen via CMake, not runtime checks.
-/// 3. **C-ABI Compatible**: All types can be safely passed across language boundaries.
-/// 4. **NumPy Aligned**: Type sizes and semantics match Python/NumPy conventions.
+/// 1. Zero Overhead: All types are zero-cost abstractions (no vtables, no RTTI).
+/// 2. Compile-Time Selection: Precision chosen via CMake, not runtime checks.
+/// 3. C-ABI Compatible: All types can be safely passed across language boundaries.
+/// 4. NumPy Aligned: Type sizes and semantics match Python/NumPy conventions.
 ///
 /// @section Precision Selection
 ///
@@ -41,8 +41,6 @@ namespace scl {
 
 /// @defgroup Types Core Type Definitions
 /// @{
-
-// [Owner: AI]
 // Precision-dependent type selection using preprocessor branches.
 // The config.hpp ensures exactly one SCL_USE_FLOAT* macro is defined.
 
@@ -126,11 +124,11 @@ namespace scl {
 
 /// @brief Unified index type for array addressing and loop counters
 ///
-/// **Design rationale**: We use `int64_t` (not `size_t`) because:
-/// 1. **NumPy Compatibility**: NumPy defaults to int64 for indexing.
-/// 2. **Large Dataset Support**: Biological datasets can exceed 2^31 cells.
-/// 3. **Signed Arithmetic**: Allows negative indices (e.g., Python-style [-1]).
-/// 4. **Cross-Platform Consistency**: `size_t` varies (32-bit on some platforms).
+/// Design rationale: We use int64_t (not size_t) because:
+/// 1. NumPy Compatibility: NumPy defaults to int64 for indexing.
+/// 2. Large Dataset Support: Biological datasets can exceed 2^31 cells.
+/// 3. Signed Arithmetic: Allows negative indices (e.g., Python-style [-1]).
+/// 4. Cross-Platform Consistency: size_t varies (32-bit on some platforms).
 ///
 /// @note For pointer arithmetic, use `Size` instead.
 using Index = std::int64_t;
@@ -159,17 +157,17 @@ using Byte = std::uint8_t;
 
 /// @brief Lightweight, non-owning view of a contiguous memory array
 ///
-/// **Purpose**: Replaces `std::vector<T>` in function signatures to:
+/// Purpose: Replaces std::vector<T> in function signatures to:
 /// 1. Avoid heap allocation overhead.
 /// 2. Enable C-ABI compatibility (no STL mangling).
 /// 3. Work seamlessly with NumPy arrays from Python.
 ///
-/// **Memory Model**: 
+/// Memory Model: 
 /// - Does NOT own the data (no destructor, no allocation).
 /// - Simply wraps a raw pointer + size.
 /// - Size: 16 bytes (pointer + size_t) on 64-bit systems.
 ///
-/// **Usage Example**:
+/// Usage Example:
 /// @code{.cpp}
 /// void process(Span<const Real> input, MutableSpan<Real> output) {
 ///     for (Index i = 0; i < input.size; ++i) {
@@ -179,8 +177,6 @@ using Byte = std::uint8_t;
 /// @endcode
 ///
 /// @tparam T Element type (typically `Real`, `const Real`, or `Index`)
-///
-/// [Owner: AI]
 template <typename T>
 struct Span {
     T* ptr;      ///< Pointer to the first element

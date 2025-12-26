@@ -15,17 +15,17 @@
 ///
 /// Provides primitives for memory allocation, initialization, and movement.
 ///
-/// ## Module Sections
-/// 1. **Aligned Allocation**: Cache-aligned memory allocation for SIMD
-/// 2. **Initialization**: Fill and zero operations
-/// 3. **Data Movement**: Copy operations with various safety/performance tradeoffs
+/// Module Sections:
+/// 1. Aligned Allocation: Cache-aligned memory allocation for SIMD
+/// 2. Initialization: Fill and zero operations
+/// 3. Data Movement: Copy operations with various safety/performance tradeoffs
 ///
-/// ## Safety Levels
-/// - **Safe**: Handles overlaps (`memmove`), checks bounds in Debug
-/// - **Fast**: Assumes NO overlap (`memcpy`), Undefined Behavior if violated
-/// - **Stream**: Bypasses cache (Non-temporal), Assumes NO overlap
+/// Safety Levels:
+/// - Safe: Handles overlaps (memmove), checks bounds in Debug
+/// - Fast: Assumes NO overlap (memcpy), Undefined Behavior if violated
+/// - Stream: Bypasses cache (Non-temporal), Assumes NO overlap
 ///
-/// ## Alignment Requirements
+/// Alignment Requirements:
 /// For optimal SIMD performance, allocate buffers with 64-byte alignment
 /// (matches AVX-512 cache line size).
 // =============================================================================
@@ -38,29 +38,27 @@ namespace scl::memory {
 
 /// @brief Allocate aligned memory for primitive types.
 ///
-/// **Use Cases**:
+/// Use Cases:
 /// - SIMD workspaces (require 16/32/64-byte alignment)
 /// - Cache-line optimization (64-byte alignment)
 /// - Large temporary buffers in kernels
 ///
-/// **Platform Support**:
+/// Platform Support:
 /// - C++17+: Uses aligned operator new
 /// - Fallback: Uses posix_memalign (POSIX) or _aligned_malloc (Windows)
 ///
-/// **Important**: Memory allocated with this function MUST be freed with
-/// `aligned_free`, NOT regular `free` or `delete`.
+/// Important: Memory allocated with this function MUST be freed with
+/// aligned_free, NOT regular free or delete.
 ///
 /// @tparam T Element type (must be trivially constructible)
 /// @param count Number of elements to allocate
 /// @param alignment Alignment in bytes (must be power of 2, ≥ sizeof(void*))
 /// @return Aligned pointer, or nullptr on failure
 ///
-/// **Example**:
-/// ```cpp
+/// Example:
 /// auto* buffer = scl::memory::aligned_alloc<double>(1024, 64);
 /// // ... use buffer ...
 /// scl::memory::aligned_free(buffer);
-/// ```
 template <typename T>
 SCL_FORCE_INLINE T* aligned_alloc(size_t count, size_t alignment = 64) {
     static_assert(std::is_trivially_constructible_v<T>, 
@@ -102,7 +100,7 @@ SCL_FORCE_INLINE T* aligned_alloc(size_t count, size_t alignment = 64) {
 
 /// @brief Free memory allocated with `aligned_alloc`.
 ///
-/// **Warning**: Using regular `free` or `delete` on aligned memory may crash.
+/// Warning: Using regular free or delete on aligned memory may crash.
 ///
 /// @tparam T Element type
 /// @param ptr Pointer to free (nullptr is safe)
@@ -124,16 +122,14 @@ SCL_FORCE_INLINE void aligned_free(T* ptr) {
 
 /// @brief RAII wrapper for aligned memory.
 ///
-/// **Use Case**: Automatic cleanup of temporary buffers in exception-safe code.
+/// Use Case: Automatic cleanup of temporary buffers in exception-safe code.
 ///
-/// **Example**:
-/// ```cpp
+/// Example:
 /// {
 ///     auto buffer = scl::memory::AlignedBuffer<Real>(1024, 64);
 ///     Real* data = buffer.get();
 ///     // ... use data ...
 /// } // Automatically freed
-/// ```
 ///
 /// @tparam T Element type
 template <typename T>
@@ -243,11 +239,11 @@ SCL_FORCE_INLINE void zero(MutableSpan<T> span) {
 // 2. Data Movement
 // =============================================================================
 
-/// @brief **Unsafe** Copy: Assumes NO overlap (memcpy).
+/// @brief Unsafe Copy: Assumes NO overlap (memcpy).
 ///
 /// @warning
-/// - **Undefined Behavior** if `src` and `dst` memory ranges overlap.
-/// - **Undefined Behavior** if sizes do not match (in Release mode).
+/// - Undefined Behavior if src and dst memory ranges overlap.
+/// - Undefined Behavior if sizes do not match (in Release mode).
 ///
 /// Use this when you are absolutely certain inputs are distinct buffers.
 /// Compilers can optimize this better than `memmove`.
@@ -269,7 +265,7 @@ SCL_FORCE_INLINE void copy_fast(Span<const T> src, MutableSpan<T> dst) {
     }
 }
 
-/// @brief **Safe** Copy: Handles overlap correctly (memmove).
+/// @brief Safe Copy: Handles overlap correctly (memmove).
 ///
 /// Safe to use even if `src` and `dst` overlap (e.g., sliding a window).
 /// Slightly slower than `copy_fast`.
@@ -292,10 +288,10 @@ SCL_FORCE_INLINE void copy(Span<const T> src, MutableSpan<T> dst) {
     }
 }
 
-/// @brief **Stream** Copy: Non-temporal / Cache-bypassing copy.
+/// @brief Stream Copy: Non-temporal / Cache-bypassing copy.
 ///
 /// Writes directly to RAM, bypassing L1/L2 caches.
-/// @warning Assumes **NO overlap**.
+/// @warning Assumes NO overlap.
 ///
 /// Best for: Large buffers (> 1MB) that will NOT be read immediately.
 /// Avoid for: Small buffers (cache bypass overhead is too high).

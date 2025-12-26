@@ -29,11 +29,9 @@
 /// It enables writing architecture-agnostic vectorized code using SCL types.
 ///
 /// Usage:
-/// ```cpp
 /// scl::simd::Tag d;                 // Auto-matches scl::Real (f32/f64)
 /// auto v = scl::simd::Load(d, ptr); // Calls AVX2/AVX512/NEON Load internally
 /// auto r = scl::simd::Add(v, v);
-/// ```
 // =============================================================================
 
 namespace scl::simd {
