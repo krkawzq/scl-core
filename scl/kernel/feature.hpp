@@ -26,6 +26,265 @@
 
 namespace scl::kernel::feature {
 
+namespace detail {
+
+// =============================================================================
+// Generic Implementation (Tag Dispatch)
+// =============================================================================
+
+/// @brief Generic implementation for clipped moments.
+template <typename MatrixT>
+SCL_FORCE_INLINE void clipped_moments_impl(
+    MatrixT matrix,
+    Span<const Real> clip_vals,
+    MutableSpan<Real> out_means,
+    MutableSpan<Real> out_vars
+) {
+    using Tag = typename MatrixT::Tag;
+    
+    if constexpr (std::is_same_v<Tag, TagCSC>) {
+        SCL_CHECK_DIM(clip_vals.size == static_cast<Size>(matrix.cols), "Clip vals mismatch");
+        SCL_CHECK_DIM(out_means.size == static_cast<Size>(matrix.cols), "Output mean mismatch");
+        SCL_CHECK_DIM(out_vars.size == static_cast<Size>(matrix.cols), "Output var mismatch");
+        
+        const Real N = static_cast<Real>(matrix.rows);
+        const Real N_minus_1 = N - 1.0;
+        
+        scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
+            Real clip = clip_vals[c];
+            auto vals = matrix.col_values(static_cast<Index>(c));
+            
+            namespace s = scl::simd;
+            const s::Tag d;
+            const size_t lanes = s::lanes();
+            
+            auto v_clip = s::Set(d, clip);
+            auto v_sum  = s::Zero(d);
+            auto v_ssq  = s::Zero(d);
+            
+            size_t k = 0;
+            for (; k + lanes <= vals.size; k += lanes) {
+                auto v = s::Load(d, vals.ptr + k);
+                v = s::Min(v, v_clip);
+                v_sum = s::Add(v_sum, v);
+                v_ssq = s::MulAdd(v, v, v_ssq);
+            }
+            
+            Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
+            Real sum_sq = s::GetLane(s::SumOfLanes(d, v_ssq));
+            
+            for (; k < vals.size; ++k) {
+                Real v = vals[k];
+                if (v > clip) v = clip;
+                sum += v;
+                sum_sq += v * v;
+            }
+            
+            Real mu = sum / N;
+            Real var = 0.0;
+            
+            if (N > 1.0) {
+                var = (sum_sq - N * mu * mu) / N_minus_1;
+            }
+            
+            if (var < 0) var = 0.0;
+            
+            out_means[c] = mu;
+            out_vars[c] = var;
+        });
+    } else if constexpr (std::is_same_v<Tag, TagCSR>) {
+        SCL_CHECK_DIM(clip_vals.size == static_cast<Size>(matrix.rows), "Clip vals mismatch");
+        SCL_CHECK_DIM(out_means.size == static_cast<Size>(matrix.rows), "Output mean mismatch");
+        SCL_CHECK_DIM(out_vars.size == static_cast<Size>(matrix.rows), "Output var mismatch");
+        
+        const Real N = static_cast<Real>(matrix.cols);
+        const Real N_minus_1 = N - 1.0;
+        
+        scl::threading::parallel_for(0, matrix.rows, [&](size_t r) {
+            Real clip = clip_vals[r];
+            auto vals = matrix.row_values(static_cast<Index>(r));
+            
+            namespace s = scl::simd;
+            const s::Tag d;
+            const size_t lanes = s::lanes();
+            
+            auto v_clip = s::Set(d, clip);
+            auto v_sum  = s::Zero(d);
+            auto v_ssq  = s::Zero(d);
+            
+            size_t k = 0;
+            for (; k + lanes <= vals.size; k += lanes) {
+                auto v = s::Load(d, vals.ptr + k);
+                v = s::Min(v, v_clip);
+                v_sum = s::Add(v_sum, v);
+                v_ssq = s::MulAdd(v, v, v_ssq);
+            }
+            
+            Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
+            Real sum_sq = s::GetLane(s::SumOfLanes(d, v_ssq));
+            
+            for (; k < vals.size; ++k) {
+                Real v = vals[k];
+                if (v > clip) v = clip;
+                sum += v;
+                sum_sq += v * v;
+            }
+            
+            Real mu = sum / N;
+            Real var = 0.0;
+            
+            if (N > 1.0) {
+                var = (sum_sq - N * mu * mu) / N_minus_1;
+            }
+            
+            if (var < 0) var = 0.0;
+            
+            out_means[r] = mu;
+            out_vars[r] = var;
+        });
+    }
+}
+
+/// @brief Generic implementation for standard moments.
+template <typename MatrixT>
+SCL_FORCE_INLINE void standard_moments_impl(
+    MatrixT matrix,
+    MutableSpan<Real> out_means,
+    MutableSpan<Real> out_vars,
+    int ddof = 1
+) {
+    using Tag = typename MatrixT::Tag;
+    
+    if constexpr (std::is_same_v<Tag, TagCSC>) {
+        SCL_CHECK_DIM(out_means.size == static_cast<Size>(matrix.cols), "Output mean mismatch");
+        SCL_CHECK_DIM(out_vars.size == static_cast<Size>(matrix.cols), "Output var mismatch");
+        
+        const Real N = static_cast<Real>(matrix.rows);
+        const Real denom = N - static_cast<Real>(ddof);
+        
+        scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
+            auto vals = matrix.col_values(static_cast<Index>(c));
+            
+            namespace s = scl::simd;
+            const s::Tag d;
+            const size_t lanes = s::lanes();
+            
+            auto v_sum = s::Zero(d);
+            auto v_ssq = s::Zero(d);
+            
+            size_t k = 0;
+            for (; k + lanes <= vals.size; k += lanes) {
+                auto v = s::Load(d, vals.ptr + k);
+                v_sum = s::Add(v_sum, v);
+                v_ssq = s::MulAdd(v, v, v_ssq);
+            }
+            
+            Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
+            Real sum_sq = s::GetLane(s::SumOfLanes(d, v_ssq));
+            
+            for (; k < vals.size; ++k) {
+                Real v = vals[k];
+                sum += v;
+                sum_sq += v * v;
+            }
+            
+            Real mu = sum / N;
+            Real var = 0.0;
+            
+            if (denom > 0) {
+                var = (sum_sq - sum * mu) / denom;
+            }
+            
+            if (var < 0) var = 0.0;
+            
+            out_means[c] = mu;
+            out_vars[c] = var;
+        });
+    } else if constexpr (std::is_same_v<Tag, TagCSR>) {
+        SCL_CHECK_DIM(out_means.size == static_cast<Size>(matrix.rows), "Output mean mismatch");
+        SCL_CHECK_DIM(out_vars.size == static_cast<Size>(matrix.rows), "Output var mismatch");
+        
+        const Real N = static_cast<Real>(matrix.cols);
+        const Real denom = N - static_cast<Real>(ddof);
+        
+        scl::threading::parallel_for(0, matrix.rows, [&](size_t r) {
+            auto vals = matrix.row_values(static_cast<Index>(r));
+            
+            namespace s = scl::simd;
+            const s::Tag d;
+            const size_t lanes = s::lanes();
+            
+            auto v_sum = s::Zero(d);
+            auto v_ssq = s::Zero(d);
+            
+            size_t k = 0;
+            for (; k + lanes <= vals.size; k += lanes) {
+                auto v = s::Load(d, vals.ptr + k);
+                v_sum = s::Add(v_sum, v);
+                v_ssq = s::MulAdd(v, v, v_ssq);
+            }
+            
+            Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
+            Real sum_sq = s::GetLane(s::SumOfLanes(d, v_ssq));
+            
+            for (; k < vals.size; ++k) {
+                Real v = vals[k];
+                sum += v;
+                sum_sq += v * v;
+            }
+            
+            Real mu = sum / N;
+            Real var = 0.0;
+            
+            if (denom > 0) {
+                var = (sum_sq - sum * mu) / denom;
+            }
+            
+            if (var < 0) var = 0.0;
+            
+            out_means[r] = mu;
+            out_vars[r] = var;
+        });
+    }
+}
+
+/// @brief Generic implementation for detection rate.
+template <typename MatrixT>
+SCL_FORCE_INLINE void detection_rate_impl(
+    MatrixT matrix,
+    MutableSpan<Real> out_rates
+) {
+    using Tag = typename MatrixT::Tag;
+    
+    if constexpr (std::is_same_v<Tag, TagCSC>) {
+        SCL_CHECK_DIM(out_rates.size == static_cast<Size>(matrix.cols), "Output rates mismatch");
+        
+        const Real inv_N = 1.0 / static_cast<Real>(matrix.rows);
+        
+        scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
+            Index col_idx = static_cast<Index>(c);
+            Index len = matrix.col_length(col_idx);
+            
+            Real nnz_count = static_cast<Real>(len);
+            out_rates[c] = nnz_count * inv_N;
+        });
+    } else if constexpr (std::is_same_v<Tag, TagCSR>) {
+        SCL_CHECK_DIM(out_rates.size == static_cast<Size>(matrix.rows), "Output rates mismatch");
+        
+        const Real inv_N = 1.0 / static_cast<Real>(matrix.cols);
+        
+        scl::threading::parallel_for(0, matrix.rows, [&](size_t r) {
+            Index row_idx = static_cast<Index>(r);
+            Index len = matrix.row_length(row_idx);
+            
+            Real nnz_count = static_cast<Real>(len);
+            out_rates[r] = nnz_count * inv_N;
+        });
+    }
+}
+
+} // namespace detail
+
 // =============================================================================
 // 1. Seurat V3: Clipped Moments (VST)
 // =============================================================================
@@ -47,65 +306,27 @@ SCL_FORCE_INLINE void clipped_moments(
     MutableSpan<Real> out_means,
     MutableSpan<Real> out_vars
 ) {
-    SCL_CHECK_DIM(clip_vals.size == static_cast<Size>(matrix.cols), "Clip vals mismatch");
-    SCL_CHECK_DIM(out_means.size == static_cast<Size>(matrix.cols), "Output mean mismatch");
-    SCL_CHECK_DIM(out_vars.size == static_cast<Size>(matrix.cols), "Output var mismatch");
+    detail::clipped_moments_impl(matrix, clip_vals, out_means, out_vars);
+}
 
-    const Real N = static_cast<Real>(matrix.rows);
-    const Real N_minus_1 = N - 1.0;
-
-    // Parallelize over Features (Genes)
-    scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
-        Real clip = clip_vals[c];
-        auto vals = matrix.col_values(static_cast<Index>(c));
-        
-        // --- SIMD Accumulation ---
-        namespace s = scl::simd;
-        const s::Tag d;
-        const size_t lanes = s::lanes();
-        
-        auto v_clip = s::Set(d, clip);
-        auto v_sum  = s::Zero(d);
-        auto v_ssq  = s::Zero(d);
-
-        size_t k = 0;
-        for (; k + lanes <= vals.size; k += lanes) {
-            auto v = s::Load(d, vals.ptr + k);
-            
-            // Clip: v = min(v, clip)
-            v = s::Min(v, v_clip);
-            
-            // Accumulate
-            v_sum = s::Add(v_sum, v);
-            v_ssq = s::MulAdd(v, v, v_ssq); // FMA for speed
-        }
-        
-        Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
-        Real sum_sq = s::GetLane(s::SumOfLanes(d, v_ssq));
-
-        // --- Scalar Tail ---
-        for (; k < vals.size; ++k) {
-            Real v = vals[k];
-            if (v > clip) v = clip;
-            sum += v;
-            sum_sq += v * v;
-        }
-        
-        // --- Final Stats ---
-        // Implicit zeros are handled because min(0, clip) = 0.
-        Real mu = sum / N;
-        Real var = 0.0;
-        
-        if (N > 1.0) {
-            // Var = (SumSq - N*mu^2) / (N-1)
-            var = (sum_sq - N * mu * mu) / N_minus_1;
-        }
-        
-        if (var < 0) var = 0.0; // Fix floating point undershoot
-        
-        out_means[c] = mu;
-        out_vars[c] = var;
-    });
+/// @brief Compute clipped mean and variance for rows (CSR version).
+///
+/// For each row i, computes statistics on values clipped at theta_i.
+/// - mu_i = (1/N) * sum over j of min(X_{ij}, theta_i)
+/// - sigma^2_i = (1/(N-1)) * (sum over j of min(X_{ij}, theta_i)^2 - N * mu_i^2)
+///
+/// @param matrix    CSR Matrix.
+/// @param clip_vals Clipping thresholds theta_i for each row (size = rows).
+/// @param out_means Output: Mean of clipped values (size = rows).
+/// @param out_vars  Output: Variance of clipped values (size = rows).
+template <CSRLike MatrixT>
+SCL_FORCE_INLINE void clipped_moments(
+    MatrixT matrix,
+    Span<const Real> clip_vals,
+    MutableSpan<Real> out_means,
+    MutableSpan<Real> out_vars
+) {
+    detail::clipped_moments_impl(matrix, clip_vals, out_means, out_vars);
 }
 
 // =============================================================================
@@ -129,54 +350,25 @@ SCL_FORCE_INLINE void standard_moments(
     MutableSpan<Real> out_vars,
     int ddof = 1
 ) {
-    SCL_CHECK_DIM(out_means.size == static_cast<Size>(matrix.cols), "Output mean mismatch");
-    SCL_CHECK_DIM(out_vars.size == static_cast<Size>(matrix.cols), "Output var mismatch");
+    detail::standard_moments_impl(matrix, out_means, out_vars, ddof);
+}
 
-    const Real N = static_cast<Real>(matrix.rows);
-    const Real denom = N - static_cast<Real>(ddof);
-
-    scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
-        auto vals = matrix.col_values(static_cast<Index>(c));
-        
-        // --- SIMD Accumulation ---
-        namespace s = scl::simd;
-        const s::Tag d;
-        const size_t lanes = s::lanes();
-
-        auto v_sum = s::Zero(d);
-        auto v_ssq = s::Zero(d);
-
-        size_t k = 0;
-        for (; k + lanes <= vals.size; k += lanes) {
-            auto v = s::Load(d, vals.ptr + k);
-            v_sum = s::Add(v_sum, v);
-            v_ssq = s::MulAdd(v, v, v_ssq);
-        }
-
-        Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
-        Real sum_sq = s::GetLane(s::SumOfLanes(d, v_ssq));
-
-        for (; k < vals.size; ++k) {
-            Real v = vals[k];
-            sum += v;
-            sum_sq += v * v;
-        }
-
-        // --- Final Stats ---
-        Real mu = sum / N;
-        Real var = 0.0;
-        
-        if (denom > 0) {
-            // Var = (SumSq - N*mu^2) / (N-ddof)
-            // Equivalent to (SumSq - Sum*Mean) / (N-ddof)
-            var = (sum_sq - sum * mu) / denom;
-        }
-        
-        if (var < 0) var = 0.0;
-
-        out_means[c] = mu;
-        out_vars[c] = var;
-    });
+/// @brief Compute standard mean and variance per row (CSR version).
+/// 
+/// Used for row-wise statistics.
+///
+/// @param matrix    CSR Matrix.
+/// @param out_means Output Means (size = rows).
+/// @param out_vars  Output Variances (size = rows).
+/// @param ddof      Delta Degrees of Freedom (usually 1 for sample variance).
+template <CSRLike MatrixT>
+SCL_FORCE_INLINE void standard_moments(
+    MatrixT matrix,
+    MutableSpan<Real> out_means,
+    MutableSpan<Real> out_vars,
+    int ddof = 1
+) {
+    detail::standard_moments_impl(matrix, out_means, out_vars, ddof);
 }
 
 // =============================================================================
@@ -194,18 +386,21 @@ SCL_FORCE_INLINE void detection_rate(
     MatrixT matrix,
     MutableSpan<Real> out_rates
 ) {
-    SCL_CHECK_DIM(out_rates.size == static_cast<Size>(matrix.cols), "Output rates mismatch");
+    detail::detection_rate_impl(matrix, out_rates);
+}
 
-    const Real inv_N = 1.0 / static_cast<Real>(matrix.rows);
-
-    scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
-        // Use unified interface to get column length (O(1) per gene)
-        Index col_idx = static_cast<Index>(c);
-        Index len = matrix.col_length(col_idx);
-        
-        Real nnz_count = static_cast<Real>(len);
-        out_rates[c] = nnz_count * inv_N;
-    });
+/// @brief Compute the fraction of genes expressed in each cell (CSR version).
+///
+/// Useful for filtering cells (e.g., min_genes > 200).
+///
+/// @param matrix CSR Matrix.
+/// @param out_rates Output: fraction [0.0, 1.0] for each cell (row).
+template <CSRLike MatrixT>
+SCL_FORCE_INLINE void detection_rate(
+    MatrixT matrix,
+    MutableSpan<Real> out_rates
+) {
+    detail::detection_rate_impl(matrix, out_rates);
 }
 
 // =============================================================================

@@ -169,6 +169,68 @@ void permute_cols(
     });
 }
 
+/// @brief Permute rows in-place (No Drop, No Pad) for CSC matrices.
+///
+/// Applies bijective mapping where Source Rows == Target Rows (just shuffled).
+///
+/// Algorithm:
+/// 1. Remap: `new_row = map[old_row]` for all entries (O(NNZ))
+/// 2. Sort: Re-establish sorted row invariant (O(NNZ log NNZ_col))
+///
+/// Properties:
+/// - NNZ is preserved (no filtering)
+/// - Matrix dimensions unchanged (unless new_rows_dim specified)
+/// - Zero memory allocation (pure in-place)
+///
+/// @tparam T Value type (typically Real)
+/// @param matrix Input/Output matrix [modified in-place]
+/// @param old_to_new_map Bijective map: `new_row = map[old_row]` [size = matrix.rows]
+/// @param new_rows_dim Optional: Update matrix.rows to this value (-1 = unchanged)
+template <typename T>
+void permute_rows(
+    CustomCSC<T>& matrix,
+    Span<const Index> old_to_new_map,
+    Index new_rows_dim = -1
+) {
+    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(matrix.rows), 
+                  "Permute: Map dimension must match matrix.rows");
+    
+    // Validate bijection (optional debug check)
+#if !defined(NDEBUG)
+    for (Size i = 0; i < old_to_new_map.size; ++i) {
+        SCL_ASSERT(old_to_new_map[i] >= 0, "Permute: Map must not contain -1 (use align_rows for filtering)");
+    }
+#endif
+
+    // Update logical dimension if requested
+    if (new_rows_dim > 0) {
+        matrix.rows = new_rows_dim;
+    }
+
+    scl::threading::parallel_for(0, static_cast<size_t>(matrix.cols), [&](size_t j) {
+        Index col_idx = static_cast<Index>(j);
+        Index len = matrix.col_length(col_idx);
+        
+        if (len == 0) return;
+
+        // Get mutable pointers
+        Index start = matrix.indptr[col_idx];
+        Index* col_row = matrix.indices + start;
+        T* col_val = matrix.data + start;
+
+        // Phase 1: Remap (O(NNZ))
+        for (Index k = 0; k < len; ++k) {
+            col_row[k] = old_to_new_map[col_row[k]];
+        }
+
+        // Phase 2: Sort (O(NNZ log NNZ))
+        detail::sort_row_pairs(
+            MutableSpan<Index>(col_row, static_cast<Size>(len)), 
+            MutableSpan<T>(col_val, static_cast<Size>(len))
+        );
+    });
+}
+
 // =============================================================================
 // 2. General Alignment with Drop & Pad (Surjective/Partial Mapping)
 // =============================================================================
@@ -281,6 +343,94 @@ void align_cols(
     matrix.row_lengths = out_new_lengths.ptr;
 }
 
+/// @brief General Alignment for CSC: Filter, Remap, and Shift rows.
+///
+/// Aligns dataset row indices to reference with:
+/// - **Drop**: `map[old] == -1` removes the element
+/// - **Pad 0**: `map[old] = K > old_rows` extends dimension (sparse, no physical 0s)
+/// - **Remap**: `map[old] = i` where `0 <= i < new_rows`
+///
+/// Algorithm:
+/// 1. Filter & Remap: Two-pointer scan, keep valid entries (O(NNZ))
+/// 2. Sort: Re-establish CSC invariant (O(NNZ log NNZ_col))
+/// 3. Track Lengths: Record valid data size per column
+///
+/// @tparam T Value type (typically Real)
+/// @param matrix Input/Output matrix [modified in-place]
+/// @param old_to_new_map Partial map: `new_row = map[old_row]`, -1 = DROP [size = matrix.rows]
+/// @param out_new_lengths Output: Valid NNZ per column [size = matrix.cols]
+/// @param new_rows_dim New row dimension (required for padding)
+template <typename T>
+void align_rows(
+    CustomCSC<T>& matrix,
+    Span<const Index> old_to_new_map,
+    MutableSpan<Index> out_new_lengths,
+    Index new_rows_dim
+) {
+    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(matrix.rows), 
+                  "Align: Map dimension must match matrix.rows");
+    SCL_CHECK_DIM(out_new_lengths.size == static_cast<Size>(matrix.cols), 
+                  "Align: Output lengths buffer must match matrix.cols");
+    SCL_CHECK_ARG(new_rows_dim > 0, "Align: New row dimension must be positive");
+
+    // Update matrix dimension
+    matrix.rows = new_rows_dim;
+
+    scl::threading::parallel_for(0, static_cast<size_t>(matrix.cols), [&](size_t j) {
+        Index col_idx = static_cast<Index>(j);
+        Index start = matrix.indptr[col_idx];
+        Index current_len = matrix.col_length(col_idx);
+
+        if (current_len == 0) {
+            out_new_lengths[j] = 0;
+            return;
+        }
+
+        Index* col_row = matrix.indices + start;
+        T* col_val = matrix.data + start;
+
+        // -----------------------------------------------------------------------
+        // Phase 1: Filter & Remap (Two-Pointer Algorithm)
+        // -----------------------------------------------------------------------
+        
+        Index write_pos = 0;
+        for (Index read_pos = 0; read_pos < current_len; ++read_pos) {
+            Index old_r = col_row[read_pos];
+            Index new_r = old_to_new_map[old_r];
+
+            if (new_r >= 0) {
+                if (write_pos != read_pos) {
+                    col_row[write_pos] = new_r;
+                    col_val[write_pos] = col_val[read_pos];
+                } else {
+                    col_row[write_pos] = new_r;
+                }
+                write_pos++;
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // Phase 2: Sort Valid Data
+        // -----------------------------------------------------------------------
+        
+        if (write_pos > 1) {
+            detail::sort_row_pairs(
+                MutableSpan<Index>(col_row, static_cast<Size>(write_pos)), 
+                MutableSpan<T>(col_val, static_cast<Size>(write_pos))
+            );
+        }
+
+        // -----------------------------------------------------------------------
+        // Phase 3: Update Length Tracker
+        // -----------------------------------------------------------------------
+        
+        out_new_lengths[j] = write_pos;
+    });
+    
+    // Bind the new lengths to the matrix
+    matrix.col_lengths = out_new_lengths.ptr;
+}
+
 // =============================================================================
 // 3. Physical Compaction (Out-of-Place Memory Reallocation)
 // =============================================================================
@@ -343,6 +493,62 @@ void compact_data(
 
         Index src_start = src.indptr[row_idx];
         Index dst_start = dst.indptr[row_idx];
+
+        // Copy indices
+        std::copy(
+            src.indices + src_start, 
+            src.indices + src_start + src_len, 
+            dst.indices + dst_start
+        );
+        
+        // Copy values
+        std::copy(
+            src.data + src_start, 
+            src.data + src_start + src_len, 
+            dst.data + dst_start
+        );
+    });
+}
+
+/// @brief Physically compact CSC matrix by removing gaps.
+///
+/// Creates a new matrix with minimal memory footprint by:
+/// 1. Rebuilding indptr via prefix sum of valid lengths
+/// 2. Copying only valid data to new arrays
+///
+/// @tparam T Value type (typically Real)
+/// @param src Source matrix (must have valid col_lengths set!)
+/// @param dst Destination matrix [arrays must be pre-allocated!]
+template <typename T>
+void compact_data(
+    const CustomCSC<T>& src,
+    CustomCSC<T>& dst
+) {
+    SCL_CHECK_ARG(src.col_lengths != nullptr, 
+                  "Compact: Source matrix must have explicit lengths set");
+    SCL_CHECK_ARG(dst.data != nullptr && dst.indices != nullptr && dst.indptr != nullptr,
+                  "Compact: Destination arrays must be pre-allocated");
+
+    // Rebuild indptr (Serial Prefix Sum)
+    dst.indptr[0] = 0;
+    for (Index j = 0; j < src.cols; ++j) {
+        dst.indptr[j + 1] = dst.indptr[j] + src.col_length(j);
+    }
+    
+    dst.rows = src.rows;
+    dst.cols = src.cols;
+    dst.nnz = dst.indptr[dst.cols];
+    dst.col_lengths = nullptr;  // No explicit lengths needed (compact)
+
+    // Parallel Scatter Copy
+    scl::threading::parallel_for(0, static_cast<size_t>(src.cols), [&](size_t j) {
+        Index col_idx = static_cast<Index>(j);
+        Index src_len = src.col_length(col_idx);
+        
+        if (src_len == 0) return;
+
+        Index src_start = src.indptr[col_idx];
+        Index dst_start = dst.indptr[col_idx];
 
         // Copy indices
         std::copy(

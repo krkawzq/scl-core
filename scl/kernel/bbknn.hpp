@@ -108,6 +108,8 @@ struct BatchHeap {
 
     /// @brief Finalize heap into sorted array (ascending distance).
     SCL_FORCE_INLINE void finalize() {
+        // std::sort_heap is optimal for heap data structure
+        // VQSort doesn't provide heap-specific operations
         std::sort_heap(data, data + count);
     }
 };

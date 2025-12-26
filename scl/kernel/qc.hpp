@@ -222,7 +222,7 @@ void compute_multi_subset_pct(
 // Convenience Wrappers
 // =============================================================================
 
-/// @brief All-in-one QC computation (basic + single subset).
+/// @brief All-in-one QC computation (basic + single subset) for cells.
 ///
 /// Convenience function for the most common case: compute basic metrics
 /// plus one subset percentage (e.g., mitochondrial%).
@@ -277,6 +277,171 @@ void compute_qc_with_subset(
                    (static_cast<Real>(100.0) * subset_sum / sum) : 
                    static_cast<Real>(0.0);
         out_subset_pct[i] = pct;
+    });
+}
+
+// =============================================================================
+// CSC Matrix Versions (Gene/Column-wise QC)
+// =============================================================================
+
+/// @brief Compute n_cells (nnz) and total_counts per gene (Generic CSC-like matrices).
+///
+/// This is the gene-level QC metric computation.
+///
+/// @tparam MatrixT Any CSC-like matrix type
+/// @param matrix Input CSC-like matrix (cells × genes)
+/// @param out_n_cells Output: Number of cells expressing each gene [size = n_genes]
+/// @param out_total_counts Output: Total counts per gene [size = n_genes]
+template <CSCLike MatrixT>
+void compute_basic_gene_qc(
+    const MatrixT& matrix,
+    MutableSpan<Index> out_n_cells,
+    MutableSpan<Real> out_total_counts
+) {
+    const Index C = matrix.cols;
+    
+    SCL_CHECK_DIM(out_n_cells.size == static_cast<Size>(C), 
+                  "Gene QC: n_cells output size mismatch");
+    SCL_CHECK_DIM(out_total_counts.size == static_cast<Size>(C), 
+                  "Gene QC: total_counts output size mismatch");
+
+    scl::threading::parallel_for(0, static_cast<size_t>(C), [&](size_t j) {
+        auto vals = matrix.col_values(static_cast<Index>(j));
+        
+        // NNZ count (already encoded in CSC structure)
+        out_n_cells[j] = static_cast<Index>(vals.size);
+        
+        // Sum counts (SIMD accelerated)
+        namespace s = scl::simd;
+        const s::Tag d;
+        const size_t lanes = s::lanes();
+        
+        auto v_sum = s::Zero(d);
+        size_t k = 0;
+        
+        for (; k + lanes <= vals.size; k += lanes) {
+            auto v = s::Load(d, vals.ptr + k);
+            v_sum = s::Add(v_sum, v);
+        }
+        
+        Real sum = static_cast<Real>(s::GetLane(s::SumOfLanes(d, v_sum)));
+        
+        for (; k < vals.size; ++k) {
+            sum += static_cast<Real>(vals[k]);
+        }
+        
+        out_total_counts[j] = sum;
+    });
+}
+
+/// @brief Compute subset percentage metrics for genes (e.g., cell type enrichment).
+///
+/// For each gene, computes the percentage of counts from cells in a specific subset.
+///
+/// Algorithm: Single pass with mask lookup.
+/// subset_sum = sum counts[i, j] where mask[i] = 1
+/// subset_pct = 100 × subset_sum / total_counts
+///
+/// @param matrix Input CSC matrix (cells × genes)
+/// @param mask Binary mask for cell subset [size = n_cells], 0 or non-zero
+/// @param total_counts Pre-computed total counts per gene [size = n_genes]
+/// @param out_subset_pct Output: Percentage [size = n_genes]
+template <CSCLike MatrixT>
+void compute_gene_subset_pct(
+    const MatrixT& matrix,
+    Span<const uint8_t> mask,
+    Span<const Real> total_counts,
+    MutableSpan<Real> out_subset_pct
+) {
+    const Index C = matrix.cols;
+    
+    SCL_CHECK_DIM(mask.size == static_cast<Size>(matrix.rows), 
+                  "Gene QC: Mask size mismatch");
+    SCL_CHECK_DIM(total_counts.size == static_cast<Size>(C), 
+                  "Gene QC: total_counts size mismatch");
+    SCL_CHECK_DIM(out_subset_pct.size == static_cast<Size>(C), 
+                  "Gene QC: subset_pct output size mismatch");
+
+    scl::threading::parallel_for(0, static_cast<size_t>(C), [&](size_t j) {
+        auto vals = matrix.col_values(static_cast<Index>(j));
+        auto indices = matrix.col_indices(static_cast<Index>(j));
+        
+        // Accumulate subset sum
+        Real subset_sum = static_cast<Real>(0.0);
+        
+        for (size_t k = 0; k < vals.size; ++k) {
+            Index row = indices[k];
+            // Branchless masking (mask is 0 or 1)
+            if (mask[row]) {
+                subset_sum += static_cast<Real>(vals[k]);
+            }
+        }
+        
+        // Compute percentage
+        Real total = total_counts[j];
+        Real pct = (total > static_cast<Real>(0.0)) ? 
+                   (static_cast<Real>(100.0) * subset_sum / total) : 
+                   static_cast<Real>(0.0);
+        
+        out_subset_pct[j] = pct;
+    });
+}
+
+/// @brief All-in-one QC computation for genes (basic + single subset).
+///
+/// Convenience function for gene-level QC: compute basic metrics
+/// plus one subset percentage (e.g., cell type enrichment).
+///
+/// @param matrix Input CSC matrix (cells × genes)
+/// @param subset_mask Binary mask for subset cells [size = n_cells]
+/// @param out_n_cells Output: Number of cells expressing each gene [size = n_genes]
+/// @param out_total_counts Output: Total counts per gene [size = n_genes]
+/// @param out_subset_pct Output: Subset percentage [size = n_genes]
+template <CSCLike MatrixT>
+void compute_gene_qc_with_subset(
+    const MatrixT& matrix,
+    Span<const uint8_t> subset_mask,
+    MutableSpan<Index> out_n_cells,
+    MutableSpan<Real> out_total_counts,
+    MutableSpan<Real> out_subset_pct
+) {
+    const Index C = matrix.cols;
+    
+    SCL_CHECK_DIM(subset_mask.size == static_cast<Size>(matrix.rows), 
+                  "Gene QC: Mask size mismatch");
+    SCL_CHECK_DIM(out_n_cells.size == static_cast<Size>(C), 
+                  "Gene QC: n_cells output size mismatch");
+    SCL_CHECK_DIM(out_total_counts.size == static_cast<Size>(C), 
+                  "Gene QC: total_counts output size mismatch");
+    SCL_CHECK_DIM(out_subset_pct.size == static_cast<Size>(C), 
+                  "Gene QC: subset_pct output size mismatch");
+
+    scl::threading::parallel_for(0, static_cast<size_t>(C), [&](size_t j) {
+        auto vals = matrix.col_values(static_cast<Index>(j));
+        auto indices = matrix.col_indices(static_cast<Index>(j));
+        
+        // Fused computation: all metrics in one pass
+        Real sum = static_cast<Real>(0.0);
+        Real subset_sum = static_cast<Real>(0.0);
+        
+        for (size_t k = 0; k < vals.size; ++k) {
+            Real val = static_cast<Real>(vals[k]);
+            Index row = indices[k];
+            
+            sum += val;
+            if (subset_mask[row]) {
+                subset_sum += val;
+            }
+        }
+        
+        // Store results
+        out_n_cells[j] = static_cast<Index>(vals.size);
+        out_total_counts[j] = sum;
+        
+        Real pct = (sum > static_cast<Real>(0.0)) ? 
+                   (static_cast<Real>(100.0) * subset_sum / sum) : 
+                   static_cast<Real>(0.0);
+        out_subset_pct[j] = pct;
     });
 }
 

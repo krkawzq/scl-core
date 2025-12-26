@@ -101,6 +101,16 @@ SCL_FORCE_INLINE void materialize_centered(
     T* SCL_RESTRICT buffer,
     Size n_cells
 ) {
+#if !defined(NDEBUG)
+    SCL_ASSERT(buffer != nullptr, "Spatial: Null buffer in materialize_centered");
+    SCL_ASSERT(indices.size == values.size, "Spatial: Indices/values size mismatch");
+    // Validate indices are in bounds
+    for (Size k = 0; k < indices.size; ++k) {
+        SCL_ASSERT(indices[k] >= 0 && static_cast<Size>(indices[k]) < n_cells, 
+                   "Spatial: Index out of bounds in materialize_centered");
+    }
+#endif
+    
     namespace s = scl::simd;
     const s::Tag d;
     const size_t lanes = s::lanes();
@@ -138,6 +148,10 @@ SCL_FORCE_INLINE void materialize_centered(
 /// Used for variance term in both Moran's I and Geary's C.
 template <typename T>
 SCL_FORCE_INLINE T sum_squared(const T* SCL_RESTRICT z, Size n) {
+#if !defined(NDEBUG)
+    SCL_ASSERT(z != nullptr, "Spatial: Null pointer in sum_squared");
+#endif
+    
     namespace s = scl::simd;
     const s::Tag d;
     const size_t lanes = s::lanes();
@@ -168,6 +182,11 @@ SCL_FORCE_INLINE T spatial_covariance(
     const T* SCL_RESTRICT z,
     Size n_cells
 ) {
+#if !defined(NDEBUG)
+    SCL_ASSERT(z != nullptr, "Spatial: Null pointer in spatial_covariance");
+    SCL_ASSERT(static_cast<Size>(graph.rows) == n_cells, "Spatial: Graph size mismatch");
+#endif
+    
     T sum = static_cast<T>(0.0);
     
     for (Index i = 0; i < static_cast<Index>(n_cells); ++i) {
@@ -196,6 +215,11 @@ SCL_FORCE_INLINE T spatial_variance(
     const T* SCL_RESTRICT z,
     Size n_cells
 ) {
+#if !defined(NDEBUG)
+    SCL_ASSERT(z != nullptr, "Spatial: Null pointer in spatial_variance");
+    SCL_ASSERT(static_cast<Size>(graph.rows) == n_cells, "Spatial: Graph size mismatch");
+#endif
+    
     T sum = static_cast<T>(0.0);
     
     for (Index i = 0; i < static_cast<Index>(n_cells); ++i) {

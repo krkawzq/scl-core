@@ -41,6 +41,12 @@ SCL_FORCE_INLINE T dot_linear(
     const Index* SCL_RESTRICT idx1, const T* SCL_RESTRICT val1, Size n1,
     const Index* SCL_RESTRICT idx2, const T* SCL_RESTRICT val2, Size n2
 ) {
+#if !defined(NDEBUG)
+    // Validate input pointers
+    SCL_ASSERT(idx1 != nullptr && val1 != nullptr, "Gram: Null pointer in dot_linear");
+    SCL_ASSERT(idx2 != nullptr && val2 != nullptr, "Gram: Null pointer in dot_linear");
+#endif
+    
     T sum = static_cast<T>(0.0);
     Size i = 0, j = 0;
     
@@ -66,6 +72,12 @@ SCL_FORCE_INLINE T dot_binary(
     const Index* SCL_RESTRICT idx_small, const T* SCL_RESTRICT val_small, Size n_small,
     const Index* SCL_RESTRICT idx_large, const T* SCL_RESTRICT val_large, Size n_large
 ) {
+#if !defined(NDEBUG)
+    // Validate input pointers
+    SCL_ASSERT(idx_small != nullptr && val_small != nullptr, "Gram: Null pointer in dot_binary");
+    SCL_ASSERT(idx_large != nullptr && val_large != nullptr, "Gram: Null pointer in dot_binary");
+#endif
+    
     T sum = static_cast<T>(0.0);
     const Index* base = idx_large;
     Size len = n_large;

@@ -183,10 +183,10 @@ SCL_FORCE_INLINE void group_mean(
 }
 
 // =============================================================================
-// 4. Group Statistics (Mean & Variance)
+// 4. Group Statistics (Mean & Variance) - CSC Version
 // =============================================================================
 
-/// @brief Calculate Mean and Variance in one pass.
+/// @brief Calculate Mean and Variance in one pass (CSC version).
 ///
 /// Uses equation: Var = (SumSq - Sum^2 / N) / (N - ddof)
 ///
@@ -223,13 +223,6 @@ SCL_FORCE_INLINE void group_stats(
         Real* mean_ptr = out_means.ptr + (c * n_groups);
         Real* var_ptr  = out_vars.ptr + (c * n_groups);
         
-        // Stack buffer for NNZ counts (only if include_zeros=false)
-        // Limitation: n_groups must be reasonable. 
-        // If n_groups is large, this stack allocation might fail? 
-        // SCL usually handles < 1000 groups.
-        // For safety, if include_zeros=false, we warn or use a hack.
-        // Let's assume include_zeros=true (standard) for the optimized path.
-        
         for (Index k = 0; k < len; ++k) {
             Index row = indices[k];
             int32_t g = group_ids[row];
@@ -249,10 +242,6 @@ SCL_FORCE_INLINE void group_stats(
             if (include_zeros) {
                 N = static_cast<Real>(group_sizes[g]);
             } else {
-                // Without a count buffer, we cannot support include_zeros=false easily here 
-                // without a 2-pass scan of the column indices.
-                // Pass 1: Count. Pass 2: Accumulate.
-                // Since columns are usually short (< 5% sparsity), 2-pass is cheap.
                 Index count = 0;
                 for (Index k = 0; k < len; ++k) {
                     if (group_ids[indices[k]] == static_cast<int32_t>(g)) count++;
@@ -261,8 +250,8 @@ SCL_FORCE_INLINE void group_stats(
             }
 
             if (N <= static_cast<Real>(ddof)) {
-                mean_ptr[g] = 0.0; // Or NaN
-                var_ptr[g] = 0.0;  // Or NaN
+                mean_ptr[g] = 0.0;
+                var_ptr[g] = 0.0;
                 continue;
             }
 
@@ -271,9 +260,198 @@ SCL_FORCE_INLINE void group_stats(
             mean_ptr[g] = mu;
 
             // Variance
-            // Var = (SumSq - N * mu^2) / (N - ddof)
-            // This is algebraically equivalent to (SumSq - Sum^2/N) / (N-ddof)
-            // but slightly more stable if mu is already computed.
+            Real variance = (sum_sq - N * mu * mu) / (N - static_cast<Real>(ddof));
+            
+            // Fix numerical noise
+            if (variance < 0) variance = 0.0;
+            
+            var_ptr[g] = variance;
+        }
+    });
+}
+
+// =============================================================================
+// CSR Matrix Versions (Row-wise Grouping)
+// =============================================================================
+
+/// @brief Count non-zero elements per group for each row (CSR version).
+///
+/// @param matrix CSR Matrix.
+/// @param group_ids Column labels (size = matrix.cols).
+/// @param n_groups Number of groups.
+/// @param out_counts Output buffer (size = matrix.rows * n_groups).
+template <CSRLike MatrixT>
+SCL_FORCE_INLINE void group_count_nonzero(
+    const MatrixT& matrix,
+    Span<const int32_t> group_ids,
+    Size n_groups,
+    MutableSpan<Real> out_counts
+) {
+    SCL_CHECK_DIM(out_counts.size == matrix.rows * n_groups, "Output buffer size mismatch");
+
+    // Initialize output to 0
+    scl::threading::parallel_for(0, out_counts.size, [&](size_t i) {
+        out_counts[i] = 0.0;
+    });
+
+    // Parallelize over rows
+    scl::threading::parallel_for(0, matrix.rows, [&](size_t r) {
+        Index row_idx = static_cast<Index>(r);
+        auto indices = matrix.row_indices(row_idx);
+        Index len = matrix.row_length(row_idx);
+        
+        Real* res_ptr = out_counts.ptr + (r * n_groups);
+
+        for (Index k = 0; k < len; ++k) {
+            Index col = indices[k];
+            int32_t g = group_ids[col];
+            
+            if (g >= 0 && static_cast<Size>(g) < n_groups) {
+                res_ptr[g] += 1.0;
+            }
+        }
+    });
+}
+
+/// @brief Calculate group means for rows (CSR version).
+///
+/// @param matrix CSR Matrix.
+/// @param group_ids Column labels.
+/// @param n_groups Number of groups.
+/// @param group_sizes Total size of each group.
+/// @param out_means Output buffer (size = rows * n_groups).
+/// @param include_zeros If true, denominator is group_size.
+template <CSRLike MatrixT>
+SCL_FORCE_INLINE void group_mean(
+    const MatrixT& matrix,
+    Span<const int32_t> group_ids,
+    Size n_groups,
+    Span<const Size> group_sizes,
+    MutableSpan<Real> out_means,
+    bool include_zeros = true
+) {
+    SCL_CHECK_DIM(out_means.size == matrix.rows * n_groups, "Output buffer size mismatch");
+    if (include_zeros) {
+        SCL_CHECK_DIM(group_sizes.size == n_groups, "Group sizes required for include_zeros=true");
+    }
+
+    // Initialize output to 0
+    scl::threading::parallel_for(0, out_means.size, [&](size_t i) {
+        out_means[i] = 0.0;
+    });
+
+    // Accumulate sums
+    scl::threading::parallel_for(0, matrix.rows, [&](size_t r) {
+        Index row_idx = static_cast<Index>(r);
+        auto indices = matrix.row_indices(row_idx);
+        auto values  = matrix.row_values(row_idx);
+        Index len = matrix.row_length(row_idx);
+        
+        Real* res_ptr = out_means.ptr + (r * n_groups);
+        
+        for (Index k = 0; k < len; ++k) {
+            Index col = indices[k];
+            int32_t g = group_ids[col];
+            if (g >= 0 && static_cast<Size>(g) < n_groups) {
+                res_ptr[g] += values[k];
+            }
+        }
+        
+        // Normalize
+        for (Size g = 0; g < n_groups; ++g) {
+            if (include_zeros) {
+                Size N = group_sizes[g];
+                if (N > 0) res_ptr[g] /= static_cast<Real>(N);
+                else res_ptr[g] = 0.0;
+            }
+        }
+    });
+    
+    if (!include_zeros) {
+        SCL_ASSERT(false, "group_mean with include_zeros=false requires separate count tracking. Use group_stats instead.");
+    }
+}
+
+/// @brief Calculate Mean and Variance in one pass (CSR version).
+///
+/// Uses equation: Var = (SumSq - Sum^2 / N) / (N - ddof)
+///
+/// @param matrix CSR Matrix.
+/// @param group_ids Column labels.
+/// @param n_groups Number of groups.
+/// @param group_sizes Total size of each group.
+/// @param out_means Output buffer (size = rows * n_groups).
+/// @param out_vars Output buffer (size = rows * n_groups).
+/// @param ddof Delta degrees of freedom.
+/// @param include_zeros If true, denominator includes all group members.
+template <CSRLike MatrixT>
+SCL_FORCE_INLINE void group_stats(
+    const MatrixT& matrix,
+    Span<const int32_t> group_ids,
+    Size n_groups,
+    Span<const Size> group_sizes,
+    MutableSpan<Real> out_means,
+    MutableSpan<Real> out_vars,
+    int ddof = 1,
+    bool include_zeros = true
+) {
+    const Size total_size = matrix.rows * n_groups;
+    SCL_CHECK_DIM(out_means.size == total_size, "Means buffer size mismatch");
+    SCL_CHECK_DIM(out_vars.size == total_size, "Vars buffer size mismatch");
+
+    // Init buffers to 0
+    scl::threading::parallel_for(0, total_size, [&](size_t i) {
+        out_means[i] = 0.0;
+        out_vars[i] = 0.0;
+    });
+
+    // Accumulate Sum and SumSq
+    scl::threading::parallel_for(0, matrix.rows, [&](size_t r) {
+        Index row_idx = static_cast<Index>(r);
+        auto indices = matrix.row_indices(row_idx);
+        auto values  = matrix.row_values(row_idx);
+        Index len = matrix.row_length(row_idx);
+        
+        Real* mean_ptr = out_means.ptr + (r * n_groups);
+        Real* var_ptr  = out_vars.ptr + (r * n_groups);
+        
+        for (Index k = 0; k < len; ++k) {
+            Index col = indices[k];
+            int32_t g = group_ids[col];
+            if (g >= 0 && static_cast<Size>(g) < n_groups) {
+                Real v = values[k];
+                mean_ptr[g] += v;
+                var_ptr[g]  += v * v;
+            }
+        }
+
+        // Finalize Calculation
+        for (Size g = 0; g < n_groups; ++g) {
+            Real sum = mean_ptr[g];
+            Real sum_sq = var_ptr[g];
+            Real N = 0.0;
+
+            if (include_zeros) {
+                N = static_cast<Real>(group_sizes[g]);
+            } else {
+                Index count = 0;
+                for (Index k = 0; k < len; ++k) {
+                    if (group_ids[indices[k]] == static_cast<int32_t>(g)) count++;
+                }
+                N = static_cast<Real>(count);
+            }
+
+            if (N <= static_cast<Real>(ddof)) {
+                mean_ptr[g] = 0.0;
+                var_ptr[g] = 0.0;
+                continue;
+            }
+
+            // Mean
+            Real mu = sum / N;
+            mean_ptr[g] = mu;
+
+            // Variance
             Real variance = (sum_sq - N * mu * mu) / (N - static_cast<Real>(ddof));
             
             // Fix numerical noise

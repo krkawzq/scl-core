@@ -25,8 +25,188 @@
 
 namespace scl::kernel::normalize {
 
+namespace detail {
+
 // =============================================================================
-// 1. Row Scaling (In-Place)
+// Generic Implementation (Tag Dispatch)
+// =============================================================================
+
+/// @brief Generic implementation for row/column scaling.
+template <typename MatrixT>
+SCL_FORCE_INLINE void scale_impl(
+    MatrixT matrix,
+    Span<const Real> scales
+) {
+    using Tag = typename MatrixT::Tag;
+    
+    if constexpr (std::is_same_v<Tag, TagCSR>) {
+        SCL_CHECK_DIM(scales.size == static_cast<Size>(matrix.rows), "Scales dim mismatch");
+        
+        scl::threading::parallel_for(0, matrix.rows, [&](size_t i) {
+            Real s = scales[i];
+            if (s == 1.0) return;
+            
+            auto vals = matrix.row_values(static_cast<Index>(i));
+            
+            namespace simd = scl::simd;
+            const simd::Tag d;
+            const size_t lanes = simd::lanes();
+            const auto v_scale = simd::Set(d, s);
+            
+            size_t k = 0;
+            for (; k + lanes <= vals.size; k += lanes) {
+                auto v = simd::Load(d, vals.ptr + k);
+                v = simd::Mul(v, v_scale);
+                simd::Store(v, d, vals.ptr + k);
+            }
+            
+            for (; k < vals.size; ++k) {
+                vals[k] *= s;
+            }
+        });
+    } else if constexpr (std::is_same_v<Tag, TagCSC>) {
+        SCL_CHECK_DIM(scales.size == static_cast<Size>(matrix.cols), "Scales dim mismatch");
+        
+        scl::threading::parallel_for(0, matrix.cols, [&](size_t j) {
+            Real s = scales[j];
+            if (s == 1.0) return;
+            
+            auto vals = matrix.col_values(static_cast<Index>(j));
+            
+            namespace simd = scl::simd;
+            const simd::Tag d;
+            const size_t lanes = simd::lanes();
+            const auto v_scale = simd::Set(d, s);
+            
+            size_t k = 0;
+            for (; k + lanes <= vals.size; k += lanes) {
+                auto v = simd::Load(d, vals.ptr + k);
+                v = simd::Mul(v, v_scale);
+                simd::Store(v, d, vals.ptr + k);
+            }
+            
+            for (; k < vals.size; ++k) {
+                vals[k] *= s;
+            }
+        });
+    }
+}
+
+/// @brief Generic implementation for detecting highly expressed features.
+template <typename MatrixT>
+SCL_FORCE_INLINE void detect_highly_expressed_impl(
+    const MatrixT& matrix,
+    Span<const Real> feature_sums,
+    Real max_fraction,
+    MutableSpan<Byte> out_mask
+) {
+    using Tag = typename MatrixT::Tag;
+    
+    if constexpr (std::is_same_v<Tag, TagCSR>) {
+        SCL_CHECK_DIM(feature_sums.size == static_cast<Size>(matrix.rows), "Row sums mismatch");
+        SCL_CHECK_DIM(out_mask.size == static_cast<Size>(matrix.cols), "Output mask mismatch");
+        
+        scl::memory::zero(out_mask);
+        
+        scl::threading::parallel_for(0, matrix.rows, [&](size_t i) {
+            Real total = feature_sums[i];
+            if (total <= 0) return;
+            
+            Real threshold = total * max_fraction;
+            
+            auto indices = matrix.row_indices(static_cast<Index>(i));
+            auto values  = matrix.row_values(static_cast<Index>(i));
+            
+            for (size_t k = 0; k < values.size; ++k) {
+                if (values[k] > threshold) {
+                    Index gene_idx = indices[k];
+                    #ifdef _MSC_VER
+                        out_mask[gene_idx] = 1;
+                    #else
+                        __atomic_store_n(&out_mask[gene_idx], 1, __ATOMIC_RELAXED);
+                    #endif
+                }
+            }
+        });
+    } else if constexpr (std::is_same_v<Tag, TagCSC>) {
+        SCL_CHECK_DIM(feature_sums.size == static_cast<Size>(matrix.cols), "Col sums mismatch");
+        SCL_CHECK_DIM(out_mask.size == static_cast<Size>(matrix.rows), "Output mask mismatch");
+        
+        scl::memory::zero(out_mask);
+        
+        scl::threading::parallel_for(0, matrix.cols, [&](size_t j) {
+            Real total = feature_sums[j];
+            if (total <= 0) return;
+            
+            Real threshold = total * max_fraction;
+            
+            auto indices = matrix.col_indices(static_cast<Index>(j));
+            auto values  = matrix.col_values(static_cast<Index>(j));
+            
+            for (size_t k = 0; k < values.size; ++k) {
+                if (values[k] > threshold) {
+                    Index cell_idx = indices[k];
+                    #ifdef _MSC_VER
+                        out_mask[cell_idx] = 1;
+                    #else
+                        __atomic_store_n(&out_mask[cell_idx], 1, __ATOMIC_RELAXED);
+                    #endif
+                }
+            }
+        });
+    }
+}
+
+/// @brief Generic implementation for masked row/column sums.
+template <typename MatrixT>
+SCL_FORCE_INLINE void sums_masked_impl(
+    const MatrixT& matrix,
+    Span<const Byte> feature_mask,
+    MutableSpan<Real> out_sums
+) {
+    using Tag = typename MatrixT::Tag;
+    
+    if constexpr (std::is_same_v<Tag, TagCSR>) {
+        SCL_CHECK_DIM(feature_mask.size == static_cast<Size>(matrix.cols), "Gene mask mismatch");
+        SCL_CHECK_DIM(out_sums.size == static_cast<Size>(matrix.rows), "Output sums mismatch");
+        
+        scl::threading::parallel_for(0, matrix.rows, [&](size_t i) {
+            auto indices = matrix.row_indices(static_cast<Index>(i));
+            auto values  = matrix.row_values(static_cast<Index>(i));
+            
+            Real sum = 0;
+            for (size_t k = 0; k < values.size; ++k) {
+                Index gene_idx = indices[k];
+                if (feature_mask[gene_idx] == 0) {
+                    sum += values[k];
+                }
+            }
+            out_sums[i] = sum;
+        });
+    } else if constexpr (std::is_same_v<Tag, TagCSC>) {
+        SCL_CHECK_DIM(feature_mask.size == static_cast<Size>(matrix.rows), "Cell mask mismatch");
+        SCL_CHECK_DIM(out_sums.size == static_cast<Size>(matrix.cols), "Output sums mismatch");
+        
+        scl::threading::parallel_for(0, matrix.cols, [&](size_t j) {
+            auto indices = matrix.col_indices(static_cast<Index>(j));
+            auto values  = matrix.col_values(static_cast<Index>(j));
+            
+            Real sum = 0;
+            for (size_t k = 0; k < values.size; ++k) {
+                Index cell_idx = indices[k];
+                if (feature_mask[cell_idx] == 0) {
+                    sum += values[k];
+                }
+            }
+            out_sums[j] = sum;
+        });
+    }
+}
+
+} // namespace detail
+
+// =============================================================================
+// 1. Row/Column Scaling (In-Place)
 // =============================================================================
 
 /// @brief Scale each row by a specific factor (Generic CSR-like matrices).
@@ -42,38 +222,27 @@ SCL_FORCE_INLINE void scale_rows(
     MatrixT matrix,
     Span<const Real> scales
 ) {
-    SCL_CHECK_DIM(scales.size == static_cast<Size>(matrix.rows), "Scales dim mismatch");
+    detail::scale_impl(matrix, scales);
+}
 
-    scl::threading::parallel_for(0, matrix.rows, [&](size_t i) {
-        Real s = scales[i];
-        
-        // Optimization: If scale is 1.0, skip. If 0.0, zero out (or skip if sparsity requires?)
-        // Usually we just multiply.
-        if (s == 1.0) return;
-
-        auto vals = matrix.row_values(static_cast<Index>(i));
-        
-        // SIMD Multiplication
-        namespace simd = scl::simd;
-        const simd::Tag d;
-        const size_t lanes = simd::lanes();
-        const auto v_scale = simd::Set(d, s);
-
-        size_t k = 0;
-        for (; k + lanes <= vals.size; k += lanes) {
-            auto v = simd::Load(d, vals.ptr + k);
-            v = simd::Mul(v, v_scale);
-            simd::Store(v, d, vals.ptr + k);
-        }
-
-        for (; k < vals.size; ++k) {
-            vals[k] *= s;
-        }
-    });
+/// @brief Scale each column by a specific factor (Generic CSC-like matrices).
+///
+/// Operation: matrix[:, j] *= scales[j]
+/// Used for feature normalization where scale = target_sum / current_sum.
+///
+/// @tparam MatrixT Any CSC-like matrix type
+/// @param matrix CSC-like Matrix (modified in-place).
+/// @param scales Array of scale factors (one per column).
+template <CSCLike MatrixT>
+SCL_FORCE_INLINE void scale_cols(
+    MatrixT matrix,
+    Span<const Real> scales
+) {
+    detail::scale_impl(matrix, scales);
 }
 
 // =============================================================================
-// 2. Highly Expressed Gene Detection
+// 2. Highly Expressed Feature Detection
 // =============================================================================
 
 /// @brief Identify genes that consume a large fraction of counts in any cell (Generic CSR-like matrices).
@@ -95,44 +264,32 @@ SCL_FORCE_INLINE void detect_highly_expressed_genes(
     Real max_fraction,
     MutableSpan<Byte> out_mask
 ) {
-    SCL_CHECK_DIM(row_sums.size == static_cast<Size>(matrix.rows), "Row sums mismatch");
-    SCL_CHECK_DIM(out_mask.size == static_cast<Size>(matrix.cols), "Output mask mismatch");
+    detail::detect_highly_expressed_impl(matrix, row_sums, max_fraction, out_mask);
+}
 
-    // 1. Reset Mask
-    scl::memory::zero(out_mask);
-
-    // 2. Parallel Scan
-    // Potential Race Condition: Multiple rows might try to mark the same gene (column).
-    // Solution: Since we only write '1', the operation is idempotent.
-    // On x86/ARM, byte-sized writes are atomic. 
-    // To be strictly C++ compliant, we should use std::atomic_ref or relaxed atomic intrinsics,
-    // but treating Byte* as a relaxed atomic map is standard HPC practice.
-    
-    scl::threading::parallel_for(0, matrix.rows, [&](size_t i) {
-        Real total = row_sums[i];
-        if (total <= 0) return;
-
-        Real threshold = total * max_fraction;
-        
-        auto indices = matrix.row_indices(static_cast<Index>(i));
-        auto values  = matrix.row_values(static_cast<Index>(i));
-
-        for (size_t k = 0; k < values.size; ++k) {
-            if (values[k] > threshold) {
-                Index gene_idx = indices[k];
-                // Relaxed atomic store to prevent compiler tearing (though unlikely on byte)
-                #ifdef _MSC_VER
-                    out_mask[gene_idx] = 1; // MSVC has strong ordering guarantees
-                #else
-                    __atomic_store_n(&out_mask[gene_idx], 1, __ATOMIC_RELAXED);
-                #endif
-            }
-        }
-    });
+/// @brief Identify cells that consume a large fraction of counts for any gene (Generic CSC-like matrices).
+///
+/// Used to detect outlier cells with unusually high expression.
+/// A cell is flagged if: `expression[cell, gene] > max_fraction * total_counts[gene]`.
+///
+/// @tparam MatrixT Any CSC-like matrix type
+/// @param matrix CSC-like Matrix.
+/// @param col_sums Pre-computed column sums (total counts per gene).
+/// @param max_fraction Threshold (e.g., 0.05 for 5%).
+/// @param out_mask Output boolean mask (Byte array) of size n_rows. 
+///                 1 if highly expressed, 0 otherwise.
+template <CSCLike MatrixT>
+SCL_FORCE_INLINE void detect_highly_expressed_cells(
+    const MatrixT& matrix,
+    Span<const Real> col_sums,
+    Real max_fraction,
+    MutableSpan<Byte> out_mask
+) {
+    detail::detect_highly_expressed_impl(matrix, col_sums, max_fraction, out_mask);
 }
 
 // =============================================================================
-// 3. Masked Row Sums
+// 3. Masked Row/Column Sums
 // =============================================================================
 
 /// @brief Compute row sums excluding specific genes (Generic CSR-like matrices).
@@ -147,30 +304,22 @@ SCL_FORCE_INLINE void row_sums_masked(
     Span<const Byte> gene_mask,
     MutableSpan<Real> out_sums
 ) {
-    SCL_CHECK_DIM(gene_mask.size == static_cast<Size>(matrix.cols), "Gene mask mismatch");
-    SCL_CHECK_DIM(out_sums.size == static_cast<Size>(matrix.rows), "Output sums mismatch");
+    detail::sums_masked_impl(matrix, gene_mask, out_sums);
+}
 
-    scl::threading::parallel_for(0, matrix.rows, [&](size_t i) {
-        auto indices = matrix.row_indices(static_cast<Index>(i));
-        auto values  = matrix.row_values(static_cast<Index>(i));
-        
-        Real sum = 0;
-        
-        // SIMD is hard here because of indirect lookup into gene_mask[indices[k]].
-        // Scalar loop is preferred.
-        // Unrolling helps.
-        size_t k = 0;
-        for (; k < values.size; ++k) {
-            Index gene_idx = indices[k];
-            // Branchless accumulation: sum += val * (mask == 0)
-            // But mask check is likely sparse or dense? 
-            // Standard if check is fine.
-            if (gene_mask[gene_idx] == 0) {
-                sum += values[k];
-            }
-        }
-        out_sums[i] = sum;
-    });
+/// @brief Compute column sums excluding specific cells (Generic CSC-like matrices).
+///
+/// @tparam MatrixT Any CSC-like matrix type
+/// @param matrix CSC-like Matrix.
+/// @param cell_mask Byte mask (size n_rows). If cell_mask[i] != 0, ignore cell i.
+/// @param out_sums Output column sums.
+template <CSCLike MatrixT>
+SCL_FORCE_INLINE void col_sums_masked(
+    const MatrixT& matrix,
+    Span<const Byte> cell_mask,
+    MutableSpan<Real> out_sums
+) {
+    detail::sums_masked_impl(matrix, cell_mask, out_sums);
 }
 
 // =============================================================================
