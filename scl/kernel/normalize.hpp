@@ -137,9 +137,12 @@ SCL_FORCE_INLINE void scale_primary(
     MatrixT& matrix,
     Array<const Real> scales
 ) {
-    if constexpr (CustomSparseLike<MatrixT, true> || CustomSparseLike<MatrixT, false>) {
-        // Fast path: Contiguous data
-        scale_primary_fast(matrix, scales);
+    if constexpr (CustomSparseLike<MatrixT, true>) {
+        // Fast path: CSR with contiguous data
+        scale_primary_fast<MatrixT, true>(matrix, scales);
+    } else if constexpr (CustomSparseLike<MatrixT, false>) {
+        // Fast path: CSC with contiguous data
+        scale_primary_fast<MatrixT, false>(matrix, scales);
     } else {
         // Generic path: Virtual or other types
         scale_primary_generic(matrix, scales);

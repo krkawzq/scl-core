@@ -65,6 +65,7 @@ from ._array import (
     empty,
     ones,
     from_list,
+    from_buffer,
 )
 
 # =============================================================================
@@ -193,6 +194,7 @@ __all__ = [
     'empty',
     'ones',
     'from_list',
+    'from_buffer',
     
     # ---- Data Types ----
     'DType',

@@ -1,12 +1,33 @@
 """
-Tests for SclCSR and SclCSC matrix classes.
+Tests for SclCSR and SclCSC smart matrix classes.
+
+Updated for SCL v0.2.0 with backend management.
 """
 
 import pytest
 import numpy as np
-from scl.sparse import SclCSR, SclCSC, Array, from_list, zeros
-from scl.sparse import float32, float64, int64
 
+try:
+    from scl.sparse import (
+        SclCSR, SclCSC, Array, 
+        Backend, Ownership,
+        from_list, zeros,
+        float32, float64, int64,
+    )
+    HAS_SCL = True
+except ImportError:
+    HAS_SCL = False
+
+try:
+    import scipy.sparse as sp
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
+
+# =============================================================================
+# SclCSR Creation Tests
+# =============================================================================
 
 class TestSclCSRCreation:
     """Test SclCSR matrix creation."""
@@ -22,14 +43,17 @@ class TestSclCSRCreation:
         assert mat.nnz == 3
         assert mat.rows == 3
         assert mat.cols == 4
+        assert mat.backend == Backend.CUSTOM
+        assert mat.ownership == Ownership.OWNED
     
     def test_create_empty(self, requires_scl):
         """Test creating empty matrix."""
         mat = SclCSR.empty(10, 20, 50, dtype='float32')
         assert mat.shape == (10, 20)
-        assert mat.nnz == 50  # Allocated space for 50 elements
+        assert mat.nnz == 50
         assert len(mat.data) == 50
         assert mat.dtype == 'float32'
+        assert mat.backend == Backend.CUSTOM
     
     def test_create_zeros(self, requires_scl):
         """Test creating zero matrix."""
@@ -48,19 +72,35 @@ class TestSclCSRCreation:
         mat = SclCSR.from_dense(dense, dtype='float32')
         assert mat.shape == (3, 4)
         assert mat.nnz == 6
+        assert mat.backend == Backend.CUSTOM
+        assert mat.ownership == Ownership.OWNED
     
-    def test_create_from_scipy(self, requires_scl):
-        """Test creating from scipy matrix."""
-        try:
-            import scipy.sparse as sp
-        except ImportError:
-            pytest.skip("scipy not available")
-        
+    @pytest.mark.skipif(not HAS_SCIPY, reason="scipy not available")
+    def test_create_from_scipy_borrowed(self, requires_scl):
+        """Test creating from scipy matrix (borrowed mode)."""
         scipy_mat = sp.csr_matrix([[1, 0, 2], [0, 3, 0]], dtype=np.float32)
-        mat = SclCSR.from_scipy(scipy_mat)
+        mat = SclCSR.from_scipy(scipy_mat, copy=False)
+        
         assert mat.shape == (2, 3)
         assert mat.nnz == 3
+        assert mat.backend == Backend.CUSTOM
+        assert mat.ownership == Ownership.BORROWED
+    
+    @pytest.mark.skipif(not HAS_SCIPY, reason="scipy not available")
+    def test_create_from_scipy_copy(self, requires_scl):
+        """Test creating from scipy matrix (copy mode)."""
+        scipy_mat = sp.csr_matrix([[1, 0, 2], [0, 3, 0]], dtype=np.float32)
+        mat = SclCSR.from_scipy(scipy_mat, copy=True)
+        
+        assert mat.shape == (2, 3)
+        assert mat.nnz == 3
+        assert mat.backend == Backend.CUSTOM
+        assert mat.ownership == Ownership.OWNED
 
+
+# =============================================================================
+# SclCSR Properties Tests
+# =============================================================================
 
 class TestSclCSRProperties:
     """Test SclCSR properties."""
@@ -86,11 +126,26 @@ class TestSclCSRProperties:
         """Test row_lengths array."""
         row_lengths = small_csr_matrix.row_lengths
         assert row_lengths.size == 3
-        # First row has 2 non-zeros, second has 2, third has 2
         assert row_lengths[0] == 2
         assert row_lengths[1] == 2
         assert row_lengths[2] == 2
+    
+    def test_backend_property(self, small_csr_matrix):
+        """Test backend property."""
+        assert small_csr_matrix.backend == Backend.CUSTOM
+    
+    def test_ownership_property(self, small_csr_matrix):
+        """Test ownership property."""
+        assert small_csr_matrix.ownership == Ownership.OWNED
+    
+    def test_is_view_property(self, small_csr_matrix):
+        """Test is_view property."""
+        assert small_csr_matrix.is_view == False
 
+
+# =============================================================================
+# SclCSR Validation Tests
+# =============================================================================
 
 class TestSclCSRValidation:
     """Test SclCSR validation."""
@@ -108,7 +163,7 @@ class TestSclCSRValidation:
         """Test indptr size mismatch."""
         data = from_list([1.0], dtype=float32)
         indices = from_list([0], dtype=int64)
-        indptr = from_list([0, 1, 2], dtype=int64)  # Wrong size for 3 rows
+        indptr = from_list([0, 1, 2], dtype=int64)
         
         with pytest.raises(ValueError):
             SclCSR(data, indices, indptr, shape=(3, 10))
@@ -116,7 +171,7 @@ class TestSclCSRValidation:
     def test_indices_size_mismatch(self, requires_scl):
         """Test indices size mismatch."""
         data = from_list([1.0, 2.0], dtype=float32)
-        indices = from_list([0], dtype=int64)  # Wrong size
+        indices = from_list([0], dtype=int64)
         indptr = from_list([0, 2], dtype=int64)
         
         with pytest.raises(ValueError):
@@ -124,7 +179,7 @@ class TestSclCSRValidation:
     
     def test_invalid_dtype(self, requires_scl):
         """Test invalid dtype for data."""
-        data = from_list([1, 2, 3], dtype='int32')  # Must be float
+        data = from_list([1, 2, 3], dtype='int32')
         indices = from_list([0, 1, 2], dtype=int64)
         indptr = from_list([0, 3], dtype=int64)
         
@@ -132,49 +187,83 @@ class TestSclCSRValidation:
             SclCSR(data, indices, indptr, shape=(1, 10))
 
 
+# =============================================================================
+# SclCSR Operations Tests
+# =============================================================================
+
 class TestSclCSROperations:
     """Test SclCSR operations."""
     
-    def test_to_scipy(self, small_csr_matrix):
+    @pytest.mark.skipif(not HAS_SCIPY, reason="scipy not available")
+    def test_to_scipy(self, small_csr_from_dense):
         """Test converting to scipy matrix."""
-        try:
-            import scipy.sparse as sp
-        except ImportError:
-            pytest.skip("scipy not available")
-        
-        scipy_mat = small_csr_matrix.to_scipy()
+        scipy_mat = small_csr_from_dense.to_scipy()
         assert isinstance(scipy_mat, sp.csr_matrix)
         assert scipy_mat.shape == (3, 4)
         assert scipy_mat.nnz == 6
     
-    def test_get_row(self, small_csr_matrix):
+    def test_get_row(self, small_csr_from_dense):
         """Test getting a row."""
-        # First row should be [1, 0, 2, 0]
-        # get_row returns (indices, values) tuple
-        indices, values = small_csr_matrix.get_row(0)
-        assert len(indices) == 2  # 2 non-zeros in first row
+        indices, values = small_csr_from_dense.get_row(0)
+        assert len(indices) == 2
         assert len(values) == 2
-        
-        # Check values
-        assert values[0] == pytest.approx(1.0)  # data[0]
-        assert values[1] == pytest.approx(2.0)  # data[1]
-        
-        # Or use get_row_dense for dense representation
-        row0_dense = small_csr_matrix.get_row_dense(0)
+        assert values[0] == pytest.approx(1.0)
+        assert values[1] == pytest.approx(2.0)
+    
+    def test_get_row_dense(self, small_csr_from_dense):
+        """Test getting row as dense array."""
+        row0_dense = small_csr_from_dense.get_row_dense(0)
         assert len(row0_dense) == 4
         assert row0_dense[0] == pytest.approx(1.0)
+        assert row0_dense[1] == pytest.approx(0.0)
         assert row0_dense[2] == pytest.approx(2.0)
+        assert row0_dense[3] == pytest.approx(0.0)
     
-    def test_get_row_slice(self, small_csr_matrix):
-        """Test getting row slice."""
-        # Get first two rows
-        try:
-            row_slice = small_csr_matrix.get_row_slice(0, 2)
-            assert row_slice.shape[0] == 2
-            assert row_slice.shape[1] == 4
-        except (AttributeError, NotImplementedError):
-            pytest.skip("get_row_slice not implemented")
+    def test_getitem_scalar(self, small_csr_from_dense):
+        """Test mat[i, j] indexing."""
+        assert small_csr_from_dense[0, 0] == pytest.approx(1.0)
+        assert small_csr_from_dense[0, 1] == pytest.approx(0.0)
+        assert small_csr_from_dense[0, 2] == pytest.approx(2.0)
+        assert small_csr_from_dense[1, 1] == pytest.approx(3.0)
+        assert small_csr_from_dense[2, 0] == pytest.approx(5.0)
+    
+    def test_getitem_row(self, small_csr_from_dense):
+        """Test mat[i, :] indexing."""
+        row = small_csr_from_dense[1, :]
+        assert len(row) == 4
+        assert row[1] == pytest.approx(3.0)
+        assert row[3] == pytest.approx(4.0)
+    
+    def test_getitem_col(self, small_csr_from_dense):
+        """Test mat[:, j] indexing."""
+        col = small_csr_from_dense[:, 0]
+        assert len(col) == 3
+        assert col[0] == pytest.approx(1.0)
+        assert col[1] == pytest.approx(0.0)
+        assert col[2] == pytest.approx(5.0)
+    
+    def test_slice_rows(self, small_csr_from_dense):
+        """Test row slicing."""
+        sub = small_csr_from_dense[0:2, :]
+        assert sub.shape == (2, 4)
+        assert sub.nnz == 4
+    
+    def test_copy(self, small_csr_from_dense):
+        """Test copy operation."""
+        copy = small_csr_from_dense.copy()
+        assert copy.shape == small_csr_from_dense.shape
+        assert copy.nnz == small_csr_from_dense.nnz
+        assert copy.backend == Backend.CUSTOM
+        assert copy.ownership == Ownership.OWNED
+        
+        # Verify it's a deep copy
+        copy.data[0] = 999.0
+        assert small_csr_from_dense.data[0] != 999.0
 
+
+# =============================================================================
+# SclCSC Tests
+# =============================================================================
 
 class TestSclCSC:
     """Test SclCSC matrix class."""
@@ -188,6 +277,7 @@ class TestSclCSC:
         mat = SclCSC(data, indices, indptr, shape=(3, 4))
         assert mat.shape == (3, 4)
         assert mat.nnz == 3
+        assert mat.backend == Backend.CUSTOM
     
     def test_create_csc_empty(self, requires_scl):
         """Test creating empty CSC matrix."""
@@ -200,36 +290,81 @@ class TestSclCSC:
         assert mat.shape == (10, 20)
         assert mat.nnz == 0
     
-    def test_csc_to_scipy(self, small_csc_matrix):
+    def test_create_csc_from_dense(self, requires_scl):
+        """Test creating CSC from dense."""
+        mat = SclCSC.from_dense([[1, 0, 2], [0, 3, 0]], dtype='float32')
+        assert mat.shape == (2, 3)
+        assert mat.nnz == 3
+    
+    @pytest.mark.skipif(not HAS_SCIPY, reason="scipy not available")
+    def test_csc_to_scipy(self, small_csc_from_dense):
         """Test converting CSC to scipy."""
-        try:
-            import scipy.sparse as sp
-        except ImportError:
-            pytest.skip("scipy not available")
-        
-        scipy_mat = small_csc_matrix.to_scipy()
+        scipy_mat = small_csc_from_dense.to_scipy()
         assert isinstance(scipy_mat, sp.csc_matrix)
         assert scipy_mat.shape == (3, 4)
+    
+    def test_get_col(self, small_csc_from_dense):
+        """Test getting a column."""
+        indices, values = small_csc_from_dense.get_col(0)
+        assert len(indices) == 2
+        assert len(values) == 2
+    
+    def test_get_col_dense(self, small_csc_from_dense):
+        """Test getting column as dense array."""
+        col0 = small_csc_from_dense.get_col_dense(0)
+        assert len(col0) == 3
+        assert col0[0] == pytest.approx(1.0)
+        assert col0[2] == pytest.approx(5.0)
 
+
+# =============================================================================
+# Matrix Conversion Tests
+# =============================================================================
 
 class TestMatrixConversion:
     """Test matrix conversion methods."""
     
-    def test_csr_to_csc(self, small_csr_matrix):
+    @pytest.mark.skipif(not HAS_SCIPY, reason="scipy not available")
+    def test_csr_to_csc(self, small_csr_from_dense):
         """Test converting CSR to CSC."""
-        try:
-            csc = small_csr_matrix.tocsc()
-            assert csc.shape == small_csr_matrix.shape
-            assert csc.nnz == small_csr_matrix.nnz
-        except (AttributeError, NotImplementedError):
-            pytest.skip("tocsc not implemented")
+        csc = small_csr_from_dense.tocsc()
+        assert isinstance(csc, SclCSC)
+        assert csc.shape == small_csr_from_dense.shape
+        assert csc.nnz == small_csr_from_dense.nnz
+        assert csc.backend == Backend.CUSTOM
     
-    def test_csc_to_csr(self, small_csc_matrix):
+    @pytest.mark.skipif(not HAS_SCIPY, reason="scipy not available")
+    def test_csc_to_csr(self, small_csc_from_dense):
         """Test converting CSC to CSR."""
-        try:
-            csr = small_csc_matrix.tocsr()
-            assert csr.shape == small_csc_matrix.shape
-            assert csr.nnz == small_csc_matrix.nnz
-        except (AttributeError, NotImplementedError):
-            pytest.skip("tocsr not implemented")
+        csr = small_csc_from_dense.tocsr()
+        assert isinstance(csr, SclCSR)
+        assert csr.shape == small_csc_from_dense.shape
+        assert csr.nnz == small_csc_from_dense.nnz
+    
+    def test_to_owned(self, small_csr_from_dense):
+        """Test to_owned conversion."""
+        owned = small_csr_from_dense.to_owned()
+        assert owned.backend == Backend.CUSTOM
+        assert owned.ownership == Ownership.OWNED
 
+
+# =============================================================================
+# Matrix Info Tests
+# =============================================================================
+
+class TestMatrixInfo:
+    """Test matrix info methods."""
+    
+    def test_repr(self, small_csr_from_dense):
+        """Test __repr__ method."""
+        repr_str = repr(small_csr_from_dense)
+        assert 'SclCSR' in repr_str
+        assert '3, 4' in repr_str or '(3, 4)' in repr_str
+    
+    def test_info(self, small_csr_from_dense):
+        """Test info() method."""
+        info_str = small_csr_from_dense.info()
+        assert 'SclCSR' in info_str
+        assert 'shape' in info_str
+        assert 'backend' in info_str
+        assert 'ownership' in info_str

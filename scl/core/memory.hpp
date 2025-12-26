@@ -198,7 +198,7 @@ template <typename T>
 SCL_FORCE_INLINE void fill(Array<T> span, T value) {
     namespace s = scl::simd;
     const s::Tag d;
-    const size_t N = span.size;
+    const size_t N = span.len;
     const size_t lanes = s::lanes();
     
     // Broadcast value
@@ -229,7 +229,7 @@ SCL_FORCE_INLINE void fill(Array<T> span, T value) {
 template <typename T>
 SCL_FORCE_INLINE void zero(Array<T> span) {
     if constexpr (std::is_trivial_v<T>) {
-        std::memset(span.ptr, 0, span.byte_size());
+        std::memset(span.ptr, 0, span.len * sizeof(T));
     } else {
         fill(span, T(0));
     }
@@ -250,16 +250,16 @@ SCL_FORCE_INLINE void zero(Array<T> span) {
 template <typename T>
 SCL_FORCE_INLINE void copy_fast(Array<const T> src, Array<T> dst) {
     // Debug-only checks. In Release, this executes 0 instructions overhead.
-    SCL_ASSERT(src.size == dst.size, "copy_fast: Size mismatch");
+    SCL_ASSERT(src.len == dst.len, "copy_fast: Size mismatch");
     SCL_ASSERT(src.end() <= dst.begin() || dst.end() <= src.begin(), 
                "copy_fast: Overlap detected! Use scl::memory::copy instead.");
 
     if constexpr (std::is_trivially_copyable_v<T>) {
         // std::memcpy implies __restrict__ semantics in standard C++
-        std::memcpy(dst.ptr, src.ptr, src.byte_size());
+        std::memcpy(dst.ptr, src.ptr, src.len * sizeof(T));
     } else {
         // Fallback for non-trivial types
-        for (size_t i = 0; i < src.size; ++i) {
+        for (size_t i = 0; i < src.len; ++i) {
             dst[i] = src[i];
         }
     }
@@ -271,19 +271,19 @@ SCL_FORCE_INLINE void copy_fast(Array<const T> src, Array<T> dst) {
 /// Slightly slower than `copy_fast`.
 template <typename T>
 SCL_FORCE_INLINE void copy(Array<const T> src, Array<T> dst) {
-    SCL_ASSERT(src.size == dst.size, "copy: Size mismatch");
+    SCL_ASSERT(src.len == dst.len, "copy: Size mismatch");
 
     if constexpr (std::is_trivially_copyable_v<T>) {
         // std::memmove handles overlapping regions safely
-        std::memmove(dst.ptr, src.ptr, src.byte_size());
+        std::memmove(dst.ptr, src.ptr, src.len * sizeof(T));
     } else {
         // Manual overlap handling for non-trivial types
         if (dst.ptr < src.ptr) {
             // Copy forward
-            for (size_t i = 0; i < src.size; ++i) dst[i] = src[i];
+            for (size_t i = 0; i < src.len; ++i) dst[i] = src[i];
         } else if (dst.ptr > src.ptr) {
             // Copy backward
-            for (size_t i = src.size; i > 0; --i) dst[i-1] = src[i-1];
+            for (size_t i = src.len; i > 0; --i) dst[i-1] = src[i-1];
         }
     }
 }
@@ -297,12 +297,12 @@ SCL_FORCE_INLINE void copy(Array<const T> src, Array<T> dst) {
 /// Avoid for: Small buffers (cache bypass overhead is too high).
 template <typename T>
 SCL_FORCE_INLINE void stream_copy(Array<const T> src, Array<T> dst) {
-    SCL_ASSERT(src.size == dst.size, "stream_copy: Size mismatch");
+    SCL_ASSERT(src.len == dst.len, "stream_copy: Size mismatch");
     // Overlap check skipped for speed, implies UB if violated.
 
     namespace s = scl::simd;
     const s::Tag d;
-    const size_t N = src.size;
+    const size_t N = src.len;
     const size_t lanes = s::lanes();
 
     size_t i = 0;
