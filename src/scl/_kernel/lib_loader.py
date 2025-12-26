@@ -1,17 +1,17 @@
-"""
-Dynamic Library Loader for SCL
+"""Dynamic library loader for SCL C API.
 
-Handles platform-specific library loading with lazy initialization.
+This module handles platform-specific library loading with lazy initialization.
+No external dependencies required.
 """
 
 import ctypes
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Literal
-import warnings
+from typing import Optional
 
-__all__ = ['get_lib', 'get_lib_f32', 'get_lib_f64', 'LibraryNotFoundError']
+
+__all__ = ['get_lib', 'LibraryNotFoundError']
 
 
 class LibraryNotFoundError(Exception):
@@ -20,26 +20,23 @@ class LibraryNotFoundError(Exception):
 
 
 # Global library cache
-_lib_f32 = None
-_lib_f64 = None
-_initialized = False
+_lib_cache = {}
 
 
 def _find_library(precision: str = 'f32') -> Optional[Path]:
-    """
-    Search for SCL shared library.
+    """Search for SCL shared library.
     
     Search order:
-    1. Environment variable: SCL_LIBRARY_PATH
-    2. Package directory: src/scl/libs/
-    3. Build directory: build/
-    4. System library paths
+        1. Environment variable: SCL_LIBRARY_PATH
+        2. Package directory: src/scl/libs/
+        3. Build directory: build/
+        4. System library paths
     
     Args:
-        precision: 'f32' or 'f64'
+        precision: Library precision ('f32' or 'f64').
         
     Returns:
-        Path to library file, or None if not found
+        Path to library file, or None if not found.
     """
     # Platform-specific library name
     if sys.platform == 'win32':
@@ -90,117 +87,51 @@ def _find_library(precision: str = 'f32') -> Optional[Path]:
     return None
 
 
-def get_lib(precision: Optional[Literal['f32', 'f64']] = None) -> ctypes.CDLL:
-    """
-    Get SCL library handle.
-    
-    Automatically detects precision from SCL_PRECISION environment variable
-    or defaults to f32.
+def get_lib(precision: Optional[str] = None) -> ctypes.CDLL:
+    """Get SCL library handle with lazy initialization.
     
     This function handles:
-    - Library discovery
-    - Loading and caching
-    - Lazy function signature initialization
+        - Library discovery
+        - Loading and caching
+        - Automatic precision detection
     
     Args:
-        precision: Force specific precision ('f32' or 'f64'), or None for auto
+        precision: Force specific precision ('f32' or 'f64'), or None for auto-detect.
         
     Returns:
-        ctypes.CDLL library handle
+        ctypes.CDLL library handle.
         
     Raises:
-        LibraryNotFoundError: If library cannot be found
-    
+        LibraryNotFoundError: If library cannot be found.
+        
     Example:
         >>> lib = get_lib()
-        >>> lib.scl_version()
+        >>> version = lib.scl_version()
     """
-    global _initialized
-    
     # Auto-detect precision
     if precision is None:
         precision = os.environ.get('SCL_PRECISION', 'f32')
     
-    if precision == 'f32':
-        return get_lib_f32()
-    elif precision == 'f64':
-        return get_lib_f64()
-    else:
+    if precision not in ('f32', 'f64'):
         raise ValueError(f"Invalid precision: {precision}. Must be 'f32' or 'f64'")
-
-
-def get_lib_f32() -> ctypes.CDLL:
-    """
-    Get float32 precision library.
     
-    Returns:
-        ctypes.CDLL handle for f32 library
-        
-    Raises:
-        LibraryNotFoundError: If library not found
-    """
-    global _lib_f32
-    
-    if _lib_f32 is not None:
-        return _lib_f32
+    # Check cache
+    if precision in _lib_cache:
+        return _lib_cache[precision]
     
     # Find library
-    lib_path = _find_library('f32')
+    lib_path = _find_library(precision)
     if lib_path is None:
         raise LibraryNotFoundError(
-            "Cannot find SCL f32 library. "
-            "Please build the library first with 'make' or set SCL_LIBRARY_PATH."
+            f"Cannot find SCL {precision} library. "
+            f"Please build the library first or set SCL_LIBRARY_PATH."
         )
     
     # Load library
     try:
-        _lib_f32 = ctypes.CDLL(str(lib_path))
+        lib = ctypes.CDLL(str(lib_path))
+        _lib_cache[precision] = lib
+        return lib
     except OSError as e:
         raise LibraryNotFoundError(f"Failed to load library from {lib_path}: {e}")
-    
-    return _lib_f32
 
-
-def get_lib_f64() -> ctypes.CDLL:
-    """
-    Get float64 precision library.
-    
-    Returns:
-        ctypes.CDLL handle for f64 library
-        
-    Raises:
-        LibraryNotFoundError: If library not found
-    """
-    global _lib_f64
-    
-    if _lib_f64 is not None:
-        return _lib_f64
-    
-    # Find library
-    lib_path = _find_library('f64')
-    if lib_path is None:
-        raise LibraryNotFoundError(
-            "Cannot find SCL f64 library. "
-            "Please build the library first with 'make' or set SCL_LIBRARY_PATH."
-        )
-    
-    # Load library
-    try:
-        _lib_f64 = ctypes.CDLL(str(lib_path))
-    except OSError as e:
-        raise LibraryNotFoundError(f"Failed to load library from {lib_path}: {e}")
-    
-    return _lib_f64
-
-
-def is_library_available(precision: str = 'f32') -> bool:
-    """
-    Check if library is available without loading it.
-    
-    Args:
-        precision: 'f32' or 'f64'
-        
-    Returns:
-        True if library file exists
-    """
-    return _find_library(precision) is not None

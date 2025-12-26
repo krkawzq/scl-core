@@ -1,280 +1,293 @@
-"""
-Sparse Matrix Statistics Kernels
+"""Sparse matrix statistics kernels.
 
 Low-level C bindings for sparse matrix aggregation operations.
+All functions work with raw pointers - numpy arrays are converted by caller.
 """
 
 import ctypes
-import numpy as np
+from typing import Any, Optional
+
 from .lib_loader import get_lib
-from .types import c_real, c_index, c_size, np_real, np_index, check_error, as_c_ptr
+from .types import c_real, c_index, check_error
+
 
 __all__ = [
-    'row_sums_csr',
-    'col_sums_csc',
-    'row_statistics_csr',
-    'col_statistics_csc',
+    'primary_sums_csr',
+    'primary_sums_csc',
+    'primary_means_csr',
+    'primary_means_csc',
+    'primary_variances_csr',
+    'primary_variances_csc',
+    'primary_nnz_counts_csr',
+    'primary_nnz_counts_csc',
 ]
 
-# =============================================================================
-# Function Signatures
-# =============================================================================
 
-def _init_signatures():
-    """Initialize C function signatures."""
-    lib = get_lib()
-    
-    # row_sums_csr
-    lib.scl_row_sums_csr.argtypes = [
-        ctypes.POINTER(c_real),   # data
-        ctypes.POINTER(c_index),  # indices
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # row_lengths (can be NULL)
-        c_index,                   # rows
-        c_index,                   # cols
-        c_index,                   # nnz
-        ctypes.POINTER(c_real),   # output
-    ]
-    lib.scl_row_sums_csr.restype = ctypes.c_int
-    
-    # col_sums_csc
-    lib.scl_col_sums_csc.argtypes = [
-        ctypes.POINTER(c_real),   # data
-        ctypes.POINTER(c_index),  # indices
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # col_lengths (can be NULL)
-        c_index,                   # rows
-        c_index,                   # cols
-        c_index,                   # nnz
-        ctypes.POINTER(c_real),   # output
-    ]
-    lib.scl_col_sums_csc.restype = ctypes.c_int
-    
-    # row_statistics_csr
-    lib.scl_row_statistics_csr.argtypes = [
-        ctypes.POINTER(c_real),   # data
-        ctypes.POINTER(c_index),  # indices
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # row_lengths
-        c_index,                   # rows
-        c_index,                   # cols
-        c_index,                   # nnz
-        ctypes.POINTER(c_real),   # out_means
-        ctypes.POINTER(c_real),   # out_vars
-    ]
-    lib.scl_row_statistics_csr.restype = ctypes.c_int
-    
-    # col_statistics_csc
-    lib.scl_col_statistics_csc.argtypes = [
-        ctypes.POINTER(c_real),   # data
-        ctypes.POINTER(c_index),  # indices
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # col_lengths
-        c_index,                   # rows
-        c_index,                   # cols
-        c_index,                   # nnz
-        ctypes.POINTER(c_real),   # out_means
-        ctypes.POINTER(c_real),   # out_vars
-    ]
-    lib.scl_col_statistics_csc.restype = ctypes.c_int
-
-
-# Try to initialize signatures on import, but don't fail
-try:
-    _init_signatures()
-except Exception as e:
-    # Library not available yet - will fail on actual function calls
-    import warnings
-    warnings.warn(f"SCL C++ library not available: {e}. Functions will fail until library is built.")
-
-# =============================================================================
-# Python Wrappers
-# =============================================================================
-
-def row_sums_csr(
-    data,  # ctypes pointer or Array
-    indices,  # ctypes pointer or Array  
-    indptr,  # ctypes pointer or Array
-    row_lengths,  # ctypes pointer or Array or None
+def primary_sums_csr(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    row_lengths: Optional[Any],
     rows: int,
     cols: int,
     nnz: int,
-    output  # ctypes pointer or Array
+    output: Any
 ) -> None:
-    """
-    Compute row sums for CSR matrix.
+    """Compute row sums for CSR matrix.
     
     Args:
-        data: CSR data array pointer
-        indices: CSR column indices pointer
-        indptr: CSR row pointers pointer
-        row_lengths: Explicit row lengths pointer or None
-        rows: Number of rows
-        cols: Number of columns
-        nnz: Number of non-zero elements
-        output: Output array pointer - modified in-place
+        data: CSR data array pointer.
+        indices: CSR column indices pointer.
+        indptr: CSR row pointers pointer.
+        row_lengths: Explicit row lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zero elements.
+        output: Output array pointer (modified in-place).
         
     Raises:
-        RuntimeError: If C function fails
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
+    lib.scl_primary_sums_csr.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index, ctypes.POINTER(c_real)
+    ]
+    lib.scl_primary_sums_csr.restype = ctypes.c_int
     
-    # Convert c_void_p to appropriate pointer types
-    def to_ptr(ptr, ctype):
-        if ptr is None or ptr == 0:
-            return None
-        if isinstance(ptr, ctypes.c_void_p):
-            return ctypes.cast(ptr, ctypes.POINTER(ctype))
-        return ptr
-    
-    data_ptr = to_ptr(data, c_real)
-    indices_ptr = to_ptr(indices, c_index)
-    indptr_ptr = to_ptr(indptr, c_index)
-    row_lengths_ptr = to_ptr(row_lengths, c_index)
-    output_ptr = to_ptr(output, c_real)
-    
-    status = lib.scl_row_sums_csr(
-        data_ptr,
-        indices_ptr,
-        indptr_ptr,
-        row_lengths_ptr,
-        rows,
-        cols,
-        nnz,
-        output_ptr
-    )
-    
-    check_error(status, "row_sums_csr")
+    status = lib.scl_primary_sums_csr(data, indices, indptr, row_lengths, rows, cols, nnz, output)
+    check_error(status, "primary_sums_csr")
 
 
-def col_sums_csc(
-    data: np.ndarray,
-    indices: np.ndarray,
-    indptr: np.ndarray,
-    col_lengths: np.ndarray,
+def primary_sums_csc(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    col_lengths: Optional[Any],
     rows: int,
     cols: int,
     nnz: int,
-    output: np.ndarray
+    output: Any
 ) -> None:
-    """
-    Compute column sums for CSC matrix.
+    """Compute column sums for CSC matrix.
     
     Args:
-        data: CSC data array (nnz,)
-        indices: CSC row indices (nnz,)
-        indptr: CSC column pointers (cols+1,)
-        col_lengths: Explicit column lengths or None
-        rows: Number of rows
-        cols: Number of columns
-        nnz: Number of non-zeros
-        output: Output array (cols,) - modified in-place
+        data: CSC data array pointer.
+        indices: CSC row indices pointer.
+        indptr: CSC column pointers pointer.
+        col_lengths: Explicit column lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zero elements.
+        output: Output array pointer (modified in-place).
         
     Raises:
-        RuntimeError: If C function fails
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
+    lib.scl_primary_sums_csc.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index, ctypes.POINTER(c_real)
+    ]
+    lib.scl_primary_sums_csc.restype = ctypes.c_int
     
-    status = lib.scl_col_sums_csc(
-        as_c_ptr(data, c_real),
-        as_c_ptr(indices, c_index),
-        as_c_ptr(indptr, c_index),
-        as_c_ptr(col_lengths, c_index) if col_lengths is not None else None,
-        rows,
-        cols,
-        nnz,
-        as_c_ptr(output, c_real)
-    )
-    
-    check_error(status, "col_sums_csc")
+    status = lib.scl_primary_sums_csc(data, indices, indptr, col_lengths, rows, cols, nnz, output)
+    check_error(status, "primary_sums_csc")
 
 
-def row_statistics_csr(
-    data: np.ndarray,
-    indices: np.ndarray,
-    indptr: np.ndarray,
-    row_lengths: np.ndarray,
+def primary_means_csr(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    row_lengths: Optional[Any],
     rows: int,
     cols: int,
     nnz: int,
-    out_means: np.ndarray,
-    out_vars: np.ndarray
+    output: Any
 ) -> None:
-    """
-    Compute row statistics (mean + variance) for CSR matrix.
+    """Compute row means for CSR matrix.
     
     Args:
-        data: CSR data array (nnz,)
-        indices: CSR column indices (nnz,)
-        indptr: CSR row pointers (rows+1,)
-        row_lengths: Explicit row lengths or None
-        rows: Number of rows
-        cols: Number of columns
-        nnz: Number of non-zeros
-        out_means: Output means array (rows,) - modified in-place
-        out_vars: Output variances array (rows,) - modified in-place
+        data: CSR data array pointer.
+        indices: CSR column indices pointer.
+        indptr: CSR row pointers pointer.
+        row_lengths: Explicit row lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zero elements.
+        output: Output array pointer (modified in-place).
         
     Raises:
-        RuntimeError: If C function fails
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
+    lib.scl_primary_means_csr.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index, ctypes.POINTER(c_real)
+    ]
+    lib.scl_primary_means_csr.restype = ctypes.c_int
     
-    status = lib.scl_row_statistics_csr(
-        as_c_ptr(data, c_real),
-        as_c_ptr(indices, c_index),
-        as_c_ptr(indptr, c_index),
-        as_c_ptr(row_lengths, c_index) if row_lengths is not None else None,
-        rows,
-        cols,
-        nnz,
-        as_c_ptr(out_means, c_real),
-        as_c_ptr(out_vars, c_real)
-    )
-    
-    check_error(status, "row_statistics_csr")
+    status = lib.scl_primary_means_csr(data, indices, indptr, row_lengths, rows, cols, nnz, output)
+    check_error(status, "primary_means_csr")
 
 
-def col_statistics_csc(
-    data: np.ndarray,
-    indices: np.ndarray,
-    indptr: np.ndarray,
-    col_lengths: np.ndarray,
+def primary_means_csc(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    col_lengths: Optional[Any],
     rows: int,
     cols: int,
     nnz: int,
-    out_means: np.ndarray,
-    out_vars: np.ndarray
+    output: Any
 ) -> None:
-    """
-    Compute column statistics (mean + variance) for CSC matrix.
+    """Compute column means for CSC matrix.
     
     Args:
-        data: CSC data array (nnz,)
-        indices: CSC row indices (nnz,)
-        indptr: CSC column pointers (cols+1,)
-        col_lengths: Explicit column lengths or None
-        rows: Number of rows
-        cols: Number of columns
-        nnz: Number of non-zeros
-        out_means: Output means array (cols,) - modified in-place
-        out_vars: Output variances array (cols,) - modified in-place
+        data: CSC data array pointer.
+        indices: CSC row indices pointer.
+        indptr: CSC column pointers pointer.
+        col_lengths: Explicit column lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zero elements.
+        output: Output array pointer (modified in-place).
         
     Raises:
-        RuntimeError: If C function fails
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
+    lib.scl_primary_means_csc.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index, ctypes.POINTER(c_real)
+    ]
+    lib.scl_primary_means_csc.restype = ctypes.c_int
     
-    status = lib.scl_col_statistics_csc(
-        as_c_ptr(data, c_real),
-        as_c_ptr(indices, c_index),
-        as_c_ptr(indptr, c_index),
-        as_c_ptr(col_lengths, c_index) if col_lengths is not None else None,
-        rows,
-        cols,
-        nnz,
-        as_c_ptr(out_means, c_real),
-        as_c_ptr(out_vars, c_real)
-    )
-    
-    check_error(status, "col_statistics_csc")
+    status = lib.scl_primary_means_csc(data, indices, indptr, col_lengths, rows, cols, nnz, output)
+    check_error(status, "primary_means_csc")
 
+
+def primary_variances_csr(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    row_lengths: Optional[Any],
+    rows: int,
+    cols: int,
+    nnz: int,
+    ddof: int,
+    output: Any
+) -> None:
+    """Compute row variances for CSR matrix.
+    
+    Args:
+        data: CSR data array pointer.
+        indices: CSR column indices pointer.
+        indptr: CSR row pointers pointer.
+        row_lengths: Explicit row lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zero elements.
+        ddof: Delta degrees of freedom (typically 0 or 1).
+        output: Output array pointer (modified in-place).
+        
+    Raises:
+        RuntimeError: If C function fails.
+    """
+    lib = get_lib()
+    lib.scl_primary_variances_csr.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index, ctypes.c_int, ctypes.POINTER(c_real)
+    ]
+    lib.scl_primary_variances_csr.restype = ctypes.c_int
+    
+    status = lib.scl_primary_variances_csr(data, indices, indptr, row_lengths, rows, cols, nnz, ddof, output)
+    check_error(status, "primary_variances_csr")
+
+
+def primary_variances_csc(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    col_lengths: Optional[Any],
+    rows: int,
+    cols: int,
+    nnz: int,
+    ddof: int,
+    output: Any
+) -> None:
+    """Compute column variances for CSC matrix.
+    
+    Args:
+        data: CSC data array pointer.
+        indices: CSC row indices pointer.
+        indptr: CSC column pointers pointer.
+        col_lengths: Explicit column lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zero elements.
+        ddof: Delta degrees of freedom (typically 0 or 1).
+        output: Output array pointer (modified in-place).
+        
+    Raises:
+        RuntimeError: If C function fails.
+    """
+    lib = get_lib()
+    lib.scl_primary_variances_csc.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index, ctypes.c_int, ctypes.POINTER(c_real)
+    ]
+    lib.scl_primary_variances_csc.restype = ctypes.c_int
+    
+    status = lib.scl_primary_variances_csc(data, indices, indptr, col_lengths, rows, cols, nnz, ddof, output)
+    check_error(status, "primary_variances_csc")
+
+
+def primary_nnz_counts_csr(
+    indptr: Any,
+    rows: int,
+    output: Any
+) -> None:
+    """Count non-zero elements per row (CSR).
+    
+    Args:
+        indptr: CSR row pointers pointer.
+        rows: Number of rows.
+        output: Output counts pointer (modified in-place).
+        
+    Raises:
+        RuntimeError: If C function fails.
+    """
+    lib = get_lib()
+    lib.scl_primary_nnz_counts_csr.argtypes = [
+        ctypes.POINTER(c_index), c_index, ctypes.POINTER(c_index)
+    ]
+    lib.scl_primary_nnz_counts_csr.restype = ctypes.c_int
+    
+    status = lib.scl_primary_nnz_counts_csr(indptr, rows, output)
+    check_error(status, "primary_nnz_counts_csr")
+
+
+def primary_nnz_counts_csc(
+    indptr: Any,
+    cols: int,
+    output: Any
+) -> None:
+    """Count non-zero elements per column (CSC).
+    
+    Args:
+        indptr: CSC column pointers pointer.
+        cols: Number of columns.
+        output: Output counts pointer (modified in-place).
+        
+    Raises:
+        RuntimeError: If C function fails.
+    """
+    lib = get_lib()
+    lib.scl_primary_nnz_counts_csc.argtypes = [
+        ctypes.POINTER(c_index), c_index, ctypes.POINTER(c_index)
+    ]
+    lib.scl_primary_nnz_counts_csc.restype = ctypes.c_int
+    
+    status = lib.scl_primary_nnz_counts_csc(indptr, cols, output)
+    check_error(status, "primary_nnz_counts_csc")

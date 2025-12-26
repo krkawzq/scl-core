@@ -1,135 +1,85 @@
-"""
-Normalization Kernels
+"""Normalization operation kernels.
 
 Low-level C bindings for normalization operations.
 """
 
 import ctypes
-import numpy as np
+from typing import Any, Optional
+
 from .lib_loader import get_lib
-from .types import c_real, c_index, check_error, as_c_ptr
-
-__all__ = [
-    'scale_rows_csr',
-    'scale_cols_csc',
-]
-
-# =============================================================================
-# Function Signatures
-# =============================================================================
-
-def _init_signatures():
-    """Initialize C function signatures."""
-    lib = get_lib()
-    
-    # scale_rows_csr
-    lib.scl_scale_rows_csr.argtypes = [
-        ctypes.POINTER(c_real),   # data (mutable)
-        ctypes.POINTER(c_index),  # indices
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # row_lengths
-        c_index,                   # rows
-        c_index,                   # cols
-        c_index,                   # nnz
-        ctypes.POINTER(c_real),   # scales
-    ]
-    lib.scl_scale_rows_csr.restype = ctypes.c_int
-    
-    # scale_cols_csc
-    lib.scl_scale_cols_csc.argtypes = [
-        ctypes.POINTER(c_real),   # data (mutable)
-        ctypes.POINTER(c_index),  # indices
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # col_lengths
-        c_index,                   # rows
-        c_index,                   # cols
-        c_index,                   # nnz
-        ctypes.POINTER(c_real),   # scales
-    ]
-    lib.scl_scale_cols_csc.restype = ctypes.c_int
+from .types import c_real, c_index, check_error
 
 
-# Initialize signatures lazily
-try:
-    _init_signatures()
-except Exception as e:
-    import warnings
-    warnings.warn(f"SCL library not ready: {e}")
+__all__ = ['scale_primary_csr', 'scale_primary_csc']
 
-# =============================================================================
-# Python Wrappers
-# =============================================================================
 
-def scale_rows_csr(
-    data: np.ndarray,
-    indices: np.ndarray,
-    indptr: np.ndarray,
-    row_lengths: np.ndarray,
+def scale_primary_csr(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    row_lengths: Optional[Any],
     rows: int,
     cols: int,
     nnz: int,
-    scales: np.ndarray
+    scales: Any
 ) -> None:
-    """
-    Scale each row by a factor (CSR matrix, in-place).
+    """Scale each row by a factor (CSR matrix, in-place).
     
     Args:
-        data: CSR data array (modified in-place)
-        indices: CSR column indices
-        indptr: CSR row pointers
-        row_lengths: Explicit row lengths or None
-        rows: Number of rows
-        cols: Number of columns
-        nnz: Number of non-zeros
-        scales: Scale factors per row, shape (rows,)
+        data: CSR data array pointer (modified in-place).
+        indices: CSR column indices pointer.
+        indptr: CSR row pointers pointer.
+        row_lengths: Explicit row lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zeros.
+        scales: Scale factors per row pointer.
+        
+    Raises:
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
+    lib.scl_scale_primary_csr.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index, ctypes.POINTER(c_real)
+    ]
+    lib.scl_scale_primary_csr.restype = ctypes.c_int
     
-    status = lib.scl_scale_rows_csr(
-        as_c_ptr(data, c_real),
-        as_c_ptr(indices, c_index),
-        as_c_ptr(indptr, c_index),
-        as_c_ptr(row_lengths, c_index) if row_lengths is not None else None,
-        rows, cols, nnz,
-        as_c_ptr(scales, c_real)
-    )
-    
-    check_error(status, "scale_rows_csr")
+    status = lib.scl_scale_primary_csr(data, indices, indptr, row_lengths, rows, cols, nnz, scales)
+    check_error(status, "scale_primary_csr")
 
 
-def scale_cols_csc(
-    data: np.ndarray,
-    indices: np.ndarray,
-    indptr: np.ndarray,
-    col_lengths: np.ndarray,
+def scale_primary_csc(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    col_lengths: Optional[Any],
     rows: int,
     cols: int,
     nnz: int,
-    scales: np.ndarray
+    scales: Any
 ) -> None:
-    """
-    Scale each column by a factor (CSC matrix, in-place).
+    """Scale each column by a factor (CSC matrix, in-place).
     
     Args:
-        data: CSC data array (modified in-place)
-        indices: CSC row indices
-        indptr: CSC column pointers
-        col_lengths: Explicit column lengths or None
-        rows: Number of rows
-        cols: Number of columns
-        nnz: Number of non-zeros
-        scales: Scale factors per column, shape (cols,)
+        data: CSC data array pointer (modified in-place).
+        indices: CSC row indices pointer.
+        indptr: CSC column pointers pointer.
+        col_lengths: Explicit column lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zeros.
+        scales: Scale factors per column pointer.
+        
+    Raises:
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
+    lib.scl_scale_primary_csc.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index, ctypes.POINTER(c_real)
+    ]
+    lib.scl_scale_primary_csc.restype = ctypes.c_int
     
-    status = lib.scl_scale_cols_csc(
-        as_c_ptr(data, c_real),
-        as_c_ptr(indices, c_index),
-        as_c_ptr(indptr, c_index),
-        as_c_ptr(col_lengths, c_index) if col_lengths is not None else None,
-        rows, cols, nnz,
-        as_c_ptr(scales, c_real)
-    )
-    
-    check_error(status, "scale_cols_csc")
-
+    status = lib.scl_scale_primary_csc(data, indices, indptr, col_lengths, rows, cols, nnz, scales)
+    check_error(status, "scale_primary_csc")

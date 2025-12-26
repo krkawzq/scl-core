@@ -1689,7 +1689,10 @@ void scl_free_aligned(void* ptr) {
 /// @param bytes Number of bytes to zero
 void scl_memzero(void* ptr, scl::Size bytes) {
     if (ptr && bytes > 0) {
-        std::memset(ptr, 0, bytes);
+        scl::memory::zero(scl::Array<uint8_t>(
+            static_cast<uint8_t*>(ptr), 
+            bytes
+        ));
     }
 }
 
@@ -1704,7 +1707,10 @@ int scl_memcpy(const void* src, void* dst, scl::Size bytes) {
         if (!src || !dst) {
             throw scl::ValueError("scl_memcpy: null pointer");
         }
-        std::memcpy(dst, src, bytes);
+        scl::memory::copy(
+            scl::Array<const uint8_t>(static_cast<const uint8_t*>(src), bytes),
+            scl::Array<uint8_t>(static_cast<uint8_t*>(dst), bytes)
+        );
     )
 }
 

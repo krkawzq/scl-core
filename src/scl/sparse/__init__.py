@@ -1,135 +1,248 @@
+"""SCL Sparse Matrix Module.
+
+This module provides high-performance sparse matrix data structures
+with automatic backend management, transparent ownership tracking,
+and seamless cross-platform interoperability.
+
+Quick Start:
+    >>> from scl.sparse import SclCSR, SclCSC, vstack_csr
+    >>> 
+    >>> # Create from various sources
+    >>> mat = SclCSR.from_dense([[1, 0, 2], [0, 3, 0]])
+    >>> mat = SclCSR.from_scipy(scipy_csr_matrix)
+    >>> mat = from_anndata(adata)
+    >>> 
+    >>> # Smart slicing (auto backend management)
+    >>> view = mat[0:100, :]      # Virtual backend, zero-copy
+    >>> subset = mat[[0,5,10], :] # Row selection
+    >>> 
+    >>> # Stacking operations
+    >>> stacked = vstack_csr([mat1, mat2, mat3])
+    >>> 
+    >>> # Convert to external formats
+    >>> scipy_mat = mat.to_scipy()
+    >>> adata = to_anndata(mat)
+
+Architecture:
+    ┌─────────────────────────────────────────────────┐
+    │           SclCSR / SclCSC (Smart Matrix)        │
+    ├─────────────────────────────────────────────────┤
+    │  Backend: CUSTOM | VIRTUAL | MAPPED             │
+    │  Ownership: OWNED | BORROWED | VIEW             │
+    ├─────────────────────────────────────────────────┤
+    │  Auto: reference chain, slicing strategy,       │
+    │        materialization, format conversion       │
+    └─────────────────────────────────────────────────┘
+
+Backend Types:
+    - CUSTOM: Local arrays with full control
+    - VIRTUAL: Zero-copy views for stacking/slicing
+    - MAPPED: Memory-mapped files for large data
+
+Ownership Models:
+    - OWNED: Matrix owns the data
+    - BORROWED: Data from external source (scipy)
+    - VIEW: Derived from another matrix
+
+Key Classes:
+    - SclCSR: Smart row-oriented sparse matrix
+    - SclCSC: Smart column-oriented sparse matrix
+    - Array: Lightweight contiguous array
+    
+Key Functions:
+    - vstack_csr, hstack_csc: Stack matrices
+    - from_scipy, to_scipy: scipy interop
+    - from_anndata, to_anndata: AnnData interop
+    - align_rows, align_cols: Matrix alignment
 """
-SCL Sparse Matrix Module
 
-Provides Python-side sparse matrix data structures with seamless integration
-to C++ kernels and scipy.sparse compatibility.
-
-Design Philosophy:
-- Keep C++ pure: complex logic and memory management in Python
-- Zero-copy where possible: operate on scipy.sparse arrays directly
-- No numpy dependency in core: use lightweight Array class
-- Type safety: automatic validation and conversion
-- Convenience: Pythonic API with sensible defaults
-
-Classes:
-- Array: Lightweight contiguous array (no numpy dependency)
-- SclCSR: Custom CSR format with row_lengths for optimized operations
-- SclCSC: Custom CSC format with col_lengths for optimized operations
-- VirtualCSR: Zero-copy wrapper for scipy.sparse.csr_matrix
-- VirtualCSC: Zero-copy wrapper for scipy.sparse.csc_matrix
-
-Usage:
-    from scl.sparse import Array, SclCSR, VirtualCSR
-    
-    # Pure Python (no numpy)
-    data = Array.from_list([1.0, 2.0, 3.0], dtype='float32')
-    
-    # From scipy (optional dependency)
-    import scipy.sparse as sp
-    scipy_mat = sp.csr_matrix(...)
-    scl_mat = SclCSR.from_scipy(scipy_mat)
-    
-    # Zero-copy view
-    virtual = VirtualCSR(scipy_mat)
-    
-    # Back to scipy
-    result = scl_mat.to_scipy()
-"""
-
-from typing import List, Any
-
-from ._array import Array, empty, zeros, from_list, from_buffer
-from ._matrix import SclCSR, SclCSC
-from ._virtual_matrix import VirtualCSR, VirtualCSC
-from ._dtypes import (
-    DType,
-    float32, float64,
-    int32, int64,
-    uint8, uint32, uint64,
-    normalize_dtype,
-    validate_dtype,
-    is_float_dtype,
-    is_int_dtype,
-    dtype_itemsize,
+# =============================================================================
+# Array (Foundation)
+# =============================================================================
+from ._array import (
+    Array,
+    zeros,
+    empty,
+    ones,
+    from_list,
 )
 
+# =============================================================================
+# Data Types
+# =============================================================================
+from ._dtypes import (
+    DType,
+    float32,
+    float64,
+    int32,
+    int64,
+    uint8,
+    validate_dtype,
+    normalize_dtype,
+)
+
+# =============================================================================
+# Backend & Ownership (Internal, but exposed for advanced users)
+# =============================================================================
+from ._backend import (
+    Backend,
+    Ownership,
+    StorageInfo,
+    CustomStorage,
+    VirtualStorage,
+    MappedStorage,
+    ChunkInfo,
+)
+
+from ._ownership import (
+    RefChain,
+    OwnershipTracker,
+    ensure_alive,
+)
+
+# =============================================================================
+# Smart Sparse Matrices (Main API)
+# =============================================================================
+from ._csr import SclCSR, CSR
+from ._csc import SclCSC, CSC
+
+# =============================================================================
+# Operations
+# =============================================================================
+from ._ops import (
+    # Stacking
+    vstack_csr,
+    hstack_csc,
+    vstack,
+    hstack,
+    
+    # Format conversion
+    convert_format,
+    
+    # Cross-platform
+    from_scipy,
+    from_anndata,
+    from_numpy,
+    to_scipy,
+    to_anndata,
+    to_numpy,
+    
+    # Alignment
+    align_rows,
+    align_cols,
+    align_to_categories,
+    
+    # Statistics
+    sum_rows,
+    sum_cols,
+    mean_rows,
+    mean_cols,
+    var_rows,
+    var_cols,
+    
+    # Utilities
+    concatenate,
+    empty_like,
+    zeros_like,
+)
+
+# =============================================================================
+# Type Checking Utilities
+# =============================================================================
+
+def is_sparse_like(obj) -> bool:
+    """Check if object is a sparse matrix-like type."""
+    return isinstance(obj, (SclCSR, SclCSC))
+
+
+def is_csr_like(obj) -> bool:
+    """Check if object is CSR-like."""
+    return isinstance(obj, SclCSR)
+
+
+def is_csc_like(obj) -> bool:
+    """Check if object is CSC-like."""
+    return isinstance(obj, SclCSC)
+
+
+# =============================================================================
+# Public API
+# =============================================================================
 __all__ = [
-    # Array
+    # ---- Core Classes ----
     'Array',
-    'empty',
-    'zeros',
-    'from_list',
-    'from_buffer',
-    # Matrices
     'SclCSR',
     'SclCSC',
-    'VirtualCSR',
-    'VirtualCSC',
-    # Convenience functions
-    'vstack_csr',
-    'hstack_csc',
-    # Type system
+    'CSR',  # Alias
+    'CSC',  # Alias
+    
+    # ---- Backend/Ownership (advanced) ----
+    'Backend',
+    'Ownership',
+    'StorageInfo',
+    'CustomStorage',
+    'VirtualStorage', 
+    'MappedStorage',
+    'ChunkInfo',
+    'RefChain',
+    'OwnershipTracker',
+    'ensure_alive',
+    
+    # ---- Array Functions ----
+    'zeros',
+    'empty',
+    'ones',
+    'from_list',
+    
+    # ---- Data Types ----
     'DType',
     'float32',
     'float64',
     'int32',
     'int64',
     'uint8',
-    'uint32',
-    'uint64',
-    'normalize_dtype',
     'validate_dtype',
-    'is_float_dtype',
-    'is_int_dtype',
-    'dtype_itemsize',
+    'normalize_dtype',
+    
+    # ---- Stacking ----
+    'vstack_csr',
+    'hstack_csc',
+    'vstack',
+    'hstack',
+    
+    # ---- Conversion ----
+    'convert_format',
+    'from_scipy',
+    'from_anndata',
+    'from_numpy',
+    'to_scipy',
+    'to_anndata',
+    'to_numpy',
+    
+    # ---- Alignment ----
+    'align_rows',
+    'align_cols',
+    'align_to_categories',
+    
+    # ---- Statistics ----
+    'sum_rows',
+    'sum_cols',
+    'mean_rows',
+    'mean_cols',
+    'var_rows',
+    'var_cols',
+    
+    # ---- Utilities ----
+    'concatenate',
+    'empty_like',
+    'zeros_like',
+    'is_sparse_like',
+    'is_csr_like',
+    'is_csc_like',
 ]
 
 
 # =============================================================================
-# Convenience Functions
+# Version
 # =============================================================================
-
-def vstack_csr(matrices: List[Any]) -> VirtualCSR:
-    """
-    Vertically stack CSR matrices (zero-copy).
-    
-    Creates a composite view that logically concatenates matrices.
-    No memory is copied until to_owned() is called.
-    
-    Args:
-        matrices: List of CSR matrices (scipy, SclCSR, or VirtualCSR)
-        
-    Returns:
-        VirtualCSR representing the stacked matrix
-    
-    Example:
-        >>> mat1 = sp.csr_matrix(...)  # 1000 × 2000
-        >>> mat2 = sp.csr_matrix(...)  # 500 × 2000
-        >>> stacked = vstack_csr([mat1, mat2])  # 1500 × 2000, zero-copy
-        >>> 
-        >>> # Materialize when needed
-        >>> owned = stacked.to_owned()
-    """
-    return VirtualCSR(matrices)
-
-
-def hstack_csc(matrices: List[Any]) -> VirtualCSC:
-    """
-    Horizontally stack CSC matrices (zero-copy).
-    
-    Creates a composite view that logically concatenates matrices.
-    
-    Args:
-        matrices: List of CSC matrices (scipy, SclCSC, or VirtualCSC)
-        
-    Returns:
-        VirtualCSC representing the stacked matrix
-    
-    Example:
-        >>> mat1 = sp.csc_matrix(...)  # 1000 × 2000
-        >>> mat2 = sp.csc_matrix(...)  # 1000 × 500
-        >>> stacked = hstack_csc([mat1, mat2])  # 1000 × 2500, zero-copy
-    """
-    return VirtualCSC(matrices)
-
-
+__version__ = '0.2.0'

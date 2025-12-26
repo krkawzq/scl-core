@@ -1,12 +1,20 @@
-"""
-Matrix Utilities
+"""Matrix utility functions.
 
-Low-level C bindings for high-performance matrix manipulation operations.
+Low-level C bindings for matrix manipulation operations.
+
+Note: These functions are not yet in the main C API (c_api.cpp).
+      They may be implemented in separate utility modules or need to be added.
+      
+This module provides placeholder implementations that will be connected
+to C functions once they are added to the C API.
 """
 
 import ctypes
+from typing import Any, Optional
+
 from .lib_loader import get_lib
-from .types import c_real, c_index, c_size, c_byte, check_error, as_c_ptr
+from .types import c_real, c_index, check_error
+
 
 __all__ = [
     'compute_lengths',
@@ -17,266 +25,270 @@ __all__ = [
     'align_rows',
 ]
 
-# =============================================================================
-# Function Signatures
-# =============================================================================
 
-def _init_signatures():
-    """Initialize C function signatures."""
+def compute_lengths(indptr: Any, n: int, lengths: Any) -> None:
+    """Compute row/column lengths from indptr (parallel diff).
+    
+    Note: This function is not yet in c_api.cpp and needs to be added.
+    
+    Args:
+        indptr: Indptr array pointer [n+1].
+        n: Number of rows/columns.
+        lengths: Output lengths pointer [n].
+        
+    Raises:
+        RuntimeError: If C function fails.
+        NotImplementedError: If C function not available.
+    """
     lib = get_lib()
     
-    # compute_lengths
+    if not hasattr(lib, 'scl_compute_lengths'):
+        raise NotImplementedError(
+            "scl_compute_lengths not found in C API. "
+            "This function needs to be added to scl/binding/c_api.cpp"
+        )
+    
     lib.scl_compute_lengths.argtypes = [
-        ctypes.POINTER(c_index),  # indptr
-        c_index,                   # n
-        ctypes.POINTER(c_index),  # lengths
+        ctypes.POINTER(c_index), c_index, ctypes.POINTER(c_index)
     ]
     lib.scl_compute_lengths.restype = ctypes.c_int
     
-    # inspect_slice_rows
+    status = lib.scl_compute_lengths(indptr, n, lengths)
+    check_error(status, "compute_lengths")
+
+
+def inspect_slice_rows(indptr: Any, row_indices: Any, n_keep: int) -> int:
+    """Inspect CSR row slice: compute output nnz.
+    
+    Note: This function is not yet in c_api.cpp and needs to be added.
+    
+    Args:
+        indptr: Indptr array pointer.
+        row_indices: Row indices to keep pointer.
+        n_keep: Number of rows to keep.
+        
+    Returns:
+        Output nnz.
+        
+    Raises:
+        RuntimeError: If C function fails.
+        NotImplementedError: If C function not available.
+    """
+    lib = get_lib()
+    
+    if not hasattr(lib, 'scl_inspect_slice_rows'):
+        raise NotImplementedError(
+            "scl_inspect_slice_rows not found in C API. "
+            "This function needs to be added to scl/binding/c_api.cpp"
+        )
+    
     lib.scl_inspect_slice_rows.argtypes = [
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # row_indices
-        c_index,                   # n_keep
-        ctypes.POINTER(c_index),  # out_nnz
+        ctypes.POINTER(c_index), ctypes.POINTER(c_index), c_index, ctypes.POINTER(c_index)
     ]
     lib.scl_inspect_slice_rows.restype = ctypes.c_int
     
-    # materialize_slice_rows
+    out_nnz = c_index()
+    status = lib.scl_inspect_slice_rows(indptr, row_indices, n_keep, ctypes.byref(out_nnz))
+    check_error(status, "inspect_slice_rows")
+    return out_nnz.value
+
+
+def materialize_slice_rows(
+    src_data: Any,
+    src_indices: Any,
+    src_indptr: Any,
+    row_indices: Any,
+    n_keep: int,
+    dst_data: Any,
+    dst_indices: Any,
+    dst_indptr: Any
+) -> None:
+    """Materialize CSR row slice: copy selected rows.
+    
+    Note: This function is not yet in c_api.cpp and needs to be added.
+    
+    Args:
+        src_data: Source data pointer.
+        src_indices: Source indices pointer.
+        src_indptr: Source indptr pointer.
+        row_indices: Rows to keep pointer.
+        n_keep: Number of rows to keep.
+        dst_data: Destination data pointer.
+        dst_indices: Destination indices pointer.
+        dst_indptr: Destination indptr pointer.
+        
+    Raises:
+        RuntimeError: If C function fails.
+        NotImplementedError: If C function not available.
+    """
+    lib = get_lib()
+    
+    if not hasattr(lib, 'scl_materialize_slice_rows'):
+        raise NotImplementedError(
+            "scl_materialize_slice_rows not found in C API. "
+            "This function needs to be added to scl/binding/c_api.cpp"
+        )
+    
     lib.scl_materialize_slice_rows.argtypes = [
-        ctypes.POINTER(c_real),   # src_data
-        ctypes.POINTER(c_index),  # src_indices
-        ctypes.POINTER(c_index),  # src_indptr
-        ctypes.POINTER(c_index),  # row_indices
-        c_index,                   # n_keep
-        ctypes.POINTER(c_real),   # dst_data
-        ctypes.POINTER(c_index),  # dst_indices
-        ctypes.POINTER(c_index),  # dst_indptr
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index,
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index)
     ]
     lib.scl_materialize_slice_rows.restype = ctypes.c_int
     
-    # inspect_filter_cols
+    status = lib.scl_materialize_slice_rows(
+        src_data, src_indices, src_indptr, row_indices, n_keep,
+        dst_data, dst_indices, dst_indptr
+    )
+    check_error(status, "materialize_slice_rows")
+
+
+def inspect_filter_cols(
+    src_indices: Any,
+    src_indptr: Any,
+    rows: int,
+    col_mask: Any
+) -> int:
+    """Inspect CSR column filter: compute output nnz.
+    
+    Note: This function is not yet in c_api.cpp and needs to be added.
+    
+    Args:
+        src_indices: Source indices pointer.
+        src_indptr: Source indptr pointer.
+        rows: Number of rows.
+        col_mask: Column mask pointer (uint8).
+        
+    Returns:
+        Output nnz.
+        
+    Raises:
+        RuntimeError: If C function fails.
+        NotImplementedError: If C function not available.
+    """
+    lib = get_lib()
+    
+    if not hasattr(lib, 'scl_inspect_filter_cols'):
+        raise NotImplementedError(
+            "scl_inspect_filter_cols not found in C API. "
+            "This function needs to be added to scl/binding/c_api.cpp"
+        )
+    
     lib.scl_inspect_filter_cols.argtypes = [
-        ctypes.POINTER(c_index),  # src_indices
-        ctypes.POINTER(c_index),  # src_indptr
-        c_index,                   # rows
-        ctypes.POINTER(c_byte),   # col_mask
-        ctypes.POINTER(c_index),  # out_nnz
+        ctypes.POINTER(c_index), ctypes.POINTER(c_index), c_index,
+        ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(c_index)
     ]
     lib.scl_inspect_filter_cols.restype = ctypes.c_int
     
-    # materialize_filter_cols
+    out_nnz = c_index()
+    status = lib.scl_inspect_filter_cols(src_indices, src_indptr, rows, col_mask, ctypes.byref(out_nnz))
+    check_error(status, "inspect_filter_cols")
+    return out_nnz.value
+
+
+def materialize_filter_cols(
+    src_data: Any,
+    src_indices: Any,
+    src_indptr: Any,
+    rows: int,
+    col_mask: Any,
+    col_mapping: Any,
+    dst_data: Any,
+    dst_indices: Any,
+    dst_indptr: Any
+) -> None:
+    """Materialize CSR column filter: copy filtered columns.
+    
+    Note: This function is not yet in c_api.cpp and needs to be added.
+    
+    Args:
+        src_data: Source data pointer.
+        src_indices: Source indices pointer.
+        src_indptr: Source indptr pointer.
+        rows: Number of rows.
+        col_mask: Column mask pointer.
+        col_mapping: Column mapping pointer.
+        dst_data: Destination data pointer.
+        dst_indices: Destination indices pointer.
+        dst_indptr: Destination indptr pointer.
+        
+    Raises:
+        RuntimeError: If C function fails.
+        NotImplementedError: If C function not available.
+    """
+    lib = get_lib()
+    
+    if not hasattr(lib, 'scl_materialize_filter_cols'):
+        raise NotImplementedError(
+            "scl_materialize_filter_cols not found in C API. "
+            "This function needs to be added to scl/binding/c_api.cpp"
+        )
+    
     lib.scl_materialize_filter_cols.argtypes = [
-        ctypes.POINTER(c_real),   # src_data
-        ctypes.POINTER(c_index),  # src_indices
-        ctypes.POINTER(c_index),  # src_indptr
-        c_index,                   # rows
-        ctypes.POINTER(c_byte),   # col_mask
-        ctypes.POINTER(c_index),  # col_mapping
-        ctypes.POINTER(c_real),   # dst_data
-        ctypes.POINTER(c_index),  # dst_indices
-        ctypes.POINTER(c_index),  # dst_indptr
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        c_index, ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index)
     ]
     lib.scl_materialize_filter_cols.restype = ctypes.c_int
     
-    # align_rows
-    lib.scl_align_rows.argtypes = [
-        ctypes.POINTER(c_real),   # src_data
-        ctypes.POINTER(c_index),  # src_indices
-        ctypes.POINTER(c_index),  # src_indptr
-        c_index,                   # src_rows
-        ctypes.POINTER(c_index),  # old_to_new
-        c_index,                   # new_rows
-        ctypes.POINTER(c_real),   # dst_data
-        ctypes.POINTER(c_index),  # dst_indices
-        ctypes.POINTER(c_index),  # dst_indptr
-        ctypes.POINTER(c_index),  # dst_row_lengths
-    ]
-    lib.scl_align_rows.restype = ctypes.c_int
-
-# Initialize on module load
-# Initialize signatures lazily
-try:
-    _init_signatures()
-except Exception as e:
-    import warnings
-    warnings.warn(f"SCL library not ready: {e}")
-
-# =============================================================================
-# Python Functions
-# =============================================================================
-
-def compute_lengths(indptr, n, lengths):
-    """
-    Compute row/column lengths from indptr (parallel diff).
-    
-    Args:
-        indptr: ctypes pointer to indptr array [n+1]
-        n: Number of rows/columns
-        lengths: ctypes pointer to output array [n]
-    """
-    import ctypes
-    from scl._kernel.types import c_index
-    
-    lib = get_lib()
-    
-    # Convert c_void_p to appropriate pointer types
-    def to_ptr(ptr, ctype):
-        if ptr is None or ptr == 0:
-            return None
-        if isinstance(ptr, ctypes.c_void_p):
-            return ctypes.cast(ptr, ctypes.POINTER(ctype))
-        return ptr
-    
-    indptr_ptr = to_ptr(indptr, c_index)
-    lengths_ptr = to_ptr(lengths, c_index)
-    
-    status = lib.scl_compute_lengths(indptr_ptr, n, lengths_ptr)
-    check_error(status)
-
-
-def inspect_slice_rows(indptr, row_indices, n_keep):
-    """
-    Inspect CSR row slice: compute output nnz.
-    
-    Args:
-        indptr: ctypes pointer to indptr array
-        row_indices: ctypes pointer to row indices to keep
-        n_keep: Number of rows to keep
-        
-    Returns:
-        Output nnz
-    """
-    import ctypes
-    from scl._kernel.types import c_index
-    
-    lib = get_lib()
-    
-    # Convert c_void_p to appropriate pointer types
-    def to_ptr(ptr, ctype):
-        if ptr is None or ptr == 0:
-            return None
-        if isinstance(ptr, ctypes.c_void_p):
-            return ctypes.cast(ptr, ctypes.POINTER(ctype))
-        return ptr
-    
-    indptr_ptr = to_ptr(indptr, c_index)
-    row_indices_ptr = to_ptr(row_indices, c_index)
-    
-    out_nnz = c_index()
-    status = lib.scl_inspect_slice_rows(indptr_ptr, row_indices_ptr, n_keep, ctypes.byref(out_nnz))
-    check_error(status)
-    return out_nnz.value
-
-
-def materialize_slice_rows(src_data, src_indices, src_indptr, row_indices, n_keep,
-                           dst_data, dst_indices, dst_indptr):
-    """
-    Materialize CSR row slice: copy selected rows.
-    
-    Args:
-        src_data: ctypes pointer to source data
-        src_indices: ctypes pointer to source indices
-        src_indptr: ctypes pointer to source indptr
-        row_indices: ctypes pointer to rows to keep
-        n_keep: Number of rows to keep
-        dst_data: ctypes pointer to destination data
-        dst_indices: ctypes pointer to destination indices
-        dst_indptr: ctypes pointer to destination indptr
-    """
-    import ctypes
-    from scl._kernel.types import c_real, c_index
-    
-    lib = get_lib()
-    
-    # Convert c_void_p to appropriate pointer types
-    def to_ptr(ptr, ctype):
-        if ptr is None or ptr == 0:
-            return None
-        if isinstance(ptr, ctypes.c_void_p):
-            return ctypes.cast(ptr, ctypes.POINTER(ctype))
-        return ptr
-    
-    src_data_ptr = to_ptr(src_data, c_real)
-    src_indices_ptr = to_ptr(src_indices, c_index)
-    src_indptr_ptr = to_ptr(src_indptr, c_index)
-    row_indices_ptr = to_ptr(row_indices, c_index)
-    dst_data_ptr = to_ptr(dst_data, c_real)
-    dst_indices_ptr = to_ptr(dst_indices, c_index)
-    dst_indptr_ptr = to_ptr(dst_indptr, c_index)
-    
-    status = lib.scl_materialize_slice_rows(
-        src_data_ptr, src_indices_ptr, src_indptr_ptr, row_indices_ptr, n_keep,
-        dst_data_ptr, dst_indices_ptr, dst_indptr_ptr
-    )
-    check_error(status)
-
-
-def inspect_filter_cols(src_indices, src_indptr, rows, col_mask):
-    """
-    Inspect CSR column filter: compute output nnz.
-    
-    Args:
-        src_indices: ctypes pointer to source indices
-        src_indptr: ctypes pointer to source indptr
-        rows: Number of rows
-        col_mask: ctypes pointer to column mask (uint8)
-        
-    Returns:
-        Output nnz
-    """
-    lib = get_lib()
-    out_nnz = c_index()
-    status = lib.scl_inspect_filter_cols(src_indices, src_indptr, rows, col_mask, ctypes.byref(out_nnz))
-    check_error(status)
-    return out_nnz.value
-
-
-def materialize_filter_cols(src_data, src_indices, src_indptr, rows, col_mask, col_mapping,
-                            dst_data, dst_indices, dst_indptr):
-    """
-    Materialize CSR column filter: copy filtered columns.
-    
-    Args:
-        src_data: ctypes pointer to source data
-        src_indices: ctypes pointer to source indices
-        src_indptr: ctypes pointer to source indptr
-        rows: Number of rows
-        col_mask: ctypes pointer to column mask
-        col_mapping: ctypes pointer to column mapping
-        dst_data: ctypes pointer to destination data
-        dst_indices: ctypes pointer to destination indices
-        dst_indptr: ctypes pointer to destination indptr
-    """
-    lib = get_lib()
     status = lib.scl_materialize_filter_cols(
         src_data, src_indices, src_indptr, rows, col_mask, col_mapping,
         dst_data, dst_indices, dst_indptr
     )
-    check_error(status)
+    check_error(status, "materialize_filter_cols")
 
 
-def align_rows(src_data, src_indices, src_indptr, src_rows, old_to_new, new_rows,
-               dst_data, dst_indices, dst_indptr, dst_row_lengths):
-    """
-    Align rows (with drop and pad support).
+def align_rows(
+    src_data: Any,
+    src_indices: Any,
+    src_indptr: Any,
+    src_rows: int,
+    old_to_new: Any,
+    new_rows: int,
+    dst_data: Any,
+    dst_indices: Any,
+    dst_indptr: Any,
+    dst_row_lengths: Any
+) -> None:
+    """Align rows (with drop and pad support).
+    
+    Note: This function is not yet in c_api.cpp and needs to be added.
     
     Args:
-        src_data: ctypes pointer to source data
-        src_indices: ctypes pointer to source indices
-        src_indptr: ctypes pointer to source indptr
-        src_rows: Number of source rows
-        old_to_new: ctypes pointer to mapping array, -1=drop
-        new_rows: Target number of rows
-        dst_data: ctypes pointer to destination data
-        dst_indices: ctypes pointer to destination indices
-        dst_indptr: ctypes pointer to destination indptr
-        dst_row_lengths: ctypes pointer to destination row lengths
+        src_data: Source data pointer.
+        src_indices: Source indices pointer.
+        src_indptr: Source indptr pointer.
+        src_rows: Number of source rows.
+        old_to_new: Mapping array pointer, -1=drop.
+        new_rows: Target number of rows.
+        dst_data: Destination data pointer.
+        dst_indices: Destination indices pointer.
+        dst_indptr: Destination indptr pointer.
+        dst_row_lengths: Destination row lengths pointer.
+        
+    Raises:
+        RuntimeError: If C function fails.
+        NotImplementedError: If C function not available.
     """
     lib = get_lib()
+    
+    if not hasattr(lib, 'scl_align_rows'):
+        raise NotImplementedError(
+            "scl_align_rows not found in C API. "
+            "This function needs to be added to scl/binding/c_api.cpp"
+        )
+    
+    lib.scl_align_rows.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        c_index, ctypes.POINTER(c_index), c_index,
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index)
+    ]
+    lib.scl_align_rows.restype = ctypes.c_int
+    
     status = lib.scl_align_rows(
         src_data, src_indices, src_indptr, src_rows, old_to_new, new_rows,
         dst_data, dst_indices, dst_indptr, dst_row_lengths
     )
-    check_error(status)
+    check_error(status, "align_rows")
 

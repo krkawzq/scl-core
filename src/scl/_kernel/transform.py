@@ -1,102 +1,141 @@
-"""
-Data Transformation Kernels
+"""Data transformation kernels.
 
 Low-level C bindings for log transforms, softmax, etc.
 """
 
 import ctypes
-import numpy as np
+from typing import Any, Optional
+
 from .lib_loader import get_lib
-from .types import c_real, c_index, c_size, np_real, check_error, as_c_ptr
+from .types import c_real, c_index, c_size, check_error
+
 
 __all__ = [
-    'log1p_inplace',
-    'log2p1_inplace',
-    'expm1_inplace',
+    'log1p_inplace_array',
+    'log1p_inplace_csr',
+    'log2p1_inplace_array',
+    'expm1_inplace_array',
+    'softmax_inplace_csr',
 ]
 
-# =============================================================================
-# Function Signatures
-# =============================================================================
 
-def _init_signatures():
-    """Initialize C function signatures."""
-    lib = get_lib()
-    
-    # log1p_inplace
-    lib.scl_log1p_inplace.argtypes = [
-        ctypes.POINTER(c_real),  # data
-        c_size,                   # size
-    ]
-    lib.scl_log1p_inplace.restype = ctypes.c_int
-    
-    # log2p1_inplace
-    lib.scl_log2p1_inplace.argtypes = [
-        ctypes.POINTER(c_real),  # data
-        c_size,                   # size
-    ]
-    lib.scl_log2p1_inplace.restype = ctypes.c_int
-    
-    # expm1_inplace
-    lib.scl_expm1_inplace.argtypes = [
-        ctypes.POINTER(c_real),  # data
-        c_size,                   # size
-    ]
-    lib.scl_expm1_inplace.restype = ctypes.c_int
-
-
-# Initialize signatures lazily
-try:
-    _init_signatures()
-except Exception as e:
-    import warnings
-    warnings.warn(f"SCL library not ready: {e}")
-
-# =============================================================================
-# Python Wrappers
-# =============================================================================
-
-def log1p_inplace(data: np.ndarray) -> None:
-    """
-    Apply ln(1 + x) transformation in-place.
+def log1p_inplace_array(data: Any, size: int) -> None:
+    """Apply ln(1 + x) transformation to array in-place.
     
     Args:
-        data: Array to transform (modified in-place)
+        data: Data array pointer (modified in-place).
+        size: Number of elements.
+        
+    Raises:
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
-    status = lib.scl_log1p_inplace(
-        as_c_ptr(data, c_real),
-        data.size
-    )
-    check_error(status, "log1p_inplace")
+    lib.scl_log1p_inplace_array.argtypes = [ctypes.POINTER(c_real), c_size]
+    lib.scl_log1p_inplace_array.restype = ctypes.c_int
+    
+    status = lib.scl_log1p_inplace_array(data, size)
+    check_error(status, "log1p_inplace_array")
 
 
-def log2p1_inplace(data: np.ndarray) -> None:
-    """
-    Apply log2(1 + x) transformation in-place.
+def log1p_inplace_csr(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    row_lengths: Optional[Any],
+    rows: int,
+    cols: int,
+    nnz: int
+) -> None:
+    """Apply ln(1 + x) transformation to CSR matrix in-place.
     
     Args:
-        data: Array to transform (modified in-place)
+        data: CSR data array pointer (modified in-place).
+        indices: CSR column indices pointer.
+        indptr: CSR row pointers pointer.
+        row_lengths: Explicit row lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zeros.
+        
+    Raises:
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
-    status = lib.scl_log2p1_inplace(
-        as_c_ptr(data, c_real),
-        data.size
-    )
-    check_error(status, "log2p1_inplace")
+    lib.scl_log1p_inplace_csr.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index
+    ]
+    lib.scl_log1p_inplace_csr.restype = ctypes.c_int
+    
+    status = lib.scl_log1p_inplace_csr(data, indices, indptr, row_lengths, rows, cols, nnz)
+    check_error(status, "log1p_inplace_csr")
 
 
-def expm1_inplace(data: np.ndarray) -> None:
-    """
-    Apply exp(x) - 1 transformation in-place.
+def log2p1_inplace_array(data: Any, size: int) -> None:
+    """Apply log2(1 + x) transformation to array in-place.
     
     Args:
-        data: Array to transform (modified in-place)
+        data: Data array pointer (modified in-place).
+        size: Number of elements.
+        
+    Raises:
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
-    status = lib.scl_expm1_inplace(
-        as_c_ptr(data, c_real),
-        data.size
-    )
-    check_error(status, "expm1_inplace")
+    lib.scl_log2p1_inplace_array.argtypes = [ctypes.POINTER(c_real), c_size]
+    lib.scl_log2p1_inplace_array.restype = ctypes.c_int
+    
+    status = lib.scl_log2p1_inplace_array(data, size)
+    check_error(status, "log2p1_inplace_array")
 
+
+def expm1_inplace_array(data: Any, size: int) -> None:
+    """Apply exp(x) - 1 transformation to array in-place.
+    
+    Args:
+        data: Data array pointer (modified in-place).
+        size: Number of elements.
+        
+    Raises:
+        RuntimeError: If C function fails.
+    """
+    lib = get_lib()
+    lib.scl_expm1_inplace_array.argtypes = [ctypes.POINTER(c_real), c_size]
+    lib.scl_expm1_inplace_array.restype = ctypes.c_int
+    
+    status = lib.scl_expm1_inplace_array(data, size)
+    check_error(status, "expm1_inplace_array")
+
+
+def softmax_inplace_csr(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    row_lengths: Optional[Any],
+    rows: int,
+    cols: int,
+    nnz: int
+) -> None:
+    """Apply softmax to rows of CSR matrix in-place.
+    
+    Args:
+        data: CSR data array pointer (modified in-place).
+        indices: CSR column indices pointer.
+        indptr: CSR row pointers pointer.
+        row_lengths: Explicit row lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zeros.
+        
+    Raises:
+        RuntimeError: If C function fails.
+    """
+    lib = get_lib()
+    lib.scl_softmax_inplace_csr.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index
+    ]
+    lib.scl_softmax_inplace_csr.restype = ctypes.c_int
+    
+    status = lib.scl_softmax_inplace_csr(data, indices, indptr, row_lengths, rows, cols, nnz)
+    check_error(status, "softmax_inplace_csr")

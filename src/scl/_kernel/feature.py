@@ -1,249 +1,161 @@
-"""
-Feature Selection Kernels
+"""Feature statistics kernels.
 
-Low-level C bindings for HVG selection and feature statistics.
+Low-level C bindings for feature statistics computation.
 """
 
 import ctypes
-import numpy as np
+from typing import Any, Optional
+
 from .lib_loader import get_lib
-from .types import c_real, c_index, c_size, check_error, as_c_ptr
+from .types import c_real, c_index, c_size, check_error
+
 
 __all__ = [
     'standard_moments_csc',
+    'clipped_moments_csc',
+    'detection_rate_csc',
     'dispersion',
-    'hvg_by_dispersion_csc',
-    'hvg_by_variance_csc',
 ]
 
-# =============================================================================
-# Function Signatures
-# =============================================================================
 
-def _init_signatures():
-    """Initialize C function signatures."""
-    lib = get_lib()
+def standard_moments_csc(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    col_lengths: Optional[Any],
+    rows: int,
+    cols: int,
+    nnz: int,
+    out_means: Any,
+    out_vars: Any,
+    ddof: int
+) -> None:
+    """Compute standard moments (mean and variance) for features (CSC).
     
-    # standard_moments_csc
+    Args:
+        data: CSC data array pointer.
+        indices: CSC row indices pointer.
+        indptr: CSC column pointers pointer.
+        col_lengths: Explicit column lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zeros.
+        out_means: Output means pointer.
+        out_vars: Output variances pointer.
+        ddof: Delta degrees of freedom.
+        
+    Raises:
+        RuntimeError: If C function fails.
+    """
+    lib = get_lib()
     lib.scl_standard_moments_csc.argtypes = [
-        ctypes.POINTER(c_real),   # data
-        ctypes.POINTER(c_index),  # indices
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # col_lengths
-        c_index,                   # rows
-        c_index,                   # cols
-        c_index,                   # nnz
-        ctypes.POINTER(c_real),   # out_means
-        ctypes.POINTER(c_real),   # out_vars
-        ctypes.c_int,             # ddof
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index,
+        ctypes.POINTER(c_real), ctypes.POINTER(c_real), ctypes.c_int
     ]
     lib.scl_standard_moments_csc.restype = ctypes.c_int
     
-    # dispersion
-    lib.scl_dispersion.argtypes = [
-        ctypes.POINTER(c_real),   # means
-        ctypes.POINTER(c_real),   # vars
-        c_size,                    # size
-        ctypes.POINTER(c_real),   # out_dispersion
-    ]
-    lib.scl_dispersion.restype = ctypes.c_int
-    
-    # hvg_by_dispersion_csc
-    lib.scl_hvg_by_dispersion_csc.argtypes = [
-        ctypes.POINTER(c_real),   # data
-        ctypes.POINTER(c_index),  # indices
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # col_lengths
-        c_index,                   # rows
-        c_index,                   # cols
-        c_index,                   # nnz
-        c_size,                    # n_top
-        ctypes.POINTER(c_index),  # out_indices
-        ctypes.POINTER(ctypes.c_uint8),  # out_mask
-        ctypes.POINTER(c_real),   # out_dispersions
-    ]
-    lib.scl_hvg_by_dispersion_csc.restype = ctypes.c_int
-    
-    # hvg_by_variance_csc
-    lib.scl_hvg_by_variance_csc.argtypes = [
-        ctypes.POINTER(c_real),   # data
-        ctypes.POINTER(c_index),  # indices
-        ctypes.POINTER(c_index),  # indptr
-        ctypes.POINTER(c_index),  # col_lengths
-        c_index,                   # rows
-        c_index,                   # cols
-        c_index,                   # nnz
-        c_size,                    # n_top
-        ctypes.POINTER(c_index),  # out_indices
-        ctypes.POINTER(ctypes.c_uint8),  # out_mask
-    ]
-    lib.scl_hvg_by_variance_csc.restype = ctypes.c_int
-
-
-# Initialize signatures lazily
-try:
-    _init_signatures()
-except Exception as e:
-    import warnings
-    warnings.warn(f"SCL library not ready: {e}")
-
-# =============================================================================
-# Python Wrappers
-# =============================================================================
-
-def standard_moments_csc(
-    data: np.ndarray,
-    indices: np.ndarray,
-    indptr: np.ndarray,
-    col_lengths: np.ndarray,
-    rows: int,
-    cols: int,
-    nnz: int,
-    out_means: np.ndarray,
-    out_vars: np.ndarray,
-    ddof: int = 1
-) -> None:
-    """
-    Compute mean and variance for each gene (CSC matrix).
-    
-    Args:
-        data: CSC data array
-        indices: CSC row indices
-        indptr: CSC column pointers
-        col_lengths: Explicit column lengths or None
-        rows: Number of cells
-        cols: Number of genes
-        nnz: Number of non-zeros
-        out_means: Output means, shape (cols,)
-        out_vars: Output variances, shape (cols,)
-        ddof: Delta degrees of freedom (0=population, 1=sample)
-    """
-    lib = get_lib()
-    
     status = lib.scl_standard_moments_csc(
-        as_c_ptr(data, c_real),
-        as_c_ptr(indices, c_index),
-        as_c_ptr(indptr, c_index),
-        as_c_ptr(col_lengths, c_index) if col_lengths is not None else None,
-        rows, cols, nnz,
-        as_c_ptr(out_means, c_real),
-        as_c_ptr(out_vars, c_real),
-        ddof
+        data, indices, indptr, col_lengths, rows, cols, nnz,
+        out_means, out_vars, ddof
     )
-    
     check_error(status, "standard_moments_csc")
 
 
+def clipped_moments_csc(
+    data: Any,
+    indices: Any,
+    indptr: Any,
+    col_lengths: Optional[Any],
+    rows: int,
+    cols: int,
+    nnz: int,
+    clip_vals: Any,
+    out_means: Any,
+    out_vars: Any
+) -> None:
+    """Compute clipped moments (mean and variance with clipping) for features (CSC).
+    
+    Args:
+        data: CSC data array pointer.
+        indices: CSC row indices pointer.
+        indptr: CSC column pointers pointer.
+        col_lengths: Explicit column lengths pointer or None.
+        rows: Number of rows.
+        cols: Number of columns.
+        nnz: Number of non-zeros.
+        clip_vals: Clipping values pointer.
+        out_means: Output means pointer.
+        out_vars: Output variances pointer.
+        
+    Raises:
+        RuntimeError: If C function fails.
+    """
+    lib = get_lib()
+    lib.scl_clipped_moments_csc.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_index), ctypes.POINTER(c_index),
+        ctypes.POINTER(c_index), c_index, c_index, c_index,
+        ctypes.POINTER(c_real), ctypes.POINTER(c_real), ctypes.POINTER(c_real)
+    ]
+    lib.scl_clipped_moments_csc.restype = ctypes.c_int
+    
+    status = lib.scl_clipped_moments_csc(
+        data, indices, indptr, col_lengths, rows, cols, nnz,
+        clip_vals, out_means, out_vars
+    )
+    check_error(status, "clipped_moments_csc")
+
+
+def detection_rate_csc(
+    indptr: Any,
+    rows: int,
+    cols: int,
+    out_rates: Any
+) -> None:
+    """Compute detection rate (fraction of non-zero cells) for features (CSC).
+    
+    Args:
+        indptr: CSC column pointers pointer.
+        rows: Number of rows.
+        cols: Number of columns.
+        out_rates: Output detection rates pointer.
+        
+    Raises:
+        RuntimeError: If C function fails.
+    """
+    lib = get_lib()
+    lib.scl_detection_rate_csc.argtypes = [
+        ctypes.POINTER(c_index), c_index, c_index, ctypes.POINTER(c_real)
+    ]
+    lib.scl_detection_rate_csc.restype = ctypes.c_int
+    
+    status = lib.scl_detection_rate_csc(indptr, rows, cols, out_rates)
+    check_error(status, "detection_rate_csc")
+
+
 def dispersion(
-    means: np.ndarray,
-    vars: np.ndarray,
-    out_dispersion: np.ndarray
+    means: Any,
+    vars: Any,
+    size: int,
+    out_dispersion: Any
 ) -> None:
-    """
-    Compute dispersion (variance / mean).
+    """Compute dispersion (variance / mean) for features.
     
     Args:
-        means: Mean values
-        vars: Variance values
-        out_dispersion: Output dispersion values (same shape as means)
+        means: Mean values pointer.
+        vars: Variance values pointer.
+        size: Number of features.
+        out_dispersion: Output dispersion values pointer.
+        
+    Raises:
+        RuntimeError: If C function fails.
     """
     lib = get_lib()
+    lib.scl_dispersion.argtypes = [
+        ctypes.POINTER(c_real), ctypes.POINTER(c_real), c_size, ctypes.POINTER(c_real)
+    ]
+    lib.scl_dispersion.restype = ctypes.c_int
     
-    status = lib.scl_dispersion(
-        as_c_ptr(means, c_real),
-        as_c_ptr(vars, c_real),
-        means.size,
-        as_c_ptr(out_dispersion, c_real)
-    )
-    
+    status = lib.scl_dispersion(means, vars, size, out_dispersion)
     check_error(status, "dispersion")
-
-
-def hvg_by_dispersion_csc(
-    data: np.ndarray,
-    indices: np.ndarray,
-    indptr: np.ndarray,
-    col_lengths: np.ndarray,
-    rows: int,
-    cols: int,
-    nnz: int,
-    n_top: int,
-    out_indices: np.ndarray,
-    out_mask: np.ndarray,
-    out_dispersions: np.ndarray
-) -> None:
-    """
-    Select highly variable genes by dispersion (CSC matrix).
-    
-    Args:
-        data: CSC data array
-        indices: CSC row indices
-        indptr: CSC column pointers
-        col_lengths: Explicit column lengths or None
-        rows: Number of cells
-        cols: Number of genes
-        nnz: Number of non-zeros
-        n_top: Number of top genes to select
-        out_indices: Output indices of selected genes, shape (n_top,)
-        out_mask: Output binary mask, shape (cols,)
-        out_dispersions: Output dispersion values, shape (cols,)
-    """
-    lib = get_lib()
-    
-    status = lib.scl_hvg_by_dispersion_csc(
-        as_c_ptr(data, c_real),
-        as_c_ptr(indices, c_index),
-        as_c_ptr(indptr, c_index),
-        as_c_ptr(col_lengths, c_index) if col_lengths is not None else None,
-        rows, cols, nnz,
-        n_top,
-        as_c_ptr(out_indices, c_index),
-        as_c_ptr(out_mask, ctypes.c_uint8),
-        as_c_ptr(out_dispersions, c_real)
-    )
-    
-    check_error(status, "hvg_by_dispersion_csc")
-
-
-def hvg_by_variance_csc(
-    data: np.ndarray,
-    indices: np.ndarray,
-    indptr: np.ndarray,
-    col_lengths: np.ndarray,
-    rows: int,
-    cols: int,
-    nnz: int,
-    n_top: int,
-    out_indices: np.ndarray,
-    out_mask: np.ndarray
-) -> None:
-    """
-    Select highly variable genes by variance (CSC matrix).
-    
-    Args:
-        data: CSC data array
-        indices: CSC row indices
-        indptr: CSC column pointers
-        col_lengths: Explicit column lengths or None
-        rows: Number of cells
-        cols: Number of genes
-        nnz: Number of non-zeros
-        n_top: Number of top genes to select
-        out_indices: Output indices of selected genes, shape (n_top,)
-        out_mask: Output binary mask, shape (cols,)
-    """
-    lib = get_lib()
-    
-    status = lib.scl_hvg_by_variance_csc(
-        as_c_ptr(data, c_real),
-        as_c_ptr(indices, c_index),
-        as_c_ptr(indptr, c_index),
-        as_c_ptr(col_lengths, c_index) if col_lengths is not None else None,
-        rows, cols, nnz,
-        n_top,
-        as_c_ptr(out_indices, c_index),
-        as_c_ptr(out_mask, ctypes.c_uint8)
-    )
-    
-    check_error(status, "hvg_by_variance_csc")
 

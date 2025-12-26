@@ -10,7 +10,7 @@ from typing import Union, List, Any
 
 from ._dtypes import DType
 
-__all__ = ['Array', 'empty', 'zeros', 'from_list', 'from_buffer']
+__all__ = ['Array', 'empty', 'zeros', 'ones', 'from_list', 'from_buffer']
 
 
 # =============================================================================
@@ -399,6 +399,14 @@ def empty(size: int, dtype: Union[str, 'DType'] = 'float64', align: int = 64) ->
 def zeros(size: int, dtype: Union[str, 'DType'] = 'float64', align: int = 64) -> Array:
     """Create zero-initialized array."""
     return Array.zeros(size, dtype, align)
+
+
+def ones(size: int, dtype: Union[str, 'DType'] = 'float64', align: int = 64) -> Array:
+    """Create array filled with ones."""
+    arr = Array(size, dtype, align)
+    for i in range(size):
+        arr[i] = 1
+    return arr
 
 
 def from_list(data: List, dtype: Union[str, 'DType'] = 'float64', align: int = 64) -> Array:

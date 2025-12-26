@@ -1,33 +1,42 @@
-"""
-SCL Private Kernel Bindings (_kernel)
+"""SCL Private Kernel Bindings (_kernel).
 
 This is a private package that provides low-level C-style bindings to SCL kernels.
 
 Architecture:
-- Direct ctypes bindings to libscl.so
-- Minimal Python wrapper (close to C API)
-- Type conversions and error handling
-- Used as foundation for high-level public API
+    - Direct ctypes bindings to libscl.so
+    - Minimal Python wrapper (close to C API)
+    - Type conversions and error handling
+    - Used as foundation for high-level public API
+
+Design Principles:
+    - No external dependencies (numpy/scipy imported lazily only when needed)
+    - Pure C API wrappers without high-level logic
+    - Google-style docstrings with type hints
+    - One module per C API section
 
 Modules:
-- lib_loader: Dynamic library loading
-- types: C type definitions and conversions
-- sparse: Sparse matrix statistics kernels
-- qc: Quality control kernels
-- normalize: Normalization kernels
-- stats: Statistical test kernels (MWU, T-test)
-- transform: Data transformation kernels (log1p, softmax)
-- algebra: Linear algebra kernels (SpMV, Gram)
-- feature: Feature selection kernels (HVG)
-- spatial: Spatial statistics kernels
+    - lib_loader: Dynamic library loading
+    - types: C type definitions and error handling
+    - sparse: Sparse matrix statistics (Section 3)
+    - qc: Quality control metrics (Section 4)
+    - normalize: Normalization operations (Section 5)
+    - feature: Feature statistics (Section 6)
+    - stats: Statistical tests (Section 7)
+    - transform: Data transformations (Section 8)
+    - algebra: Linear algebra operations (Sections 9, 10, 16)
+    - group: Group aggregations (Section 11)
+    - scale: Standardization (Section 12)
+    - mmd: Maximum Mean Discrepancy (Section 14)
+    - spatial: Spatial statistics (Section 15)
+    - hvg: Highly variable gene selection (Section 17)
+    - reorder: Reordering operations (Section 18)
+    - resample: Resampling operations (Section 19)
+    - memory: Memory management (Section 20, 21)
 
 Usage (Internal only):
-    from ._kernel import sparse
-    
-    status = sparse.row_sums_csr(
-        data, indices, indptr, row_lengths,
-        rows, cols, nnz, output
-    )
+    >>> from scl._kernel import sparse
+    >>> # All functions work with raw ctypes pointers
+    >>> sparse.primary_sums_csr(data_ptr, indices_ptr, indptr_ptr, None, rows, cols, nnz, output_ptr)
 """
 
 from . import lib_loader
@@ -35,11 +44,18 @@ from . import types
 from . import sparse
 from . import qc
 from . import normalize
+from . import feature
 from . import stats
 from . import transform
 from . import algebra
-from . import feature
+from . import group
+from . import scale
+from . import mmd
 from . import spatial
+from . import hvg
+from . import reorder
+from . import resample
+from . import memory
 from . import utils
 
 __all__ = [
@@ -48,11 +64,20 @@ __all__ = [
     'sparse',
     'qc',
     'normalize',
+    'feature',
     'stats',
     'transform',
     'algebra',
-    'feature',
+    'group',
+    'scale',
+    'mmd',
     'spatial',
+    'hvg',
+    'reorder',
+    'resample',
+    'memory',
     'utils',
 ]
+
+__version__ = '0.1.0'
 
