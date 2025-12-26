@@ -30,6 +30,8 @@ import warnings
 from ._array import Array, zeros, empty, from_list
 from ._backend import Backend, Ownership, VirtualStorage, ChunkInfo
 from ._ownership import RefChain
+from ._csr import SclCSR
+from ._csc import SclCSC
 
 __all__ = [
     # Stacking

@@ -11,8 +11,9 @@
 /// This header provides cross-platform macros for compiler-specific features
 /// like branch prediction, alignment, inlining, and symbol visibility.
 ///
-/// @section Naming Convention
-/// All macros are prefixed with `SCL_` to avoid global namespace pollution.
+/// Naming Convention:
+///
+/// All macros are prefixed with SCL_ to avoid global namespace pollution.
 ///
 // =============================================================================
 

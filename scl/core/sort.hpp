@@ -20,20 +20,23 @@
 ///
 /// Wraps the "Static" version of VQSort to provide vectorized QuickSort.
 ///
-/// @section Why Static?
-/// We use `VQSortStatic` instead of `hwy::VQSort` to avoid runtime dispatch overhead.
+/// Why Static?
+///
+/// We use VQSortStatic instead of hwy::VQSort to avoid runtime dispatch overhead.
 /// The instruction set is already determined by the compiler flags (-march=native)
 /// consistent with the rest of SCL.
 ///
-/// @section Performance
+/// Performance:
+///
 /// VQSort is typically 10x-20x faster than std::sort for primitive types
 /// by utilizing SIMD instructions (AVX2/AVX-512/NEON) for partitioning.
 ///
-/// @section Pair Sorting Optimization
+/// Pair Sorting Optimization:
+///
 /// For key-value pairs, we use:
-/// - Stack allocation for small arrays (< 8KB)
-/// - SIMD-accelerated pack/unpack when sizeof(Key) == sizeof(Value)
-/// - pdqsort-style optimizations (intro-sort hybrid)
+/// 1. Stack allocation for small arrays (< 8KB)
+/// 2. SIMD-accelerated pack/unpack when sizeof(Key) == sizeof(Value)
+/// 3. pdqsort-style optimizations (intro-sort hybrid)
 ///
 // =============================================================================
 

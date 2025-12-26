@@ -9,61 +9,68 @@
 
 #include <algorithm>
 #include <tuple>
-#include <future>
-#include <deque>
 #include <memory>
 #include <atomic>
 #include <mutex>
-#include <bitset>
+#include <numeric>
 #include <fstream>
+#include <unordered_map>
 
 #ifdef SCL_HAS_HDF5
 
 // =============================================================================
 /// @file h5_tools.hpp
-/// @brief Advanced HDF5 Sparse Matrix I/O with Query Optimization
+/// @brief High-Performance HDF5 Sparse Matrix I/O with Two-Phase Architecture
 ///
-/// Implements database-style query optimization for sparse matrix retrieval:
+/// Implements a Plan-Execute pipeline optimized for sparse matrix retrieval:
 ///
-/// ## Query Optimization Techniques
+/// ## Two-Phase Architecture
 ///
-/// 1. **Zone Maps (Min-Max Index)**
-///    - Precomputed (min_col, max_col) for each chunk
-///    - O(1) range filtering before any IO
-///    - Skip impossible chunks entirely
+/// Phase 1: PLAN (Single-Threaded, I/O-Focused)
+///   1. Load indptr once
+///   2. Build Zone Map: (min_col, max_col, nnz) per chunk
+///   3. Create Query Context: sorted columns, clustering detection
+///   4. Build Chunk-Row Map: which rows hit which chunks
+///   5. Generate I/O Plan: merge nearby ranges
 ///
-/// 2. **Adaptive Set Intersection**
-///    - Galloping Search: When |query| << |chunk| (ratio < 1%)
-///    - Binary Search: When |query| < |chunk| (ratio < 10%)
-///    - Linear Merge: When |query| ≈ |chunk| (SIMD-optimized)
+/// Phase 2: EXECUTE (Pipeline)
+///   Stage A: Sequential I/O - Load required chunks (single thread)
+///   Stage B: Parallel Intersection - Process rows per chunk (multi-thread)
+///   Stage C: Parallel Assembly - Merge results into rows (multi-thread)
 ///
-/// 3. **Cost-Based Query Planning**
-///    - Contamination Index (CI) model from scheduler.hpp
-///    - Dynamic strategy selection per chunk
-///    - Environment-aware (IO/CPU bound detection)
+/// ## Key Optimizations
 ///
-/// 4. **Pipeline Architecture**
-///    - Stage 0: Zone Map Filter (CPU) - batch filter chunks
-///    - Stage 1: Prefetch Queue - async load probable chunks
-///    - Stage 2: Intersection (CPU) - parallel intersection
-///    - Stage 3: Data Fetch - load only matched data
+/// 1. Chunk-Centric Processing
+///    - Each chunk loaded once, serves all hitting rows
+///    - Eliminates redundant I/O from row-centric approaches
 ///
-/// ## Complexity Analysis
+/// 2. True Zone Map Pre-filtering
+///    - O(1) chunk rejection based on (min_col, max_col)
+///    - Skip chunks with no possible matches before any data I/O
 ///
-/// Let: N = total_cols, Q = query_cols, C = chunk_size, K = num_chunks
+/// 3. Serial I/O + Parallel Compute Separation
+///    - No locks during computation phase
+///    - Avoids HDF5 thread-safety issues entirely
 ///
+/// 4. Adaptive Intersection Algorithms
+///    - Galloping: |query| << |chunk| (ratio < 1%)
+///    - Binary Search: |query| < |chunk| (ratio < 10%)
+///    - Linear Merge: |query| ≈ |chunk| (SIMD-friendly)
+///
+/// ## Complexity
+///
+/// Let: N = total_cols, Q = query_cols, C = chunk_size, K = num_chunks, R = rows
+///
+/// - Zone Map Build: O(K) chunk boundary reads
 /// - Zone Map Filter: O(K)
-/// - Galloping Search: O(Q · log(C/Q))
-/// - Binary Search: O(Q · log C)
-/// - Linear Merge: O(Q + C)
+/// - Total I/O: O(K' · C) where K' = filtered chunks << K
+/// - Intersection: O(R · min(Q·log C, Q+C))
 ///
-/// Overall: O(K + Σ min(Q·log C, Q+C)) per row
-///
-/// ## Performance
+/// ## Performance Expectations
 ///
 /// - Sparse queries (Q/N < 0.1%): 100-1000x speedup
 /// - Medium queries (0.1% < Q/N < 10%): 10-100x speedup
-/// - Dense queries (Q/N > 10%): 2-5x speedup
+/// - Dense queries (Q/N > 10%): 2-5x speedup (still benefits from Zone Map)
 // =============================================================================
 
 namespace scl::io::h5 {
@@ -72,113 +79,194 @@ namespace scl::io::h5 {
 // Forward Declarations
 // =============================================================================
 
-template <typename T, bool IsCSR> class DequeSparse;
-template <typename T> class ChunkIndex;
-template <typename T> class QueryExecutor;
+template <typename T, bool IsCSR> class QueryResult;
+template <typename T> class ChunkCache;
+struct ZoneMapEntry;
+class ZoneMap;
+struct QueryPlan;
+
+// =============================================================================
+// SECTION 1: Zone Map (Pre-computed Chunk Index)
+// =============================================================================
 
 namespace detail {
 
-// =============================================================================
-// Zone Map Structure
-// =============================================================================
-
-/// @brief Min-Max index for a single chunk (Zone Map entry)
+/// @brief Zone Map entry for a single chunk.
+///
+/// Stores precomputed (min_col, max_col) bounds for O(1) range filtering.
+/// This allows skipping chunks that cannot possibly contain query columns.
 struct ZoneMapEntry {
     Index min_col;      ///< Minimum column index in chunk
     Index max_col;      ///< Maximum column index in chunk
     Index nnz;          ///< Number of non-zeros in chunk
-    hsize_t chunk_idx;  ///< Chunk index in dataset
+    hsize_t file_start; ///< Start offset in file (element index)
+    hsize_t file_end;   ///< End offset in file (element index)
     
-    /// @brief Check if chunk possibly contains any query columns
-    [[nodiscard]] bool may_contain(Index query_min, Index query_max) const noexcept {
+    /// @brief Check if chunk possibly contains any column in query range.
+    [[nodiscard]] SCL_FORCE_INLINE 
+    bool may_overlap(Index query_min, Index query_max) const noexcept {
         return !(max_col < query_min || min_col > query_max);
     }
     
-    /// @brief Check if chunk is fully contained in query range
-    [[nodiscard]] bool fully_contained(Index query_min, Index query_max) const noexcept {
+    /// @brief Check if chunk is fully contained in query range.
+    [[nodiscard]] SCL_FORCE_INLINE 
+    bool fully_contained(Index query_min, Index query_max) const noexcept {
         return min_col >= query_min && max_col <= query_max;
     }
 };
 
-/// @brief Zone Map for entire dataset (precomputed index)
+/// @brief Zone Map for entire dataset.
+///
+/// Pre-computed index that enables O(1) chunk filtering before any data I/O.
+/// Built once during planning phase, used throughout execution.
 class ZoneMap {
 public:
     std::vector<ZoneMapEntry> entries;
     Index global_min;
     Index global_max;
+    hsize_t chunk_size;
+    hsize_t total_elements;
     
-    ZoneMap() : global_min(std::numeric_limits<Index>::max()), 
-                global_max(std::numeric_limits<Index>::min()) {}
+    ZoneMap() 
+        : global_min(std::numeric_limits<Index>::max())
+        , global_max(std::numeric_limits<Index>::min())
+        , chunk_size(0)
+        , total_elements(0)
+    {}
     
-    /// @brief Filter chunks that may contain query range
-    [[nodiscard]] std::vector<hsize_t> filter_chunks(
+    /// @brief Build Zone Map by scanning chunk boundaries.
+    ///
+    /// Reads only first and last elements of each chunk to determine bounds.
+    /// Total I/O: O(2 · K) element reads << O(total_elements).
+    static ZoneMap build(
+        const Dataset& indices_dset,
+        hsize_t chunk_sz,
+        hsize_t total_elem
+    ) {
+        ZoneMap zm;
+        zm.chunk_size = chunk_sz;
+        zm.total_elements = total_elem;
+        
+        if (total_elem == 0) return zm;
+        
+        hsize_t num_chunks = (total_elem + chunk_sz - 1) / chunk_sz;
+        zm.entries.reserve(num_chunks);
+        
+        // Temporary buffer for boundary reads
+        Index boundary_buf[2];
+        
+        for (hsize_t c = 0; c < num_chunks; ++c) {
+            hsize_t start = c * chunk_sz;
+            hsize_t end = std::min(start + chunk_sz, total_elem);
+            hsize_t count = end - start;
+            
+            if (count == 0) continue;
+            
+            ZoneMapEntry entry;
+            entry.file_start = start;
+            entry.file_end = end;
+            entry.nnz = static_cast<Index>(count);
+            
+            // Read first element
+            {
+                Dataspace file_space = indices_dset.get_space();
+                std::vector<hsize_t> v_start = {start};
+                std::vector<hsize_t> v_count = {1};
+                file_space.select_hyperslab(v_start, v_count);
+                
+                std::vector<hsize_t> mem_dims = {1};
+                Dataspace mem_space(mem_dims);
+                indices_dset.read(&boundary_buf[0], mem_space, file_space);
+                entry.min_col = boundary_buf[0];
+            }
+            
+            // Read last element
+            {
+                Dataspace file_space = indices_dset.get_space();
+                std::vector<hsize_t> v_start = {end - 1};
+                std::vector<hsize_t> v_count = {1};
+                file_space.select_hyperslab(v_start, v_count);
+                
+                std::vector<hsize_t> mem_dims = {1};
+                Dataspace mem_space(mem_dims);
+                indices_dset.read(&boundary_buf[1], mem_space, file_space);
+                entry.max_col = boundary_buf[1];
+            }
+            
+            // Update global bounds
+            zm.global_min = std::min(zm.global_min, entry.min_col);
+            zm.global_max = std::max(zm.global_max, entry.max_col);
+            
+            zm.entries.push_back(entry);
+        }
+        
+        return zm;
+    }
+    
+    /// @brief Filter chunks that may contain columns in query range.
+    ///
+    /// Complexity: O(K) where K = number of chunks.
+    /// Returns indices of chunks that pass the filter.
+    [[nodiscard]] std::vector<Size> filter(
         Index query_min, 
         Index query_max
     ) const {
-        std::vector<hsize_t> result;
-        result.reserve(entries.size() / 4);  // Heuristic
+        // Fast rejection: query range doesn't overlap global range
+        if (query_max < global_min || query_min > global_max) {
+            return {};
+        }
         
-        for (const auto& entry : entries) {
-            if (entry.may_contain(query_min, query_max)) {
-                result.push_back(entry.chunk_idx);
+        std::vector<Size> result;
+        result.reserve(entries.size() / 4);  // Heuristic: expect ~25% hit rate
+        
+        for (Size i = 0; i < entries.size(); ++i) {
+            if (entries[i].may_overlap(query_min, query_max)) {
+                result.push_back(i);
             }
         }
+        
         return result;
     }
     
-    /// @brief Estimate hit probability for a chunk
-    [[nodiscard]] double estimate_hit_probability(
-        hsize_t chunk_idx,
-        Index query_size,
-        Index total_cols
-    ) const {
-        if (chunk_idx >= entries.size()) return 0.0;
-        
-        const auto& entry = entries[chunk_idx];
-        Index chunk_range = entry.max_col - entry.min_col + 1;
-        
-        // Probability = 1 - (1 - Q/N)^C ≈ Q·C/N for small Q/N
-        double density = static_cast<double>(query_size) / total_cols;
-        return 1.0 - std::pow(1.0 - density, chunk_range);
+    /// @brief Get chunk index for a given element offset.
+    [[nodiscard]] SCL_FORCE_INLINE 
+    Size offset_to_chunk(hsize_t offset) const noexcept {
+        return static_cast<Size>(offset / chunk_size);
     }
 };
 
 // =============================================================================
-// Adaptive Set Intersection Algorithms
+// SECTION 2: Adaptive Set Intersection Algorithms
 // =============================================================================
 
-/// @brief Intersection strategy based on size ratio
-enum class IntersectionStrategy {
+/// @brief Intersection strategy selection based on size ratio.
+enum class IntersectStrategy {
     Galloping,    ///< |query| << |chunk|, exponential search
     BinarySearch, ///< |query| < |chunk|, binary search per element
     LinearMerge   ///< |query| ≈ |chunk|, dual-pointer merge
 };
 
-/// @brief Select optimal intersection strategy
-[[nodiscard]] inline IntersectionStrategy select_intersection_strategy(
-    Size query_size,
-    Size chunk_size
-) noexcept {
+/// @brief Select optimal intersection strategy based on size ratio.
+[[nodiscard]] SCL_FORCE_INLINE 
+IntersectStrategy select_strategy(Size query_size, Size chunk_size) noexcept {
+    if (chunk_size == 0) return IntersectStrategy::LinearMerge;
     double ratio = static_cast<double>(query_size) / chunk_size;
     
-    if (ratio < 0.01) return IntersectionStrategy::Galloping;
-    if (ratio < 0.10) return IntersectionStrategy::BinarySearch;
-    return IntersectionStrategy::LinearMerge;
+    if (ratio < 0.01) return IntersectStrategy::Galloping;
+    if (ratio < 0.10) return IntersectStrategy::BinarySearch;
+    return IntersectStrategy::LinearMerge;
 }
 
-/// @brief Galloping (exponential) search for insertion point
+/// @brief Galloping (exponential) lower bound search.
 ///
-/// Finds first position where arr[pos] >= target
-/// Complexity: O(log(pos)) where pos is the answer
+/// Finds first position where arr[pos] >= target.
+/// Complexity: O(log(answer_position)) - optimal for sparse queries.
 template <typename T>
-[[nodiscard]] inline Size gallop_lower_bound(
-    const T* arr,
-    Size len,
-    T target
-) noexcept {
+[[nodiscard]] SCL_FORCE_INLINE 
+Size gallop_lower_bound(const T* arr, Size len, T target) noexcept {
     if (len == 0 || arr[0] >= target) return 0;
     
-    // Exponential search: find range [lo, hi] containing target
+    // Exponential search: find range [lo, hi]
     Size lo = 0, hi = 1;
     while (hi < len && arr[hi] < target) {
         lo = hi;
@@ -197,12 +285,12 @@ template <typename T>
     return lo;
 }
 
-/// @brief Galloping intersection for very sparse queries
+/// @brief Galloping intersection for very sparse queries.
 ///
-/// Best when |query| << |chunk|
-/// Complexity: O(|query| · log(|chunk|/|query|))
+/// Best when |query| << |chunk|.
+/// Complexity: O(|query| · log(|chunk|/|query|)).
 template <typename T>
-inline void galloping_intersection(
+void intersect_galloping(
     const Index* SCL_RESTRICT chunk_indices,
     const T* SCL_RESTRICT chunk_values,
     Size chunk_len,
@@ -216,7 +304,7 @@ inline void galloping_intersection(
     for (Size q = 0; q < query_len && chunk_pos < chunk_len; ++q) {
         Index target = query_indices[q];
         
-        // Gallop to find target or next larger
+        // Gallop forward to find target
         chunk_pos += gallop_lower_bound(
             chunk_indices + chunk_pos,
             chunk_len - chunk_pos,
@@ -231,12 +319,12 @@ inline void galloping_intersection(
     }
 }
 
-/// @brief Binary search intersection
+/// @brief Binary search intersection.
 ///
-/// Best when |query| is small relative to |chunk|
-/// Complexity: O(|query| · log|chunk|)
+/// Best when |query| is small relative to |chunk|.
+/// Complexity: O(|query| · log|chunk|).
 template <typename T>
-inline void binary_search_intersection(
+void intersect_binary(
     const Index* SCL_RESTRICT chunk_indices,
     const T* SCL_RESTRICT chunk_values,
     Size chunk_len,
@@ -248,7 +336,6 @@ inline void binary_search_intersection(
     for (Size q = 0; q < query_len; ++q) {
         Index target = query_indices[q];
         
-        // Standard binary search
         auto it = std::lower_bound(
             chunk_indices, 
             chunk_indices + chunk_len, 
@@ -256,19 +343,19 @@ inline void binary_search_intersection(
         );
         
         if (it != chunk_indices + chunk_len && *it == target) {
-            Size pos = it - chunk_indices;
+            Size pos = static_cast<Size>(it - chunk_indices);
             out_indices.push_back(target);
             out_values.push_back(chunk_values[pos]);
         }
     }
 }
 
-/// @brief Linear merge intersection (SIMD-optimized)
+/// @brief Linear merge intersection.
 ///
-/// Best when |query| ≈ |chunk|
-/// Complexity: O(|query| + |chunk|)
+/// Best when |query| ≈ |chunk|. SIMD-friendly access pattern.
+/// Complexity: O(|query| + |chunk|).
 template <typename T>
-inline void linear_merge_intersection(
+void intersect_linear(
     const Index* SCL_RESTRICT chunk_indices,
     const T* SCL_RESTRICT chunk_values,
     Size chunk_len,
@@ -278,11 +365,6 @@ inline void linear_merge_intersection(
     std::vector<T>& out_values
 ) {
     Size i = 0, j = 0;
-    
-    // Reserve based on expected hit rate
-    Size expected_hits = std::min(chunk_len, query_len) / 10;
-    out_indices.reserve(out_indices.size() + expected_hits);
-    out_values.reserve(out_values.size() + expected_hits);
     
     while (i < chunk_len && j < query_len) {
         Index c = chunk_indices[i];
@@ -301,9 +383,11 @@ inline void linear_merge_intersection(
     }
 }
 
-/// @brief Adaptive intersection dispatcher
+/// @brief Adaptive intersection dispatcher.
+///
+/// Automatically selects optimal algorithm based on size ratio.
 template <typename T>
-inline void adaptive_intersection(
+void intersect_adaptive(
     const Index* SCL_RESTRICT chunk_indices,
     const T* SCL_RESTRICT chunk_values,
     Size chunk_len,
@@ -314,27 +398,27 @@ inline void adaptive_intersection(
 ) {
     if (chunk_len == 0 || query_len == 0) return;
     
-    auto strategy = select_intersection_strategy(query_len, chunk_len);
+    auto strategy = select_strategy(query_len, chunk_len);
     
     switch (strategy) {
-    case IntersectionStrategy::Galloping:
-        galloping_intersection(
+    case IntersectStrategy::Galloping:
+        intersect_galloping(
             chunk_indices, chunk_values, chunk_len,
             query_indices, query_len,
             out_indices, out_values
         );
         break;
         
-    case IntersectionStrategy::BinarySearch:
-        binary_search_intersection(
+    case IntersectStrategy::BinarySearch:
+        intersect_binary(
             chunk_indices, chunk_values, chunk_len,
             query_indices, query_len,
             out_indices, out_values
         );
         break;
         
-    case IntersectionStrategy::LinearMerge:
-        linear_merge_intersection(
+    case IntersectStrategy::LinearMerge:
+        intersect_linear(
             chunk_indices, chunk_values, chunk_len,
             query_indices, query_len,
             out_indices, out_values
@@ -344,268 +428,63 @@ inline void adaptive_intersection(
 }
 
 // =============================================================================
-// Async Chunk Pool (Thread-Safe Cache)
+// SECTION 3: Query Context (Precomputed Query State)
 // =============================================================================
 
-/// @brief RAII-managed chunk buffer with atomic state
-template <typename T>
-struct ChunkBuffer {
-    std::vector<T> data;
-    hsize_t chunk_idx;
-    std::atomic<bool> ready;
-    std::atomic<uint32_t> access_count;  // For LRU
-    
-    ChunkBuffer() 
-        : chunk_idx(static_cast<hsize_t>(-1)), ready(false), access_count(0) {}
-    
-    void reset(hsize_t idx) {
-        chunk_idx = idx;
-        ready.store(false, std::memory_order_release);
-        access_count.store(0, std::memory_order_relaxed);
-    }
-    
-    void mark_ready() {
-        ready.store(true, std::memory_order_release);
-    }
-    
-    bool is_ready() const {
-        return ready.load(std::memory_order_acquire);
-    }
-    
-    void touch() {
-        access_count.fetch_add(1, std::memory_order_relaxed);
-    }
-};
-
-/// @brief Thread-safe chunk cache with LRU eviction
-template <typename T>
-class AsyncChunkPool {
-public:
-    explicit AsyncChunkPool(size_t pool_size = 8) : _pool_size(pool_size) {
-        _buffers.reserve(pool_size);
-        for (size_t i = 0; i < pool_size; ++i) {
-            _buffers.emplace_back(std::make_unique<ChunkBuffer<T>>());
-        }
-    }
-    
-    /// @brief Load chunk synchronously with caching
-    Array<const T> load_sync(
-        const Dataset& dset,
-        hsize_t chunk_idx,
-        hsize_t chunk_size,
-        hsize_t dataset_size
-    ) {
-        // Try cache hit
-        {
-            std::lock_guard<std::mutex> lock(_mutex);
-            for (auto& buf : _buffers) {
-                if (buf->chunk_idx == chunk_idx && buf->is_ready()) {
-                    buf->touch();
-                    return Array<const T>(buf->data.data(), buf->data.size());
-                }
-            }
-        }
-        
-        // Cache miss: find buffer to use
-        ChunkBuffer<T>* target = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(_mutex);
-            
-            // Find empty buffer first
-            for (auto& buf : _buffers) {
-                if (!buf->is_ready()) {
-                    target = buf.get();
-                    break;
-                }
-            }
-            
-            // LRU eviction if all full
-            if (!target) {
-                uint32_t min_access = std::numeric_limits<uint32_t>::max();
-                for (auto& buf : _buffers) {
-                    uint32_t cnt = buf->access_count.load(std::memory_order_relaxed);
-                    if (cnt < min_access) {
-                        min_access = cnt;
-                        target = buf.get();
-                    }
-                }
-            }
-            
-            target->reset(chunk_idx);
-        }
-        
-        // Load from disk
-        hsize_t start = chunk_idx * chunk_size;
-        hsize_t count = std::min(chunk_size, dataset_size - start);
-        
-        if (count > 0) {
-            target->data.resize(count);
-            
-            Dataspace file_space = dset.get_space();
-            std::vector<hsize_t> v_start = {start};
-            std::vector<hsize_t> v_count = {count};
-            file_space.select_hyperslab(v_start, v_count);
-            
-            std::vector<hsize_t> mem_dims = {count};
-            Dataspace mem_space(mem_dims);
-            
-            dset.read(target->data.data(), mem_space, file_space);
-        }
-        
-        target->mark_ready();
-        return Array<const T>(target->data.data(), target->data.size());
-    }
-    
-    /// @brief Prefetch chunk asynchronously
-    std::future<void> prefetch_async(
-        const Dataset& dset,
-        hsize_t chunk_idx,
-        hsize_t chunk_size,
-        hsize_t dataset_size
-    ) {
-        return std::async(std::launch::async, [=, &dset]() {
-            load_sync(dset, chunk_idx, chunk_size, dataset_size);
-        });
-    }
-    
-    void clear() {
-        std::lock_guard<std::mutex> lock(_mutex);
-        for (auto& buf : _buffers) {
-            buf->reset(static_cast<hsize_t>(-1));
-        }
-    }
-    
-private:
-    size_t _pool_size;
-    std::vector<std::unique_ptr<ChunkBuffer<T>>> _buffers;
-    std::mutex _mutex;
-};
-
-// =============================================================================
-// Row Segment (Deque-Based Storage)
-// =============================================================================
-
-/// @brief A single row's data, potentially spanning multiple chunks
-template <typename T>
-struct RowSegment {
-    std::deque<T> data;
-    std::deque<Index> indices;
-    Index row_idx;
-    Index nnz;
-    
-    RowSegment() : row_idx(-1), nnz(0) {}
-    explicit RowSegment(Index r) : row_idx(r), nnz(0) {}
-    
-    void append(const T* vals, const Index* idxs, Size count) {
-        data.insert(data.end(), vals, vals + count);
-        indices.insert(indices.end(), idxs, idxs + count);
-        nnz += static_cast<Index>(count);
-    }
-    
-    [[nodiscard]] Array<const T> values() const {
-        return data.empty() ? Array<const T>() : Array<const T>(&data[0], data.size());
-    }
-    
-    [[nodiscard]] Array<const Index> column_indices() const {
-        return indices.empty() ? Array<const Index>() : Array<const Index>(&indices[0], indices.size());
-    }
-    
-    void clear() {
-        data.clear();
-        indices.clear();
-        nnz = 0;
-    }
-};
-
-// =============================================================================
-// Range Merging (I/O Coalescing)
-// =============================================================================
-
-struct Range {
-    Index begin, end;
-    [[nodiscard]] Index length() const { return end - begin; }
-};
-
-/// @brief Merge overlapping or nearby ranges to minimize I/O
-inline std::vector<Range> merge_ranges(
-    std::vector<Range> ranges, 
-    Index gap_threshold = 128
-) {
-    if (ranges.empty()) return {};
-    
-    std::sort(ranges.begin(), ranges.end(), 
-              [](const Range& a, const Range& b) { return a.begin < b.begin; });
-    
-    std::vector<Range> merged;
-    merged.reserve(ranges.size());
-    merged.push_back(ranges[0]);
-    
-    for (size_t i = 1; i < ranges.size(); ++i) {
-        Range& last = merged.back();
-        const Range& curr = ranges[i];
-        
-        if (curr.begin <= last.end + gap_threshold) {
-            last.end = std::max(last.end, curr.end);
-        } else {
-            merged.push_back(curr);
-        }
-    }
-    
-    return merged;
-}
-
-} // namespace detail
-
-// =============================================================================
-// Query Context (Precomputed Query State)
-// =============================================================================
-
-/// @brief Precomputed state for column mask queries
+/// @brief Precomputed query state for column mask queries.
 ///
-/// Amortizes sorting and analysis cost across multiple rows.
-/// Should be created once per query and reused.
+/// Amortizes sorting and analysis cost across all rows.
+/// Created once per query, reused throughout execution.
 struct QueryContext {
     std::vector<Index> sorted_cols;  ///< Sorted column indices
     Index col_min;                   ///< Minimum query column
     Index col_max;                   ///< Maximum query column
+    Size query_size;                 ///< Number of query columns
     double density;                  ///< Q / N
     double clustering_factor;        ///< β from scheduler
     
-    QueryContext() : col_min(0), col_max(0), density(0), clustering_factor(0.6) {}
+    QueryContext() 
+        : col_min(0), col_max(0), query_size(0)
+        , density(0), clustering_factor(0.6) 
+    {}
     
-    /// @brief Create from column mask
-    static QueryContext from_mask(
+    /// @brief Build context from column mask array.
+    static QueryContext build(
         Array<const Index> col_mask,
         Index total_cols
     ) {
         QueryContext ctx;
         
-        // Sort columns
+        if (col_mask.len == 0) return ctx;
+        
+        // Copy and sort
         ctx.sorted_cols.reserve(col_mask.len);
         for (Size i = 0; i < col_mask.len; ++i) {
             ctx.sorted_cols.push_back(col_mask[i]);
         }
         std::sort(ctx.sorted_cols.begin(), ctx.sorted_cols.end());
         
-        if (!ctx.sorted_cols.empty()) {
-            ctx.col_min = ctx.sorted_cols.front();
-            ctx.col_max = ctx.sorted_cols.back();
-        }
+        // Remove duplicates
+        auto last = std::unique(ctx.sorted_cols.begin(), ctx.sorted_cols.end());
+        ctx.sorted_cols.erase(last, ctx.sorted_cols.end());
         
-        ctx.density = static_cast<double>(col_mask.len) / total_cols;
+        ctx.query_size = ctx.sorted_cols.size();
+        ctx.col_min = ctx.sorted_cols.front();
+        ctx.col_max = ctx.sorted_cols.back();
+        ctx.density = static_cast<double>(ctx.query_size) / total_cols;
         ctx.clustering_factor = detect_clustering(ctx.sorted_cols);
         
         return ctx;
     }
     
 private:
-    /// @brief Detect clustering factor from gap distribution
+    /// @brief Detect clustering factor from gap distribution.
     static double detect_clustering(const std::vector<Index>& sorted) {
         if (sorted.size() <= 1) return 1.0;
         
         // Check if contiguous
         bool contiguous = true;
-        for (size_t i = 1; i < sorted.size(); ++i) {
+        for (Size i = 1; i < sorted.size(); ++i) {
             if (sorted[i] != sorted[i-1] + 1) {
                 contiguous = false;
                 break;
@@ -616,7 +495,7 @@ private:
         // Compute median gap
         std::vector<Index> gaps;
         gaps.reserve(sorted.size() - 1);
-        for (size_t i = 1; i < sorted.size(); ++i) {
+        for (Size i = 1; i < sorted.size(); ++i) {
             gaps.push_back(sorted[i] - sorted[i-1]);
         }
         
@@ -634,23 +513,200 @@ private:
 };
 
 // =============================================================================
-// Deque-Based Sparse Matrix
+// SECTION 4: Chunk Cache (In-Memory Chunk Storage)
 // =============================================================================
 
-/// @brief Sparse matrix backed by deque storage (handles chunk boundaries)
+/// @brief Single chunk data loaded into memory.
+template <typename T>
+struct ChunkData {
+    std::vector<T> values;
+    std::vector<Index> indices;
+    Size chunk_idx;
+    bool loaded;
+    
+    ChunkData() : chunk_idx(0), loaded(false) {}
+    
+    void clear() {
+        values.clear();
+        indices.clear();
+        loaded = false;
+    }
+};
+
+/// @brief In-memory cache for loaded chunks.
 ///
-/// This is an intermediate format optimized for:
-/// - Avoiding extra copies when loading from chunked HDF5
-/// - Incremental construction during filtered queries
-/// - Memory-efficient random access patterns
+/// All I/O happens in planning phase; execution phase reads from cache.
+template <typename T>
+class ChunkCache {
+public:
+    ChunkCache() = default;
+    
+    /// @brief Reserve space for expected number of chunks.
+    void reserve(Size num_chunks) {
+        _chunks.reserve(num_chunks);
+    }
+    
+    /// @brief Load a chunk from HDF5 dataset.
+    ///
+    /// Called during planning phase (single-threaded).
+    void load_chunk(
+        Size chunk_idx,
+        const Dataset& data_dset,
+        const Dataset& indices_dset,
+        hsize_t file_start,
+        hsize_t file_end
+    ) {
+        hsize_t count = file_end - file_start;
+        if (count == 0) return;
+        
+        // Ensure slot exists
+        if (_index_map.find(chunk_idx) == _index_map.end()) {
+            _index_map[chunk_idx] = _chunks.size();
+            _chunks.emplace_back();
+        }
+        
+        Size slot = _index_map[chunk_idx];
+        auto& chunk = _chunks[slot];
+        
+        chunk.chunk_idx = chunk_idx;
+        chunk.values.resize(static_cast<Size>(count));
+        chunk.indices.resize(static_cast<Size>(count));
+        
+        // Read values
+        {
+            Dataspace file_space = data_dset.get_space();
+            std::vector<hsize_t> v_start = {file_start};
+            std::vector<hsize_t> v_count = {count};
+            file_space.select_hyperslab(v_start, v_count);
+            
+            std::vector<hsize_t> mem_dims = {count};
+            Dataspace mem_space(mem_dims);
+            data_dset.read(chunk.values.data(), mem_space, file_space);
+        }
+        
+        // Read indices
+        {
+            Dataspace file_space = indices_dset.get_space();
+            std::vector<hsize_t> v_start = {file_start};
+            std::vector<hsize_t> v_count = {count};
+            file_space.select_hyperslab(v_start, v_count);
+            
+            std::vector<hsize_t> mem_dims = {count};
+            Dataspace mem_space(mem_dims);
+            indices_dset.read(chunk.indices.data(), mem_space, file_space);
+        }
+        
+        chunk.loaded = true;
+    }
+    
+    /// @brief Get chunk data (read-only, thread-safe).
+    [[nodiscard]] const ChunkData<T>* get(Size chunk_idx) const {
+        auto it = _index_map.find(chunk_idx);
+        if (it == _index_map.end()) return nullptr;
+        return &_chunks[it->second];
+    }
+    
+    /// @brief Check if chunk is loaded.
+    [[nodiscard]] bool has(Size chunk_idx) const {
+        return _index_map.find(chunk_idx) != _index_map.end();
+    }
+    
+    /// @brief Get number of loaded chunks.
+    [[nodiscard]] Size size() const { return _chunks.size(); }
+    
+    /// @brief Clear all cached data.
+    void clear() {
+        _chunks.clear();
+        _index_map.clear();
+    }
+    
+private:
+    std::vector<ChunkData<T>> _chunks;
+    std::unordered_map<Size, Size> _index_map;  // chunk_idx -> slot
+};
+
+// =============================================================================
+// SECTION 5: Row Segment (Result Storage)
+// =============================================================================
+
+/// @brief Storage for a single row's filtered data.
 ///
-/// To use with algorithms, convert to CustomSparse via:
-/// 1. `materialize()` → OwnedSparse → `view()` → CustomSparse
-/// 2. Or use algorithms that accept SparseLike directly
+/// Uses contiguous vector storage (not deque) for guaranteed memory layout.
+template <typename T>
+struct RowSegment {
+    std::vector<T> values;
+    std::vector<Index> indices;
+    Index row_idx;
+    
+    RowSegment() : row_idx(-1) {}
+    explicit RowSegment(Index r) : row_idx(r) {}
+    
+    /// @brief Reserve space based on expected nnz.
+    void reserve(Size expected_nnz) {
+        values.reserve(expected_nnz);
+        indices.reserve(expected_nnz);
+    }
+    
+    /// @brief Append data from intersection result.
+    void append(const std::vector<Index>& idxs, const std::vector<T>& vals) {
+        indices.insert(indices.end(), idxs.begin(), idxs.end());
+        values.insert(values.end(), vals.begin(), vals.end());
+    }
+    
+    /// @brief Get number of non-zeros.
+    [[nodiscard]] Index nnz() const { 
+        return static_cast<Index>(values.size()); 
+    }
+    
+    /// @brief Check if empty.
+    [[nodiscard]] bool empty() const { return values.empty(); }
+    
+    void clear() {
+        values.clear();
+        indices.clear();
+    }
+};
+
+// =============================================================================
+// SECTION 6: Query Plan (Execution Blueprint)
+// =============================================================================
+
+/// @brief Row-to-chunk mapping for a single row.
+struct RowChunkMapping {
+    Index row_idx;                    ///< Logical row index
+    Index phys_start;                 ///< Start offset in data/indices arrays
+    Index phys_end;                   ///< End offset in data/indices arrays
+    std::vector<Size> hitting_chunks; ///< Chunk indices this row intersects
+};
+
+/// @brief Complete query execution plan.
 ///
-/// Satisfies: SparseLike<IsCSR>
+/// Built during planning phase, executed in parallel.
+struct QueryPlan {
+    QueryContext query_ctx;           ///< Query column context
+    ZoneMap zone_map;                 ///< Chunk boundary index
+    std::vector<Size> required_chunks;///< Chunks that pass Zone Map filter
+    std::vector<RowChunkMapping> row_mappings; ///< Row-to-chunk assignments
+    
+    Index total_rows;
+    Index total_cols;
+    hsize_t chunk_size;
+    
+    QueryPlan() : total_rows(0), total_cols(0), chunk_size(0) {}
+};
+
+} // namespace detail
+
+// =============================================================================
+// SECTION 7: Query Result (Output Container)
+// =============================================================================
+
+/// @brief Result container for filtered sparse matrix query.
+///
+/// Provides both incremental access and materialization to OwnedSparse.
+/// Satisfies SparseLike concept after construction.
 template <typename T, bool IsCSR>
-class DequeSparse {
+class QueryResult {
 public:
     using ValueType = T;
     using Tag = TagSparse<IsCSR>;
@@ -662,38 +718,45 @@ public:
     const Index rows;
     const Index cols;
     
-    DequeSparse() : rows(0), cols(0) {}
+    QueryResult() : rows(0), cols(0) {}
     
-    DequeSparse(
+    QueryResult(
         std::vector<RowSegment>&& segments,
         Index num_rows,
         Index num_cols
     )
-        : rows(num_rows), cols(num_cols),
-          _segments(std::move(segments))
+        : rows(num_rows), cols(num_cols)
+        , _segments(std::move(segments))
     {}
     
-    // Move only (deque doesn't support efficient copy)
-    DequeSparse(DequeSparse&&) noexcept = default;
-    DequeSparse& operator=(DequeSparse&&) noexcept = default;
-    DequeSparse(const DequeSparse&) = delete;
-    DequeSparse& operator=(const DequeSparse&) = delete;
+    // Move only
+    QueryResult(QueryResult&&) noexcept = default;
+    QueryResult& operator=(QueryResult&&) noexcept = default;
+    QueryResult(const QueryResult&) = delete;
+    QueryResult& operator=(const QueryResult&) = delete;
     
     // -------------------------------------------------------------------------
     // SparseLike Interface (CSR)
     // -------------------------------------------------------------------------
     
     [[nodiscard]] Array<T> row_values(Index i) const requires (IsCSR) {
-        return Array<T>(const_cast<T*>(_segments[i].values().ptr), _segments[i].values().len);
+        const auto& seg = _segments[static_cast<Size>(i)];
+        return Array<T>(
+            const_cast<T*>(seg.values.data()), 
+            seg.values.size()
+        );
     }
     
     [[nodiscard]] Array<Index> row_indices(Index i) const requires (IsCSR) {
-        return Array<Index>(const_cast<Index*>(_segments[i].column_indices().ptr), 
-                           _segments[i].column_indices().len);
+        const auto& seg = _segments[static_cast<Size>(i)];
+        return Array<Index>(
+            const_cast<Index*>(seg.indices.data()), 
+            seg.indices.size()
+        );
     }
     
     [[nodiscard]] Index row_length(Index i) const requires (IsCSR) {
-        return _segments[i].nnz;
+        return _segments[static_cast<Size>(i)].nnz();
     }
     
     // -------------------------------------------------------------------------
@@ -701,16 +764,23 @@ public:
     // -------------------------------------------------------------------------
     
     [[nodiscard]] Array<T> col_values(Index j) const requires (!IsCSR) {
-        return Array<T>(const_cast<T*>(_segments[j].values().ptr), _segments[j].values().len);
+        const auto& seg = _segments[static_cast<Size>(j)];
+        return Array<T>(
+            const_cast<T*>(seg.values.data()), 
+            seg.values.size()
+        );
     }
     
     [[nodiscard]] Array<Index> col_indices(Index j) const requires (!IsCSR) {
-        return Array<Index>(const_cast<Index*>(_segments[j].column_indices().ptr),
-                           _segments[j].column_indices().len);
+        const auto& seg = _segments[static_cast<Size>(j)];
+        return Array<Index>(
+            const_cast<Index*>(seg.indices.data()), 
+            seg.indices.size()
+        );
     }
     
     [[nodiscard]] Index col_length(Index j) const requires (!IsCSR) {
-        return _segments[j].nnz;
+        return _segments[static_cast<Size>(j)].nnz();
     }
     
     // -------------------------------------------------------------------------
@@ -720,7 +790,7 @@ public:
     [[nodiscard]] Index nnz() const noexcept {
         Index total = 0;
         for (const auto& seg : _segments) {
-            total += seg.nnz;
+            total += seg.nnz();
         }
         return total;
     }
@@ -738,16 +808,11 @@ public:
     }
     
     // -------------------------------------------------------------------------
-    // Conversion Methods
+    // Materialization
     // -------------------------------------------------------------------------
     
-    /// @brief Materialize to OwnedSparse (contiguous storage)
-    ///
-    /// This is the primary conversion method. Creates a contiguous copy
-    /// suitable for algorithms requiring CustomSparse.
-    ///
-    /// Complexity: O(nnz) time, O(nnz) space
-    [[nodiscard]] OwnedSparse<T, IsCSR> materialize() const {
+    /// @brief Materialize to OwnedSparse (contiguous storage).
+    [[nodiscard]] scl::io::OwnedSparse<T, IsCSR> materialize() const {
         Index pdim = primary_dim();
         Index total_nnz = nnz();
         
@@ -755,13 +820,13 @@ public:
         std::vector<Index> indices;
         std::vector<Index> indptr;
         
-        data.reserve(total_nnz);
-        indices.reserve(total_nnz);
-        indptr.reserve(pdim + 1);
+        data.reserve(static_cast<Size>(total_nnz));
+        indices.reserve(static_cast<Size>(total_nnz));
+        indptr.reserve(static_cast<Size>(pdim + 1));
         indptr.push_back(0);
         
         for (const auto& seg : _segments) {
-            data.insert(data.end(), seg.data.begin(), seg.data.end());
+            data.insert(data.end(), seg.values.begin(), seg.values.end());
             indices.insert(indices.end(), seg.indices.begin(), seg.indices.end());
             indptr.push_back(static_cast<Index>(data.size()));
         }
@@ -772,17 +837,7 @@ public:
         );
     }
     
-    /// @brief Materialize to OwnedSparse and get CustomSparse view
-    ///
-    /// Convenience method that returns both:
-    /// - OwnedSparse (owns memory)
-    /// - CustomSparse (view for algorithms)
-    ///
-    /// Usage:
-    /// ```cpp
-    /// auto [owned, view] = deque_sparse.materialize_with_view();
-    /// algorithm(view);  // owned must stay alive!
-    /// ```
+    /// @brief Materialize and return with view.
     [[nodiscard]] std::pair<OwnedSparse<T, IsCSR>, CustomSparse<T, IsCSR>> 
     materialize_with_view() const {
         auto owned = materialize();
@@ -790,385 +845,462 @@ public:
         return {std::move(owned), view};
     }
     
-    /// @brief Export directly to binary files (streaming, no intermediate copy)
-    ///
-    /// Writes three files: data.bin, indices.bin, indptr.bin
-    /// This is efficient for very large matrices as it streams data directly.
-    ///
-    /// @param dir_path Directory to write files to
-    void export_to_bin(const std::string& dir_path) const {
-        Index total_nnz = nnz();
-        
-        // Open files
-        std::ofstream data_file(dir_path + "/data.bin", std::ios::binary);
-        std::ofstream indices_file(dir_path + "/indices.bin", std::ios::binary);
-        std::ofstream indptr_file(dir_path + "/indptr.bin", std::ios::binary);
-        
-        if (!data_file || !indices_file || !indptr_file) {
-            throw IOError("Failed to create output files in: " + dir_path);
-        }
-        
-        // Write indptr (streaming)
-        Index offset = 0;
-        indptr_file.write(reinterpret_cast<const char*>(&offset), sizeof(Index));
-        
-        for (const auto& seg : _segments) {
-            // Write data and indices for this segment
-            if (!seg.data.empty()) {
-                // Convert deque to contiguous for write
-                std::vector<T> seg_data(seg.data.begin(), seg.data.end());
-                std::vector<Index> seg_indices(seg.indices.begin(), seg.indices.end());
-                
-                data_file.write(reinterpret_cast<const char*>(seg_data.data()), 
-                               seg_data.size() * sizeof(T));
-                indices_file.write(reinterpret_cast<const char*>(seg_indices.data()), 
-                                  seg_indices.size() * sizeof(Index));
-            }
-            
-            offset += seg.nnz;
-            indptr_file.write(reinterpret_cast<const char*>(&offset), sizeof(Index));
-        }
-        
-        // Write metadata
-        std::ofstream meta_file(dir_path + "/meta.txt");
-        meta_file << "rows=" << rows << "\n";
-        meta_file << "cols=" << cols << "\n";
-        meta_file << "nnz=" << total_nnz << "\n";
-        meta_file << "is_csr=" << (IsCSR ? "true" : "false") << "\n";
-    }
-    
-    /// @brief Get segment count (for debugging)
-    [[nodiscard]] Size segment_count() const noexcept {
-        return _segments.size();
-    }
-    
-    /// @brief Get segment by index (for debugging)
-    [[nodiscard]] const RowSegment& segment(Size i) const {
-        return _segments[i];
-    }
-    
 private:
     std::vector<RowSegment> _segments;
 };
 
 // =============================================================================
-// Core Loading Functions
+// SECTION 8: Query Executor (Two-Phase Pipeline)
 // =============================================================================
 
-/// @brief Load sparse matrix rows with range merging optimization
+/// @brief High-performance query executor implementing two-phase architecture.
 ///
-/// Returns: OwnedSparse (contiguous storage)
-template <typename T, bool IsCSR = true>
-inline OwnedSparse<T, IsCSR> load_sparse_rows(
-    const std::string& h5_path,
-    const std::string& group_path,
-    Array<const Index> selected_rows
-) {
-    if (selected_rows.len == 0) {
-        return OwnedSparse<T, IsCSR>();
-    }
-    
-    File file(h5_path);
-    Group group(file.id(), group_path);
-    
-    // Metadata
-    std::array<hsize_t, 2> shape_arr = group.read_attr<hsize_t, 2>("shape");
-    Index total_rows = static_cast<Index>(shape_arr[0]);
-    Index total_cols = static_cast<Index>(shape_arr[1]);
-    
-    // Load indptr
-    Dataset indptr_dset(group.id(), "indptr");
-    std::vector<Index> indptr(total_rows + 1);
-    indptr_dset.read(indptr.data());
-    
-    // Compute merged ranges for coalesced IO
-    std::vector<detail::Range> ranges;
-    ranges.reserve(selected_rows.len);
-    
-    for (Size i = 0; i < selected_rows.len; ++i) {
-        Index row_idx = selected_rows[i];
-        if (row_idx >= total_rows) continue;
+/// Phase 1 (PLAN): Single-threaded preparation
+///   - Load indptr
+///   - Build Zone Map
+///   - Create Query Context
+///   - Build row-chunk mappings
+///   - Load required chunks (serial I/O)
+///
+/// Phase 2 (EXECUTE): Parallel computation
+///   - Process rows in parallel (no I/O, no locks)
+///   - Adaptive intersection per row
+///   - Assemble results
+template <typename T>
+class QueryExecutor {
+public:
+    /// @brief Execute masked query with two-phase pipeline.
+    ///
+    /// This is the main entry point for filtered sparse matrix retrieval.
+    static QueryResult<T, true> execute_masked(
+        const std::string& h5_path,
+        const std::string& group_path,
+        Array<const Index> row_mask,
+        Array<const Index> col_mask
+    ) {
+        using RowSegment = detail::RowSegment<T>;
         
-        Index start = indptr[row_idx];
-        Index end = indptr[row_idx + 1];
-        
-        if (start < end) {
-            ranges.push_back({start, end});
+        if (row_mask.len == 0 || col_mask.len == 0) {
+            return QueryResult<T, true>();
         }
-    }
-    
-    ranges = detail::merge_ranges(std::move(ranges));
-    
-    // Allocate output
-    Index total_nnz = 0;
-    for (const auto& r : ranges) total_nnz += r.length();
-    
-    std::vector<T> data(total_nnz);
-    std::vector<Index> indices(total_nnz);
-    
-    // Batch read with merged ranges
-    Dataset data_dset(group.id(), "data");
-    Dataset indices_dset(group.id(), "indices");
-    
-    Index write_offset = 0;
-    for (const auto& range : ranges) {
-        hsize_t start = static_cast<hsize_t>(range.begin);
-        hsize_t count = static_cast<hsize_t>(range.length());
         
-        if (count == 0) continue;
+        // =====================================================================
+        // PHASE 1: PLAN (Single-Threaded)
+        // =====================================================================
         
-        Dataspace file_space = data_dset.get_space();
-        std::vector<hsize_t> v_start = {start};
-        std::vector<hsize_t> v_count = {count};
-        file_space.select_hyperslab(v_start, v_count);
+        File file(h5_path);
+        Group group(file.id(), group_path);
         
-        std::vector<hsize_t> mem_dims = {count};
-        Dataspace mem_space(mem_dims);
+        // 1.1 Read metadata
+        std::array<hsize_t, 2> shape_arr = group.read_attr<hsize_t, 2>("shape");
+        Index total_rows = static_cast<Index>(shape_arr[0]);
+        Index total_cols = static_cast<Index>(shape_arr[1]);
         
-        data_dset.read(data.data() + write_offset, mem_space, file_space);
+        // 1.2 Load indptr (always needed)
+        Dataset indptr_dset(group.id(), "indptr");
+        std::vector<Index> indptr(static_cast<Size>(total_rows + 1));
+        indptr_dset.read(indptr.data());
         
-        Dataspace indices_file_space = indices_dset.get_space();
-        indices_file_space.select_hyperslab(v_start, v_count);
-        indices_dset.read(indices.data() + write_offset, mem_space, indices_file_space);
+        // 1.3 Open data arrays
+        Dataset data_dset(group.id(), "data");
+        Dataset indices_dset(group.id(), "indices");
         
-        write_offset += range.length();
-    }
-    
-    // Rebuild indptr for selected rows
-    std::vector<Index> new_indptr;
-    new_indptr.reserve(selected_rows.len + 1);
-    new_indptr.push_back(0);
-    
-    for (Size i = 0; i < selected_rows.len; ++i) {
-        Index row_idx = selected_rows[i];
-        if (row_idx >= total_rows) {
-            new_indptr.push_back(new_indptr.back());
-            continue;
+        // 1.4 Detect chunk size
+        hsize_t chunk_size = 10000;
+        auto chunk_dims = data_dset.get_chunk_dims();
+        if (chunk_dims && !chunk_dims->empty()) {
+            chunk_size = (*chunk_dims)[0];
         }
-        Index row_len = indptr[row_idx + 1] - indptr[row_idx];
-        new_indptr.push_back(new_indptr.back() + row_len);
+        
+        hsize_t total_nnz = static_cast<hsize_t>(indptr.back());
+        
+        // 1.5 Build Query Context
+        detail::QueryContext query_ctx = detail::QueryContext::build(col_mask, total_cols);
+        
+        if (query_ctx.query_size == 0) {
+            // No valid columns
+            std::vector<RowSegment> empty_segments(row_mask.len);
+            for (Size i = 0; i < row_mask.len; ++i) {
+                empty_segments[i].row_idx = row_mask[i];
+            }
+            return QueryResult<T, true>(
+                std::move(empty_segments),
+                static_cast<Index>(row_mask.len),
+                total_cols
+            );
+        }
+        
+        // 1.6 Build Zone Map
+        detail::ZoneMap zone_map = detail::ZoneMap::build(
+            indices_dset, chunk_size, total_nnz
+        );
+        
+        // 1.7 Filter chunks using Zone Map
+        std::vector<Size> required_chunks = zone_map.filter(
+            query_ctx.col_min, 
+            query_ctx.col_max
+        );
+        
+        // 1.8 Build row-chunk mappings
+        std::vector<detail::RowChunkMapping> row_mappings(row_mask.len);
+        
+        for (Size i = 0; i < row_mask.len; ++i) {
+            auto& mapping = row_mappings[i];
+            mapping.row_idx = row_mask[i];
+            
+            if (mapping.row_idx >= total_rows) {
+                mapping.phys_start = 0;
+                mapping.phys_end = 0;
+                continue;
+            }
+            
+            mapping.phys_start = indptr[static_cast<Size>(mapping.row_idx)];
+            mapping.phys_end = indptr[static_cast<Size>(mapping.row_idx + 1)];
+            
+            if (mapping.phys_start >= mapping.phys_end) continue;
+            
+            // Find chunks this row hits (that also passed Zone Map filter)
+            Size start_chunk = zone_map.offset_to_chunk(
+                static_cast<hsize_t>(mapping.phys_start)
+            );
+            Size end_chunk = zone_map.offset_to_chunk(
+                static_cast<hsize_t>(mapping.phys_end - 1)
+            );
+            
+            for (Size c = start_chunk; c <= end_chunk && c < zone_map.entries.size(); ++c) {
+                // Check if this chunk is in required set
+                if (std::binary_search(required_chunks.begin(), required_chunks.end(), c)) {
+                    mapping.hitting_chunks.push_back(c);
+                }
+            }
+        }
+        
+        // 1.9 Load required chunks (SERIAL I/O - no locks needed)
+        detail::ChunkCache<T> cache;
+        cache.reserve(required_chunks.size());
+        
+        for (Size chunk_idx : required_chunks) {
+            const auto& entry = zone_map.entries[chunk_idx];
+            cache.load_chunk(
+                chunk_idx,
+                data_dset,
+                indices_dset,
+                entry.file_start,
+                entry.file_end
+            );
+        }
+        
+        // =====================================================================
+        // PHASE 2: EXECUTE (Parallel Computation)
+        // =====================================================================
+        
+        // 2.1 Allocate result segments
+        std::vector<RowSegment> segments(row_mask.len);
+        
+        // 2.2 Process rows in parallel (NO I/O, NO LOCKS)
+        scl::threading::parallel_for(Size(0), row_mask.len,
+            [&](Size i)
+        {
+            const auto& mapping = row_mappings[i];
+            auto& seg = segments[i];
+            seg.row_idx = mapping.row_idx;
+            
+            if (mapping.hitting_chunks.empty()) return;
+            
+            // Estimate output size for reservation
+            Size est_hits = std::max(Size(1), 
+                static_cast<Size>(query_ctx.density * (mapping.phys_end - mapping.phys_start))
+            );
+            seg.reserve(est_hits);
+            
+            // Process each chunk this row hits
+            for (Size chunk_idx : mapping.hitting_chunks) {
+                const auto* chunk = cache.get(chunk_idx);
+                if (!chunk || !chunk->loaded) continue;
+                
+                const auto& entry = zone_map.entries[chunk_idx];
+                
+                // Calculate overlap within chunk
+                Index chunk_start = static_cast<Index>(entry.file_start);
+                Index chunk_end = static_cast<Index>(entry.file_end);
+                
+                Index overlap_start = std::max(mapping.phys_start, chunk_start);
+                Index overlap_end = std::min(mapping.phys_end, chunk_end);
+                
+                if (overlap_start >= overlap_end) continue;
+                
+                // Local offset within chunk
+                Size local_start = static_cast<Size>(overlap_start - chunk_start);
+                Size local_len = static_cast<Size>(overlap_end - overlap_start);
+                
+                // Zone Map filter: quick range check
+                Index chunk_min = chunk->indices[local_start];
+                Index chunk_max = chunk->indices[local_start + local_len - 1];
+                
+                if (chunk_max < query_ctx.col_min || chunk_min > query_ctx.col_max) {
+                    continue;  // Skip - no overlap possible
+                }
+                
+                // Adaptive intersection
+                std::vector<Index> hit_indices;
+                std::vector<T> hit_values;
+                
+                detail::intersect_adaptive(
+                    chunk->indices.data() + local_start,
+                    chunk->values.data() + local_start,
+                    local_len,
+                    query_ctx.sorted_cols.data(),
+                    query_ctx.query_size,
+                    hit_indices,
+                    hit_values
+                );
+                
+                seg.append(hit_indices, hit_values);
+            }
+        });
+        
+        return QueryResult<T, true>(
+            std::move(segments),
+            static_cast<Index>(row_mask.len),
+            total_cols
+        );
     }
     
-    return OwnedSparse<T, IsCSR>(
-        std::move(data), std::move(indices), std::move(new_indptr),
-        static_cast<Index>(selected_rows.len), total_cols
-    );
-}
+    /// @brief Load sparse matrix rows (row selection only, no column filter).
+    static OwnedSparse<T, true> execute_rows(
+        const std::string& h5_path,
+        const std::string& group_path,
+        Array<const Index> row_mask
+    ) {
+        if (row_mask.len == 0) {
+            return OwnedSparse<T, true>();
+        }
+        
+        File file(h5_path);
+        Group group(file.id(), group_path);
+        
+        // Metadata
+        std::array<hsize_t, 2> shape_arr = group.read_attr<hsize_t, 2>("shape");
+        Index total_rows = static_cast<Index>(shape_arr[0]);
+        Index total_cols = static_cast<Index>(shape_arr[1]);
+        
+        // Load indptr
+        Dataset indptr_dset(group.id(), "indptr");
+        std::vector<Index> indptr(static_cast<Size>(total_rows + 1));
+        indptr_dset.read(indptr.data());
+        
+        // Compute merged ranges for coalesced I/O
+        struct Range { Index begin, end; };
+        std::vector<Range> ranges;
+        ranges.reserve(row_mask.len);
+        
+        for (Size i = 0; i < row_mask.len; ++i) {
+            Index row_idx = row_mask[i];
+            if (row_idx >= total_rows) continue;
+            
+            Index start = indptr[static_cast<Size>(row_idx)];
+            Index end = indptr[static_cast<Size>(row_idx + 1)];
+            
+            if (start < end) {
+                ranges.push_back({start, end});
+            }
+        }
+        
+        // Merge nearby ranges
+        if (!ranges.empty()) {
+            std::sort(ranges.begin(), ranges.end(), 
+                [](const Range& a, const Range& b) { return a.begin < b.begin; });
+            
+            std::vector<Range> merged;
+            merged.push_back(ranges[0]);
+            
+            constexpr Index gap_threshold = 128;
+            for (Size i = 1; i < ranges.size(); ++i) {
+                auto& last = merged.back();
+                const auto& curr = ranges[i];
+                
+                if (curr.begin <= last.end + gap_threshold) {
+                    last.end = std::max(last.end, curr.end);
+                } else {
+                    merged.push_back(curr);
+                }
+            }
+            ranges = std::move(merged);
+        }
+        
+        // Compute total nnz
+        Index total_nnz = 0;
+        for (const auto& r : ranges) total_nnz += (r.end - r.begin);
+        
+        // Allocate output
+        std::vector<T> data(static_cast<Size>(total_nnz));
+        std::vector<Index> indices(static_cast<Size>(total_nnz));
+        
+        // Batch read
+        Dataset data_dset(group.id(), "data");
+        Dataset indices_dset(group.id(), "indices");
+        
+        Index write_offset = 0;
+        for (const auto& range : ranges) {
+            hsize_t start = static_cast<hsize_t>(range.begin);
+            hsize_t count = static_cast<hsize_t>(range.end - range.begin);
+            
+            if (count == 0) continue;
+            
+            Dataspace file_space = data_dset.get_space();
+            std::vector<hsize_t> v_start = {start};
+            std::vector<hsize_t> v_count = {count};
+            file_space.select_hyperslab(v_start, v_count);
+            
+            std::vector<hsize_t> mem_dims = {count};
+            Dataspace mem_space(mem_dims);
+            
+            data_dset.read(data.data() + write_offset, mem_space, file_space);
+            
+            Dataspace indices_file_space = indices_dset.get_space();
+            indices_file_space.select_hyperslab(v_start, v_count);
+            indices_dset.read(indices.data() + write_offset, mem_space, indices_file_space);
+            
+            write_offset += (range.end - range.begin);
+        }
+        
+        // Rebuild indptr for selected rows
+        std::vector<Index> new_indptr;
+        new_indptr.reserve(row_mask.len + 1);
+        new_indptr.push_back(0);
+        
+        for (Size i = 0; i < row_mask.len; ++i) {
+            Index row_idx = row_mask[i];
+            if (row_idx >= total_rows) {
+                new_indptr.push_back(new_indptr.back());
+                continue;
+            }
+            Index row_len = indptr[static_cast<Size>(row_idx + 1)] 
+                          - indptr[static_cast<Size>(row_idx)];
+            new_indptr.push_back(new_indptr.back() + row_len);
+        }
+        
+        return OwnedSparse<T, true>(
+            std::move(data), std::move(indices), std::move(new_indptr),
+            static_cast<Index>(row_mask.len), total_cols
+        );
+    }
+    
+    /// @brief Load full sparse matrix.
+    static OwnedSparse<T, true> execute_full(
+        const std::string& h5_path,
+        const std::string& group_path
+    ) {
+        File file(h5_path);
+        Group group(file.id(), group_path);
+        
+        std::array<hsize_t, 2> shape_arr = group.read_attr<hsize_t, 2>("shape");
+        Index rows = static_cast<Index>(shape_arr[0]);
+        Index cols = static_cast<Index>(shape_arr[1]);
+        
+        Dataset data_dset(group.id(), "data");
+        Dataset indices_dset(group.id(), "indices");
+        Dataset indptr_dset(group.id(), "indptr");
+        
+        Index nnz = static_cast<Index>(data_dset.get_size());
+        
+        std::vector<T> data(static_cast<Size>(nnz));
+        std::vector<Index> indices(static_cast<Size>(nnz));
+        std::vector<Index> indptr(static_cast<Size>(rows + 1));
+        
+        data_dset.read(data.data());
+        indices_dset.read(indices.data());
+        indptr_dset.read(indptr.data());
+        
+        return OwnedSparse<T, true>(
+            std::move(data), std::move(indices), std::move(indptr), 
+            rows, cols
+        );
+    }
+};
 
-/// @brief Load sparse matrix with row AND column masks (optimized 2D slicing)
+// =============================================================================
+// SECTION 9: Public API Functions
+// =============================================================================
+
+/// @brief Load sparse matrix with row AND column masks (optimized 2D slicing).
 ///
-/// This is the main optimized function implementing:
-/// - Zone Map filtering
-/// - Adaptive intersection algorithms
-/// - Cost-based query planning
-/// - Async prefetching
+/// Uses two-phase architecture:
+/// - Phase 1: Plan (single-threaded I/O, Zone Map filtering)
+/// - Phase 2: Execute (parallel computation, adaptive intersection)
 ///
-/// Returns: DequeSparse with filtered columns
+/// Returns: QueryResult with filtered data.
 template <typename T, bool IsCSR = true>
-inline DequeSparse<T, IsCSR> load_sparse_masked(
+[[nodiscard]] inline QueryResult<T, IsCSR> load_sparse_masked(
     const std::string& h5_path,
     const std::string& group_path,
     Array<const Index> row_mask,
     Array<const Index> col_mask
 ) {
-    using RowSegment = detail::RowSegment<T>;
-    
-    if (row_mask.len == 0 || col_mask.len == 0) {
-        return DequeSparse<T, IsCSR>();
-    }
-    
-    File file(h5_path);
-    Group group(file.id(), group_path);
-    
-    // Metadata
-    std::array<hsize_t, 2> shape_arr = group.read_attr<hsize_t, 2>("shape");
-    Index total_rows = static_cast<Index>(shape_arr[0]);
-    Index total_cols = static_cast<Index>(shape_arr[1]);
-    
-    // Load indptr (always needed for row access)
-    Dataset indptr_dset(group.id(), "indptr");
-    std::vector<Index> indptr(total_rows + 1);
-    indptr_dset.read(indptr.data());
-    
-    // Open datasets
-    Dataset data_dset(group.id(), "data");
-    Dataset indices_dset(group.id(), "indices");
-    
-    // Build query context (amortized across rows)
-    QueryContext query_ctx = QueryContext::from_mask(col_mask, total_cols);
-    
-    // Create scheduler with detected parameters
-    AdaptiveScheduler scheduler = make_scheduler(
-        data_dset, total_cols, static_cast<Index>(col_mask.len), 
-        query_ctx.sorted_cols
-    );
-    
-    // Get chunk info
-    hsize_t chunk_size = 10000;
-    auto chunk_dims = data_dset.get_chunk_dims();
-    if (chunk_dims && !chunk_dims->empty()) {
-        chunk_size = (*chunk_dims)[0];
-    }
-    
-    Index dataset_size = indptr.back();
-    
-    // Result storage
-    std::vector<RowSegment> segments(row_mask.len);
-    
-    // Thread-local chunk pools (increased size for better caching)
-    static thread_local detail::AsyncChunkPool<T> data_pool(8);
-    static thread_local detail::AsyncChunkPool<Index> indices_pool(8);
-    
-    std::mutex io_mutex;
-    
-    // Parallel row processing with query optimization
-    scl::threading::parallel_for(Index(0), static_cast<Index>(row_mask.len),
-        [&](Index i)
-    {
-        Index logical_row = row_mask[i];
-        
-        if (logical_row >= total_rows) {
-            segments[i] = RowSegment(logical_row);
-            return;
-        }
-        
-        Index phys_start = indptr[logical_row];
-        Index phys_end = indptr[logical_row + 1];
-        Index row_len = phys_end - phys_start;
-        
-        if (row_len == 0) {
-            segments[i] = RowSegment(logical_row);
-            return;
-        }
-        
-        RowSegment seg(logical_row);
-        
-        // Map row data to chunks
-        hsize_t chunk_start_idx = phys_start / chunk_size;
-        hsize_t chunk_end_idx = (phys_end - 1) / chunk_size;
-        
-        // Process each chunk with adaptive strategy
-        for (hsize_t c_idx = chunk_start_idx; c_idx <= chunk_end_idx; ++c_idx) {
-            Index chunk_base = static_cast<Index>(c_idx * chunk_size);
-            Index overlap_start = std::max(phys_start, chunk_base);
-            Index overlap_end = std::min(phys_end, static_cast<Index>(chunk_base + chunk_size));
-            Index overlap_len = overlap_end - overlap_start;
-            Index local_offset = overlap_start - chunk_base;
-            
-            if (overlap_len <= 0) continue;
-            
-            // Get scheduler decision for this chunk
-            auto decision = scheduler(overlap_len);
-            
-            // Always load indices (needed for intersection)
-            Array<const Index> indices_span;
-            {
-                std::lock_guard<std::mutex> lock(io_mutex);
-                indices_span = indices_pool.load_sync(
-                    indices_dset, c_idx, chunk_size, dataset_size
-                );
-            }
-            
-            if (static_cast<Size>(local_offset + overlap_len) > indices_span.len) {
-                continue;
-            }
-            
-            const Index* chunk_indices = &indices_span[local_offset];
-            
-            // Zone Map filter: check if chunk possibly contains query columns
-            if (decision.should_check_boundary()) {
-                Index min_col = chunk_indices[0];
-                Index max_col = chunk_indices[overlap_len - 1];
-                
-                // Fast rejection: no overlap with query range
-                if (max_col < query_ctx.col_min || min_col > query_ctx.col_max) {
-                    continue;  // Skip data chunk load entirely!
-                }
-            }
-            
-            // Load data chunk
-            Array<const T> data_span;
-            {
-                std::lock_guard<std::mutex> lock(io_mutex);
-                data_span = data_pool.load_sync(
-                    data_dset, c_idx, chunk_size, dataset_size
-                );
-            }
-            
-            if (static_cast<Size>(local_offset + overlap_len) > data_span.len) {
-                continue;
-            }
-            
-            const T* chunk_data = &data_span[local_offset];
-            
-            // Adaptive intersection based on size ratio
-            std::vector<Index> matched_indices;
-            std::vector<T> matched_values;
-            
-            detail::adaptive_intersection(
-                chunk_indices, chunk_data, overlap_len,
-                query_ctx.sorted_cols.data(), query_ctx.sorted_cols.size(),
-                matched_indices, matched_values
-            );
-            
-            // Append results
-            if (!matched_indices.empty()) {
-                seg.append(
-                    matched_values.data(),
-                    matched_indices.data(),
-                    matched_indices.size()
-                );
-            }
-        }
-        
-        segments[i] = std::move(seg);
-    });
-    
-    return DequeSparse<T, IsCSR>(
-        std::move(segments), 
-        static_cast<Index>(row_mask.len), 
-        total_cols
+    return QueryExecutor<T>::execute_masked(
+        h5_path, group_path, row_mask, col_mask
     );
 }
 
-/// @brief Load full sparse matrix from HDF5
+/// @brief Load sparse matrix rows (row selection only).
+///
+/// Uses range merging for coalesced I/O.
+/// Returns: OwnedSparse with selected rows.
 template <typename T, bool IsCSR = true>
-inline OwnedSparse<T, IsCSR> load_sparse_full(
+[[nodiscard]] inline OwnedSparse<T, IsCSR> load_sparse_rows(
+    const std::string& h5_path,
+    const std::string& group_path,
+    Array<const Index> selected_rows
+) {
+    return QueryExecutor<T>::execute_rows(
+        h5_path, group_path, selected_rows
+    );
+}
+
+/// @brief Load full sparse matrix.
+template <typename T, bool IsCSR = true>
+[[nodiscard]] inline OwnedSparse<T, IsCSR> load_sparse_full(
     const std::string& h5_path,
     const std::string& group_path
 ) {
-    File file(h5_path);
-    Group group(file.id(), group_path);
-    
-    std::array<hsize_t, 2> shape_arr = group.read_attr<hsize_t, 2>("shape");
-    Index rows = static_cast<Index>(shape_arr[0]);
-    Index cols = static_cast<Index>(shape_arr[1]);
-    
-    Dataset data_dset(group.id(), "data");
-    Dataset indices_dset(group.id(), "indices");
-    Dataset indptr_dset(group.id(), "indptr");
-    
-    Index nnz = static_cast<Index>(data_dset.get_size());
-    
-    std::vector<T> data(nnz);
-    std::vector<Index> indices(nnz);
-    std::vector<Index> indptr(rows + 1);
-    
-    data_dset.read(data.data());
-    indices_dset.read(indices.data());
-    indptr_dset.read(indptr.data());
-    
-    return OwnedSparse<T, IsCSR>(
-        std::move(data), std::move(indices), std::move(indptr), 
-        rows, cols
+    return QueryExecutor<T>::execute_full(h5_path, group_path);
+}
+
+// =============================================================================
+// SECTION 10: Convenience Wrappers (Vector Interface)
+// =============================================================================
+
+template <typename T, bool IsCSR = true>
+[[nodiscard]] inline OwnedSparse<T, IsCSR> load_sparse_rows(
+    const std::string& h5_path,
+    const std::string& group_path,
+    const std::vector<Index>& row_mask
+) {
+    return load_sparse_rows<T, IsCSR>(
+        h5_path, group_path,
+        Array<const Index>(row_mask.data(), row_mask.size())
+    );
+}
+
+template <typename T, bool IsCSR = true>
+[[nodiscard]] inline QueryResult<T, IsCSR> load_sparse_masked(
+    const std::string& h5_path,
+    const std::string& group_path,
+    const std::vector<Index>& row_mask,
+    const std::vector<Index>& col_mask
+) {
+    return load_sparse_masked<T, IsCSR>(
+        h5_path, group_path,
+        Array<const Index>(row_mask.data(), row_mask.size()),
+        Array<const Index>(col_mask.data(), col_mask.size())
     );
 }
 
 // =============================================================================
-// Matrix Saving
+// SECTION 11: Save Functions
 // =============================================================================
 
-/// @brief Save sparse matrix to HDF5 (anndata format)
+/// @brief Save sparse matrix to HDF5 (anndata-compatible format).
 template <typename MatrixT, bool IsCSR>
     requires SparseLike<MatrixT, IsCSR>
 inline void save_sparse(
@@ -1181,7 +1313,7 @@ inline void save_sparse(
     File file = File::create(h5_path);
     Group group = Group::create(file.id(), group_path);
     
-    // Write shape
+    // Write shape attribute
     std::array<hsize_t, 2> shape_arr = {
         static_cast<hsize_t>(mat.rows),
         static_cast<hsize_t>(mat.cols)
@@ -1189,13 +1321,14 @@ inline void save_sparse(
     group.write_attr<hsize_t, 2>("shape", shape_arr);
     
     // Materialize if needed
-    auto owned = [&]() {
+    auto get_owned = [&]() {
         if constexpr (requires { mat.materialize(); }) {
             return mat.materialize();
         } else {
             return mat;
         }
-    }();
+    };
+    const auto& owned = get_owned();
     
     // Create property list with compression
     DatasetCreateProps props;
@@ -1230,336 +1363,12 @@ inline void save_sparse(
 }
 
 // =============================================================================
-// Convenience Wrappers (Vector Interface)
+// SECTION 12: Metadata Utilities
 // =============================================================================
 
-template <typename T, bool IsCSR = true>
-inline OwnedSparse<T, IsCSR> load_sparse_rows(
-    const std::string& h5_path,
-    const std::string& group_path,
-    const std::vector<Index>& row_mask
-) {
-    return load_sparse_rows<T, IsCSR>(
-        h5_path, group_path,
-        Array<const Index>(row_mask.data(), row_mask.size())
-    );
-}
-
-template <typename T, bool IsCSR = true>
-inline DequeSparse<T, IsCSR> load_sparse_masked(
-    const std::string& h5_path,
-    const std::string& group_path,
-    const std::vector<Index>& row_mask,
-    const std::vector<Index>& col_mask
-) {
-    return load_sparse_masked<T, IsCSR>(
-        h5_path, group_path,
-        Array<const Index>(row_mask.data(), row_mask.size()),
-        Array<const Index>(col_mask.data(), col_mask.size())
-    );
-}
-
-// =============================================================================
-// H5 → Binary File Export (Direct Streaming)
-// =============================================================================
-
-/// @brief Export sparse matrix from HDF5 directly to binary files
-///
-/// Streams data directly from HDF5 to .bin files without loading
-/// entire matrix into memory. Ideal for TB-scale data conversion.
-///
-/// Output files:
-/// - data.bin: Non-zero values
-/// - indices.bin: Column indices (CSR) or row indices (CSC)
-/// - indptr.bin: Row/column pointers
-/// - meta.txt: Shape and format metadata
-///
-/// @param h5_path Source HDF5 file
-/// @param group_path Group containing sparse matrix
-/// @param out_dir Output directory for .bin files
-/// @param chunk_size Buffer size for streaming (default 1M elements)
-template <typename T, bool IsCSR = true>
-inline void export_h5_to_bin(
-    const std::string& h5_path,
-    const std::string& group_path,
-    const std::string& out_dir,
-    Size chunk_size = 1024 * 1024
-) {
-    File file(h5_path);
-    Group group(file.id(), group_path);
-    
-    // Read metadata
-    std::array<hsize_t, 2> shape_arr = group.read_attr<hsize_t, 2>("shape");
-    Index rows = static_cast<Index>(shape_arr[0]);
-    Index cols = static_cast<Index>(shape_arr[1]);
-    
-    // Open datasets
-    Dataset data_dset(group.id(), "data");
-    Dataset indices_dset(group.id(), "indices");
-    Dataset indptr_dset(group.id(), "indptr");
-    
-    Index total_nnz = static_cast<Index>(data_dset.get_size());
-    Index primary_dim = IsCSR ? rows : cols;
-    
-    // Open output files
-    std::ofstream data_file(out_dir + "/data.bin", std::ios::binary);
-    std::ofstream indices_file(out_dir + "/indices.bin", std::ios::binary);
-    std::ofstream indptr_file(out_dir + "/indptr.bin", std::ios::binary);
-    
-    if (!data_file || !indices_file || !indptr_file) {
-        throw IOError("Failed to create output files in: " + out_dir);
-    }
-    
-    // Stream indptr (usually small enough to load entirely)
-    {
-        std::vector<Index> indptr(primary_dim + 1);
-        indptr_dset.read(indptr.data());
-        indptr_file.write(reinterpret_cast<const char*>(indptr.data()), 
-                         indptr.size() * sizeof(Index));
-    }
-    
-    // Stream data and indices in chunks
-    std::vector<T> data_buffer(chunk_size);
-    std::vector<Index> indices_buffer(chunk_size);
-    
-    hsize_t offset = 0;
-    while (offset < static_cast<hsize_t>(total_nnz)) {
-        hsize_t count = std::min(static_cast<hsize_t>(chunk_size), 
-                                 static_cast<hsize_t>(total_nnz) - offset);
-        
-        // Read chunk
-        Dataspace file_space = data_dset.get_space();
-        std::vector<hsize_t> v_start = {offset};
-        std::vector<hsize_t> v_count = {count};
-        file_space.select_hyperslab(v_start, v_count);
-        
-        std::vector<hsize_t> mem_dims = {count};
-        Dataspace mem_space(mem_dims);
-        
-        data_dset.read(data_buffer.data(), mem_space, file_space);
-        
-        Dataspace indices_file_space = indices_dset.get_space();
-        indices_file_space.select_hyperslab(v_start, v_count);
-        indices_dset.read(indices_buffer.data(), mem_space, indices_file_space);
-        
-        // Write to files
-        data_file.write(reinterpret_cast<const char*>(data_buffer.data()), 
-                       count * sizeof(T));
-        indices_file.write(reinterpret_cast<const char*>(indices_buffer.data()), 
-                          count * sizeof(Index));
-        
-        offset += count;
-    }
-    
-    // Write metadata
-    std::ofstream meta_file(out_dir + "/meta.txt");
-    meta_file << "rows=" << rows << "\n";
-    meta_file << "cols=" << cols << "\n";
-    meta_file << "nnz=" << total_nnz << "\n";
-    meta_file << "is_csr=" << (IsCSR ? "true" : "false") << "\n";
-    meta_file << "dtype=float" << (sizeof(T) * 8) << "\n";
-}
-
-/// @brief Export sparse matrix from HDF5 to binary with row selection
-///
-/// Exports only selected rows, useful for partitioning large datasets.
-template <typename T, bool IsCSR = true>
-inline void export_h5_to_bin_rows(
-    const std::string& h5_path,
-    const std::string& group_path,
-    const std::string& out_dir,
-    Array<const Index> selected_rows
-) {
-    // Load selected rows
-    auto owned = load_sparse_rows<T, IsCSR>(h5_path, group_path, selected_rows);
-    
-    // Export to binary
-    std::ofstream data_file(out_dir + "/data.bin", std::ios::binary);
-    std::ofstream indices_file(out_dir + "/indices.bin", std::ios::binary);
-    std::ofstream indptr_file(out_dir + "/indptr.bin", std::ios::binary);
-    
-    if (!data_file || !indices_file || !indptr_file) {
-        throw IOError("Failed to create output files in: " + out_dir);
-    }
-    
-    data_file.write(reinterpret_cast<const char*>(owned.data.data()), 
-                   owned.data.size() * sizeof(T));
-    indices_file.write(reinterpret_cast<const char*>(owned.indices.data()), 
-                      owned.indices.size() * sizeof(Index));
-    indptr_file.write(reinterpret_cast<const char*>(owned.indptr.data()), 
-                     owned.indptr.size() * sizeof(Index));
-    
-    // Metadata
-    std::ofstream meta_file(out_dir + "/meta.txt");
-    meta_file << "rows=" << owned.rows << "\n";
-    meta_file << "cols=" << owned.cols << "\n";
-    meta_file << "nnz=" << owned.nnz() << "\n";
-    meta_file << "is_csr=" << (IsCSR ? "true" : "false") << "\n";
-}
-
-// =============================================================================
-// Binary Files → H5 Import
-// =============================================================================
-
-/// @brief Import binary files to HDF5 sparse matrix
-///
-/// Reads .bin files and creates HDF5 group with anndata-compatible format.
-template <typename T, bool IsCSR = true>
-inline void import_bin_to_h5(
-    const std::string& bin_dir,
-    const std::string& h5_path,
-    const std::string& group_path,
-    Index rows,
-    Index cols,
-    const std::vector<hsize_t>& chunk_dims = {10000},
-    unsigned compress_level = 6
-) {
-    // Open binary files
-    std::ifstream data_file(bin_dir + "/data.bin", std::ios::binary);
-    std::ifstream indices_file(bin_dir + "/indices.bin", std::ios::binary);
-    std::ifstream indptr_file(bin_dir + "/indptr.bin", std::ios::binary);
-    
-    if (!data_file || !indices_file || !indptr_file) {
-        throw IOError("Failed to open binary files in: " + bin_dir);
-    }
-    
-    // Get file sizes
-    data_file.seekg(0, std::ios::end);
-    Size data_size = data_file.tellg() / sizeof(T);
-    data_file.seekg(0);
-    
-    Index primary_dim = IsCSR ? rows : cols;
-    
-    // Read all data
-    std::vector<T> data(data_size);
-    std::vector<Index> indices(data_size);
-    std::vector<Index> indptr(primary_dim + 1);
-    
-    data_file.read(reinterpret_cast<char*>(data.data()), data_size * sizeof(T));
-    indices_file.read(reinterpret_cast<char*>(indices.data()), data_size * sizeof(Index));
-    indptr_file.read(reinterpret_cast<char*>(indptr.data()), (primary_dim + 1) * sizeof(Index));
-    
-    // Create OwnedSparse and save to H5
-    OwnedSparse<T, IsCSR> owned(std::move(data), std::move(indices), std::move(indptr), rows, cols);
-    save_sparse<OwnedSparse<T, IsCSR>, IsCSR>(h5_path, group_path, owned, chunk_dims, compress_level);
-}
-
-// =============================================================================
-// CustomSparse / OwnedSparse Export Utilities
-// =============================================================================
-
-/// @brief Export CustomSparse to binary files
-template <typename T, bool IsCSR>
-inline void export_custom_to_bin(
-    const CustomSparse<T, IsCSR>& mat,
-    const std::string& out_dir
-) {
-    Index primary_dim = IsCSR ? mat.rows : mat.cols;
-    Index total_nnz = mat.indptr[primary_dim];
-    
-    std::ofstream data_file(out_dir + "/data.bin", std::ios::binary);
-    std::ofstream indices_file(out_dir + "/indices.bin", std::ios::binary);
-    std::ofstream indptr_file(out_dir + "/indptr.bin", std::ios::binary);
-    
-    if (!data_file || !indices_file || !indptr_file) {
-        throw IOError("Failed to create output files in: " + out_dir);
-    }
-    
-    data_file.write(reinterpret_cast<const char*>(mat.data), total_nnz * sizeof(T));
-    indices_file.write(reinterpret_cast<const char*>(mat.indices), total_nnz * sizeof(Index));
-    indptr_file.write(reinterpret_cast<const char*>(mat.indptr), (primary_dim + 1) * sizeof(Index));
-    
-    // Metadata
-    std::ofstream meta_file(out_dir + "/meta.txt");
-    meta_file << "rows=" << mat.rows << "\n";
-    meta_file << "cols=" << mat.cols << "\n";
-    meta_file << "nnz=" << total_nnz << "\n";
-    meta_file << "is_csr=" << (IsCSR ? "true" : "false") << "\n";
-}
-
-/// @brief Export OwnedSparse to binary files
-template <typename T, bool IsCSR>
-inline void export_owned_to_bin(
-    const OwnedSparse<T, IsCSR>& mat,
-    const std::string& out_dir
-) {
-    export_custom_to_bin(mat.view(), out_dir);
-}
-
-/// @brief Save CustomSparse to H5 (requires copy to contiguous storage)
-template <typename T, bool IsCSR>
-inline void save_custom_sparse(
-    const std::string& h5_path,
-    const std::string& group_path,
-    const CustomSparse<T, IsCSR>& mat,
-    const std::vector<hsize_t>& chunk_dims = {10000},
-    unsigned compress_level = 6
-) {
-    // Convert to OwnedSparse first
-    OwnedSparse<T, IsCSR> owned = scl::io::to_owned(mat);
-    save_sparse<OwnedSparse<T, IsCSR>, IsCSR>(h5_path, group_path, owned, chunk_dims, compress_level);
-}
-
-// =============================================================================
-// Load with Immediate CustomSparse View
-// =============================================================================
-
-/// @brief Load from H5 and return OwnedSparse with CustomSparse view
-///
-/// Convenience function that returns both owned storage and view.
-/// The view is valid as long as the OwnedSparse lives.
-///
-/// Usage:
-/// ```cpp
-/// auto [owned, view] = load_with_view<Real, true>("data.h5", "/X");
-/// algorithm(view);  // owned must stay in scope!
-/// ```
-template <typename T, bool IsCSR = true>
-inline std::pair<OwnedSparse<T, IsCSR>, CustomSparse<T, IsCSR>> 
-load_with_view(
-    const std::string& h5_path,
-    const std::string& group_path
-) {
-    auto owned = load_sparse_full<T, IsCSR>(h5_path, group_path);
-    auto view = owned.view();
-    return {std::move(owned), view};
-}
-
-/// @brief Load rows from H5 and return with CustomSparse view
-template <typename T, bool IsCSR = true>
-inline std::pair<OwnedSparse<T, IsCSR>, CustomSparse<T, IsCSR>> 
-load_rows_with_view(
-    const std::string& h5_path,
-    const std::string& group_path,
-    Array<const Index> row_mask
-) {
-    auto owned = load_sparse_rows<T, IsCSR>(h5_path, group_path, row_mask);
-    auto view = owned.view();
-    return {std::move(owned), view};
-}
-
-/// @brief Load masked data, materialize, and return with view
-template <typename T, bool IsCSR = true>
-inline std::pair<OwnedSparse<T, IsCSR>, CustomSparse<T, IsCSR>> 
-load_masked_with_view(
-    const std::string& h5_path,
-    const std::string& group_path,
-    Array<const Index> row_mask,
-    Array<const Index> col_mask
-) {
-    auto deque = load_sparse_masked<T, IsCSR>(h5_path, group_path, row_mask, col_mask);
-    auto owned = deque.materialize();
-    auto view = owned.view();
-    return {std::move(owned), view};
-}
-
-// =============================================================================
-// Metadata Utilities
-// =============================================================================
-
-/// @brief Read sparse matrix shape from H5 without loading data
+/// @brief Read sparse matrix shape without loading data.
 template <bool IsCSR = true>
-inline std::tuple<Index, Index, Index> read_sparse_shape(
+[[nodiscard]] inline std::tuple<Index, Index, Index> read_sparse_shape(
     const std::string& h5_path,
     const std::string& group_path
 ) {
@@ -1576,8 +1385,8 @@ inline std::tuple<Index, Index, Index> read_sparse_shape(
     return {rows, cols, nnz};
 }
 
-/// @brief Check if H5 group contains valid sparse matrix
-inline bool is_valid_sparse_group(
+/// @brief Check if H5 group contains valid sparse matrix.
+[[nodiscard]] inline bool is_valid_sparse_group(
     const std::string& h5_path,
     const std::string& group_path
 ) {
@@ -1585,12 +1394,9 @@ inline bool is_valid_sparse_group(
         File file(h5_path);
         Group group(file.id(), group_path);
         
-        // Check required datasets
         bool has_data = H5Lexists(group.id(), "data", H5P_DEFAULT) > 0;
         bool has_indices = H5Lexists(group.id(), "indices", H5P_DEFAULT) > 0;
         bool has_indptr = H5Lexists(group.id(), "indptr", H5P_DEFAULT) > 0;
-        
-        // Check shape attribute
         bool has_shape = H5Aexists(group.id(), "shape") > 0;
         
         return has_data && has_indices && has_indptr && has_shape;
@@ -1600,21 +1406,65 @@ inline bool is_valid_sparse_group(
 }
 
 // =============================================================================
-// Type Aliases
+// SECTION 13: With-View Convenience Functions
+// =============================================================================
+
+/// @brief Load full matrix and return with view.
+template <typename T, bool IsCSR = true>
+[[nodiscard]] inline std::pair<OwnedSparse<T, IsCSR>, CustomSparse<T, IsCSR>> 
+load_with_view(
+    const std::string& h5_path,
+    const std::string& group_path
+) {
+    auto owned = load_sparse_full<T, IsCSR>(h5_path, group_path);
+    auto view = owned.view();
+    return {std::move(owned), view};
+}
+
+/// @brief Load rows and return with view.
+template <typename T, bool IsCSR = true>
+[[nodiscard]] inline std::pair<OwnedSparse<T, IsCSR>, CustomSparse<T, IsCSR>> 
+load_rows_with_view(
+    const std::string& h5_path,
+    const std::string& group_path,
+    Array<const Index> row_mask
+) {
+    auto owned = load_sparse_rows<T, IsCSR>(h5_path, group_path, row_mask);
+    auto view = owned.view();
+    return {std::move(owned), view};
+}
+
+/// @brief Load masked data, materialize, and return with view.
+template <typename T, bool IsCSR = true>
+[[nodiscard]] inline std::pair<OwnedSparse<T, IsCSR>, CustomSparse<T, IsCSR>> 
+load_masked_with_view(
+    const std::string& h5_path,
+    const std::string& group_path,
+    Array<const Index> row_mask,
+    Array<const Index> col_mask
+) {
+    auto result = load_sparse_masked<T, IsCSR>(h5_path, group_path, row_mask, col_mask);
+    auto owned = result.materialize();
+    auto view = owned.view();
+    return {std::move(owned), view};
+}
+
+// =============================================================================
+// SECTION 14: Type Aliases
 // =============================================================================
 
 template <typename T>
-using DequeCSR = DequeSparse<T, true>;
+using CSRQueryResult = QueryResult<T, true>;
 
 template <typename T>
-using DequeCSC = DequeSparse<T, false>;
+using CSCQueryResult = QueryResult<T, false>;
 
 // =============================================================================
-// Concept Verification
+// SECTION 15: Concept Verification
 // =============================================================================
 
-static_assert(SparseLike<DequeSparse<Real, true>, true>);
-static_assert(SparseLike<DequeSparse<Real, false>, false>);
+static_assert(SparseLike<QueryResult<Real, true>, true>);
+static_assert(SparseLike<QueryResult<Real, false>, false>);
 
 } // namespace scl::io::h5
 

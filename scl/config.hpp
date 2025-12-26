@@ -7,7 +7,7 @@
 /// This header provides platform detection, threading backend selection, and
 /// precision control for the SCL (Scientific Computing Library) core.
 ///
-/// @section Architecture
+/// Architecture:
 ///
 /// The configuration system follows a state machine pattern:
 /// 1. Platform detection (OS identification)
@@ -16,25 +16,25 @@
 /// 4. Feature flag generation
 /// 5. Precision control
 ///
-/// @section Threading Backends
+/// Threading Backends:
 ///
 /// Supported backends:
-/// - `SCL_BACKEND_SERIAL`: Single-threaded execution
-/// - `SCL_BACKEND_OPENMP`: OpenMP parallel execution
-/// - `SCL_BACKEND_TBB`: Intel Threading Building Blocks
-/// - `SCL_BACKEND_BS`: BS::thread_pool (header-only, zero dependency)
+/// 1. SCL_BACKEND_SERIAL: Single-threaded execution
+/// 2. SCL_BACKEND_OPENMP: OpenMP parallel execution
+/// 3. SCL_BACKEND_TBB: Intel Threading Building Blocks
+/// 4. SCL_BACKEND_BS: BS::thread_pool (header-only, zero dependency)
 ///
-/// @section Precision Control
+/// Precision Control:
 ///
-/// Floating-point precision is controlled via `SCL_PRECISION`:
-/// - `0`: float32 (default)
-/// - `1`: float64
-/// - `2`: float16
+/// Floating-point precision is controlled via SCL_PRECISION:
+/// 1. 0: float32 (default)
+/// 2. 1: float64
+/// 3. 2: float16
 ///
-/// Index precision is controlled via `SCL_INDEX_PRECISION`:
-/// - `0`: int16 (memory-constrained, max 32K)
-/// - `1`: int32 (standard, max 2B)
-/// - `2`: int64 (default, max 9E18, NumPy-compatible)
+/// Index precision is controlled via SCL_INDEX_PRECISION:
+/// 1. 0: int16 (memory-constrained, max 32K)
+/// 2. 1: int32 (standard, max 2B)
+/// 3. 2: int64 (default, max 9E18, NumPy-compatible)
 ///
 /// =============================================================================
 
