@@ -82,6 +82,13 @@ from scl._ffi import (
 # Operations module
 from scl import ops
 
+# Organized submodules (with overload support for multiple input types)
+from scl import statistics
+from scl import math as smath  # Avoid shadowing builtin math
+from scl import preprocessing
+from scl import spatial
+from scl import feature
+
 # Convenience imports from ops module
 from scl.ops import (
     # Normalization
@@ -199,6 +206,12 @@ __all__ = [
     "SclError",
     # Ops module
     "ops",
+    # Organized submodules
+    "statistics",
+    "smath",
+    "preprocessing",
+    "spatial",
+    "feature",
     # Operations - Normalization
     "normalize",
     "normalize_csc",

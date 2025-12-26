@@ -31,8 +31,11 @@ from scl._typing import (
 if TYPE_CHECKING:
     import numpy as np
     from scipy import sparse as sp
-    from scl.sparse import SclCSR, SclCSC
-    from scl.array import RealArray, IndexArray
+    from scl.sparse import SclCSR, SclCSC, Array
+
+# Type aliases for backward compatibility
+RealArray = "Array"
+IndexArray = "Array"
 
 
 # =============================================================================
@@ -176,7 +179,7 @@ def _mwu_scl(
     continuity: bool,
 ) -> Tuple["RealArray", "RealArray", "RealArray"]:
     """Mann-Whitney U implementation for SCL matrices."""
-    from scl.array import RealArray
+    from scl.sparse import Array
 
     n_features = mat.shape[1]
     n_cells = mat.shape[0]
@@ -428,7 +431,7 @@ def _ttest_scl(
     equal_var: bool,
 ) -> Tuple["RealArray", "RealArray", "RealArray", "RealArray"]:
     """T-test implementation for SCL matrices."""
-    from scl.array import RealArray
+    from scl.sparse import Array
 
     n_features = mat.shape[1]
     n_cells = mat.shape[0]

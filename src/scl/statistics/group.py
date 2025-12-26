@@ -35,8 +35,11 @@ from scl._typing import (
 if TYPE_CHECKING:
     import numpy as np
     from scipy import sparse as sp
-    from scl.sparse import SclCSR, SclCSC
-    from scl.array import RealArray, IndexArray
+    from scl.sparse import SclCSR, SclCSC, Array
+
+# Type aliases for backward compatibility
+RealArray = "Array"
+IndexArray = "Array"
 
 
 # =============================================================================
@@ -92,7 +95,7 @@ def count_group_sizes(
         ValueError: If any group label >= n_groups.
 
     Examples:
-        >>> from scl.array import IndexArray
+        >>> from scl.sparse import Array
         >>> groups = IndexArray.from_sequence([0, 1, 0, 2, 1, 1])
         >>> counts = count_group_sizes(groups)
         >>> counts.to_list()
@@ -107,7 +110,7 @@ def count_group_sizes(
         group_stats: Compute multiple statistics per group.
     """
     from scl._typing import is_numpy_array
-    from scl.array import IndexArray
+    from scl.sparse import Array
 
     # Handle numpy input
     if is_numpy_array(groups):
@@ -245,7 +248,7 @@ def _group_mean_scl(
     n_groups: Optional[int],
 ) -> "SclCSC":
     """Group mean implementation for SCL matrices."""
-    from scl.array import RealArray, IndexArray
+    from scl.sparse import Array
     from scl.sparse import SclCSC
 
     n_cells = mat.shape[0]
@@ -436,7 +439,7 @@ def _group_var_scl(
     ddof: int,
 ) -> "SclCSC":
     """Group variance implementation for SCL matrices."""
-    from scl.array import RealArray
+    from scl.sparse import Array
     from scl.sparse import SclCSC
 
     n_cells = mat.shape[0]

@@ -42,8 +42,7 @@ from typing import (
 if TYPE_CHECKING:
     import numpy as np
     from scipy import sparse as sp
-    from scl.sparse import SclCSR, SclCSC
-    from scl.array import RealArray, IndexArray, ByteArray
+    from scl.sparse import SclCSR, SclCSC, Array
 
 
 # =============================================================================
@@ -175,7 +174,7 @@ CSCInput = Union[
 
 # Vector inputs
 VectorInput = Union[
-    "RealArray",
+    "Array",
     "np.ndarray",
     Sequence[float],
     List[float],
@@ -183,7 +182,7 @@ VectorInput = Union[
 
 # Index vector inputs
 IndexInput = Union[
-    "IndexArray",
+    "Array",
     "np.ndarray",
     Sequence[int],
     List[int],
@@ -191,15 +190,15 @@ IndexInput = Union[
 
 # Boolean mask inputs
 MaskInput = Union[
-    "ByteArray",
+    "Array",
     "np.ndarray",
     Sequence[bool],
     List[bool],
 ]
 
 # Output array types
-ArrayOutput = Union["RealArray", "np.ndarray"]
-IndexOutput = Union["IndexArray", "np.ndarray"]
+ArrayOutput = Union["Array", "np.ndarray"]
+IndexOutput = Union["Array", "np.ndarray"]
 
 
 # =============================================================================
@@ -468,8 +467,8 @@ def ensure_vector(
     vec: VectorInput,
     size: Optional[int] = None,
     copy: bool = False,
-) -> "RealArray":
-    """Convert any vector input to RealArray.
+) -> "Array":
+    """Convert any vector input to Array (float64).
 
     Args:
         vec: Input vector in any supported format.
@@ -477,22 +476,22 @@ def ensure_vector(
         copy: If True, always create a copy.
 
     Returns:
-        RealArray containing the vector data.
+        Array containing the vector data (dtype=float64).
 
     Raises:
         ValueError: If size doesn't match expected.
     """
-    from scl.array import RealArray
+    from scl.sparse import Array
 
-    if isinstance(vec, RealArray):
+    if isinstance(vec, Array):
         if copy:
             result = vec.copy()
         else:
             result = vec
     elif is_numpy_array(vec):
-        result = RealArray.from_sequence(vec.ravel().tolist())
+        result = Array.from_list(vec.ravel().tolist(), dtype='float64')
     else:
-        result = RealArray.from_sequence(list(vec))
+        result = Array.from_list([float(x) for x in vec], dtype='float64')
 
     if size is not None and result.size != size:
         raise ValueError(f"Vector size {result.size} != expected {size}")
@@ -504,8 +503,8 @@ def ensure_index_vector(
     vec: IndexInput,
     size: Optional[int] = None,
     copy: bool = False,
-) -> "IndexArray":
-    """Convert any index input to IndexArray.
+) -> "Array":
+    """Convert any index input to Array (int64).
 
     Args:
         vec: Input index vector.
@@ -513,19 +512,19 @@ def ensure_index_vector(
         copy: If True, always create a copy.
 
     Returns:
-        IndexArray containing the indices.
+        Array containing the indices (dtype=int64).
     """
-    from scl.array import IndexArray
+    from scl.sparse import Array
 
-    if isinstance(vec, IndexArray):
+    if isinstance(vec, Array):
         if copy:
             result = vec.copy()
         else:
             result = vec
     elif is_numpy_array(vec):
-        result = IndexArray.from_sequence(vec.ravel().astype(int).tolist())
+        result = Array.from_list(vec.ravel().astype(int).tolist(), dtype='int64')
     else:
-        result = IndexArray.from_sequence([int(x) for x in vec])
+        result = Array.from_list([int(x) for x in vec], dtype='int64')
 
     if size is not None and result.size != size:
         raise ValueError(f"Index vector size {result.size} != expected {size}")
@@ -536,24 +535,24 @@ def ensure_index_vector(
 def ensure_mask(
     mask: MaskInput,
     size: Optional[int] = None,
-) -> "ByteArray":
-    """Convert any mask input to ByteArray.
+) -> "Array":
+    """Convert any mask input to Array (uint8).
 
     Args:
         mask: Input boolean mask.
         size: Expected size (for validation).
 
     Returns:
-        ByteArray containing the mask (0 or 1 values).
+        Array containing the mask (0 or 1 values, dtype=uint8).
     """
-    from scl.array import ByteArray
+    from scl.sparse import Array
 
-    if isinstance(mask, ByteArray):
+    if isinstance(mask, Array):
         result = mask
     elif is_numpy_array(mask):
-        result = ByteArray.from_mask(mask.ravel().tolist())
+        result = Array.from_list([1 if x else 0 for x in mask.ravel().tolist()], dtype='uint8')
     else:
-        result = ByteArray.from_mask(list(mask))
+        result = Array.from_list([1 if x else 0 for x in mask], dtype='uint8')
 
     if size is not None and result.size != size:
         raise ValueError(f"Mask size {result.size} != expected {size}")
@@ -579,7 +578,6 @@ def _dense_to_csr(
         SclCSR sparse matrix.
     """
     from scl.sparse import SclCSR
-    from scl.array import RealArray, IndexArray
 
     # Convert to list of lists if needed
     if is_numpy_array(dense):
@@ -611,17 +609,18 @@ def _to_numpy_if_needed(arr: Any) -> Any:
     """Convert SCL array to numpy if numpy is available.
 
     Args:
-        arr: Input array (RealArray, IndexArray, or numpy).
+        arr: Input array (Array or numpy).
 
     Returns:
         numpy array if numpy available, else original.
     """
     try:
         import numpy as np
-        from scl.array import RealArray, IndexArray, ByteArray, to_numpy
+        from scl.sparse import Array
 
-        if isinstance(arr, (RealArray, IndexArray, ByteArray)):
-            return to_numpy(arr)
+        if isinstance(arr, Array):
+            # Convert Array to numpy
+            return np.array([arr[i] for i in range(arr.size)])
         return arr
     except ImportError:
         return arr
@@ -691,6 +690,27 @@ def dispatch_sparse(
 
 
 # =============================================================================
+# Type Aliases for Backward Compatibility
+# =============================================================================
+
+# These are aliases to Array with specific dtype conventions.
+# Used for type hints to indicate expected data type:
+#   - RealArray: Array with dtype='float64'
+#   - IndexArray: Array with dtype='int64'
+#   - ByteArray: Array with dtype='uint8'
+
+def _lazy_array_type():
+    """Lazy import to avoid circular dependency."""
+    from scl.sparse import Array
+    return Array
+
+# Create type aliases that resolve to Array
+RealArray = "Array"  # For type hints only
+IndexArray = "Array"  # For type hints only
+ByteArray = "Array"  # For type hints only
+
+
+# =============================================================================
 # Exports
 # =============================================================================
 
@@ -714,6 +734,10 @@ __all__ = [
     "MaskInput",
     "ArrayOutput",
     "IndexOutput",
+    # Backward compatible array type aliases
+    "RealArray",
+    "IndexArray",
+    "ByteArray",
     # Detection functions
     "is_scl_csr",
     "is_scl_csc",

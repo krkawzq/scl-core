@@ -41,8 +41,11 @@ from scl._typing import (
 if TYPE_CHECKING:
     import numpy as np
     from scipy import sparse as sp
-    from scl.sparse import SclCSR, SclCSC
-    from scl.array import RealArray, IndexArray
+    from scl.sparse import SclCSR, SclCSC, Array
+
+# Type aliases for backward compatibility
+RealArray = "Array"
+IndexArray = "Array"
 
 
 # =============================================================================
@@ -352,9 +355,9 @@ def mean(
         return scl_mat.mean(axis=axis)
 
 
-def _mean_skip_zeros(mat, axis: Optional[int]) -> Union[float, "RealArray"]:
+def _mean_skip_zeros(mat, axis: Optional[int]) -> Union[float, "Array"]:
     """Compute mean excluding implicit zeros."""
-    from scl.array import RealArray
+    from scl.sparse import Array
 
     mat.materialize()
 
@@ -365,7 +368,7 @@ def _mean_skip_zeros(mat, axis: Optional[int]) -> Union[float, "RealArray"]:
         return total / mat.nnz if mat.nnz > 0 else 0.0
 
     elif axis == 1:  # Row means
-        result = RealArray(mat.shape[0])
+        result = Array.zeros(mat.shape[0], dtype='float64')
         for i in range(mat.shape[0]):
             start = mat._indptr[i]
             end = mat._indptr[i + 1]
@@ -387,7 +390,7 @@ def _mean_skip_zeros(mat, axis: Optional[int]) -> Union[float, "RealArray"]:
         else:
             csc = mat.to_csc()
 
-        result = RealArray(mat.shape[1])
+        result = Array.zeros(mat.shape[1], dtype='float64')
         for j in range(mat.shape[1]):
             start = csc._indptr[j]
             end = csc._indptr[j + 1]
@@ -547,9 +550,9 @@ def var(
         return _var_full(scl_mat, axis, ddof)
 
 
-def _var_full(mat, axis: Optional[int], ddof: int) -> Union[float, "RealArray"]:
+def _var_full(mat, axis: Optional[int], ddof: int) -> Union[float, "Array"]:
     """Compute variance including implicit zeros."""
-    from scl.array import RealArray
+    from scl.sparse import Array
     from scl._typing import is_scl_csc
 
     mat.materialize()
@@ -572,7 +575,7 @@ def _var_full(mat, axis: Optional[int], ddof: int) -> Union[float, "RealArray"]:
 
     elif axis == 1:  # Row variance
         means = mat.mean(axis=1)
-        result = RealArray(mat.shape[0])
+        result = Array.zeros(mat.shape[0], dtype='float64')
 
         for i in range(mat.shape[0]):
             start = mat._indptr[i]
@@ -598,7 +601,7 @@ def _var_full(mat, axis: Optional[int], ddof: int) -> Union[float, "RealArray"]:
             csc = mat.to_csc()
 
         means = csc.mean(axis=0)
-        result = RealArray(mat.shape[1])
+        result = Array.zeros(mat.shape[1], dtype='float64')
 
         for j in range(mat.shape[1]):
             start = csc._indptr[j]
@@ -618,9 +621,9 @@ def _var_full(mat, axis: Optional[int], ddof: int) -> Union[float, "RealArray"]:
         return result
 
 
-def _var_skip_zeros(mat, axis: Optional[int], ddof: int) -> Union[float, "RealArray"]:
+def _var_skip_zeros(mat, axis: Optional[int], ddof: int) -> Union[float, "Array"]:
     """Compute variance of non-zero elements only."""
-    from scl.array import RealArray
+    from scl.sparse import Array
     from scl._typing import is_scl_csc
 
     mat.materialize()
@@ -643,7 +646,7 @@ def _var_skip_zeros(mat, axis: Optional[int], ddof: int) -> Union[float, "RealAr
         return sq_sum / (mat.nnz - ddof)
 
     elif axis == 1:  # Row variance
-        result = RealArray(mat.shape[0])
+        result = Array.zeros(mat.shape[0], dtype='float64')
 
         for i in range(mat.shape[0]):
             start = mat._indptr[i]
@@ -675,7 +678,7 @@ def _var_skip_zeros(mat, axis: Optional[int], ddof: int) -> Union[float, "RealAr
         else:
             csc = mat.to_csc()
 
-        result = RealArray(mat.shape[1])
+        result = Array.zeros(mat.shape[1], dtype='float64')
 
         for j in range(mat.shape[1]):
             start = csc._indptr[j]
@@ -796,8 +799,8 @@ def std(
     if isinstance(variance, float):
         return math.sqrt(variance)
     else:
-        from scl.array import RealArray
-        result = RealArray(variance.size)
+        from scl.sparse import Array
+        result = Array.zeros(variance.size, dtype='float64')
         for i in range(variance.size):
             result[i] = math.sqrt(variance[i])
         return result
@@ -1020,7 +1023,7 @@ def nnz_count(
         return np.count_nonzero(mat, axis=axis)
 
     # Native SCL
-    from scl.array import IndexArray
+    from scl.sparse import Array
     from scl._typing import is_scl_csc
 
     if fmt in ("scl_csr", "scl_csc"):
@@ -1034,7 +1037,7 @@ def nnz_count(
         return scl_mat.nnz
 
     elif axis == 1:  # Per row
-        result = IndexArray(scl_mat.shape[0])
+        result = Array.zeros(scl_mat.shape[0], dtype='int64')
         for i in range(scl_mat.shape[0]):
             result[i] = scl_mat._indptr[i + 1] - scl_mat._indptr[i]
         return result
@@ -1045,7 +1048,7 @@ def nnz_count(
         else:
             csc = scl_mat.to_csc()
 
-        result = IndexArray(scl_mat.shape[1])
+        result = Array.zeros(scl_mat.shape[1], dtype='int64')
         for j in range(scl_mat.shape[1]):
             result[j] = csc._indptr[j + 1] - csc._indptr[j]
         return result
