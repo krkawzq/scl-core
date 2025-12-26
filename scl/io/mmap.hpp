@@ -1,7 +1,7 @@
 #pragma once
 
 #include "scl/core/type.hpp"
-#include "scl/core/matrix.hpp"
+#include "scl/core/type.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 

@@ -30,21 +30,21 @@ namespace scl::io {
 ///   {dir_path}/indptr.bin  - Row pointers (int64, size: rows+1)
 ///
 /// This is a convenience function that encodes a specific file organization.
-/// For custom layouts, construct MountMatrix directly from MappedArrays.
+/// For custom layouts, construct MappedCustomSparse directly from MappedArrays.
 ///
 /// @param dir_path Directory containing binary files
 /// @param rows Number of rows
 /// @param cols Number of columns
 /// @param nnz Number of non-zero elements
-/// @return MountMatrix constructed from standard layout
+/// @return MappedCustomSparse constructed from standard layout
 template <typename T>
-inline MountMatrix<T> mount_standard_layout(
+inline MappedCustomSparse<T> mount_standard_layout(
     const std::string& dir_path,
     Index rows,
     Index cols,
     Index nnz
 ) {
-    return MountMatrix<T>(
+    return MappedCustomSparse<T>(
         MappedArray<T>(dir_path + "/data.bin"),
         MappedArray<Index>(dir_path + "/indices.bin"),
         MappedArray<Index>(dir_path + "/indptr.bin"),
@@ -139,9 +139,9 @@ inline void save_simple_metadata(
 /// 2. Metadata file naming (matrix.meta)
 ///
 /// @param dir_path Directory containing matrix files
-/// @return MountMatrix with auto-loaded metadata
+/// @return MappedCustomSparse with auto-loaded metadata
 template <typename T>
-inline MountMatrix<T> mount_with_metadata(const std::string& dir_path) {
+inline MappedCustomSparse<T> mount_with_metadata(const std::string& dir_path) {
     auto [rows, cols, nnz] = load_simple_metadata(dir_path + "/matrix.meta");
     return mount_standard_layout<T>(dir_path, rows, cols, nnz);
 }
@@ -154,7 +154,7 @@ inline MountMatrix<T> mount_with_metadata(const std::string& dir_path) {
 ///
 /// Demonstrates flexibility - users can map ANY file layout.
 template <typename T>
-inline MountMatrix<T> mount_custom_layout(
+inline MappedCustomSparse<T> mount_custom_layout(
     const std::string& values_file,
     const std::string& cols_file,
     const std::string& rows_file,
@@ -162,7 +162,7 @@ inline MountMatrix<T> mount_custom_layout(
     Index cols,
     Index nnz
 ) {
-    return MountMatrix<T>(
+    return MappedCustomSparse<T>(
         MappedArray<T>(values_file),
         MappedArray<Index>(cols_file),
         MappedArray<Index>(rows_file),
@@ -172,7 +172,7 @@ inline MountMatrix<T> mount_custom_layout(
 
 /// @brief Example: Load matrix where data is in a subdirectory.
 template <typename T>
-inline MountMatrix<T> mount_nested_layout(
+inline MappedCustomSparse<T> mount_nested_layout(
     const std::string& base_dir,
     const std::string& matrix_name,
     Index rows,
@@ -196,13 +196,13 @@ inline MountMatrix<T> mount_nested_layout(
 ///
 /// @param base_dir Base directory
 /// @param matrix_names Names of subdirectories
-/// @return Vector of MountMatrix objects
+/// @return Vector of MappedCustomSparse objects
 template <typename T>
-inline std::vector<MountMatrix<T>> mount_batch(
+inline std::vector<MappedCustomSparse<T>> mount_batch(
     const std::string& base_dir,
     const std::vector<std::string>& matrix_names
 ) {
-    std::vector<MountMatrix<T>> matrices;
+    std::vector<MappedCustomSparse<T>> matrices;
     matrices.reserve(matrix_names.size());
     
     for (const auto& name : matrix_names) {

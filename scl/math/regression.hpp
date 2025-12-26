@@ -216,14 +216,14 @@ namespace detail {
 ///
 /// Performance: ~0.5 cycles/element on modern x86 (AVX2)
 SCL_FORCE_INLINE void accumulate_matrices_deg2_simd(
-    Span<const Real> x,
-    Span<const Real> y,
-    Span<const Real> w,
+    Array<const Real> x,
+    Array<const Real> y,
+    Array<const Real> w,
     Real* sums
 ) {
     namespace s = scl::simd;
     const s::Tag d;
-    const size_t N = x.size;
+    const size_t N = x.len;
     const size_t lanes = s::lanes();
 
     // Initialize SIMD accumulators (kept in vector registers)
@@ -315,21 +315,21 @@ SCL_FORCE_INLINE void accumulate_matrices_deg2_simd(
 /// @param x Input X coordinates
 /// @param y Input Y coordinates
 /// @param weights Optional weights (empty = uniform)
-/// @param fitted Output fitted values [must be pre-allocated, size = x.size]
+/// @param fitted Output fitted values [must be pre-allocated, size = x.len]
 /// @param coeffs Output coefficients [must be pre-allocated, size ≥ DEGREE+1]
 ///
 /// Memory: Zero heap allocation. All buffers provided by caller.
 ///
 template <int DEGREE = 2>
 void poly_fit(
-    Span<const Real> x,
-    Span<const Real> y,
-    Span<const Real> weights,
-    MutableSpan<Real> fitted,
-    MutableSpan<Real> coeffs
+    Array<const Real> x,
+    Array<const Real> y,
+    Array<const Real> weights,
+    Array<Real> fitted,
+    Array<Real> coeffs
 ) {
-    SCL_CHECK_DIM(x.size == y.size, "PolyFit: x/y size mismatch");
-    SCL_CHECK_DIM(coeffs.size >= static_cast<Size>(DEGREE + 1), 
+    SCL_CHECK_DIM(x.len == y.len, "PolyFit: x/y size mismatch");
+    SCL_CHECK_DIM(coeffs.len >= static_cast<Size>(DEGREE + 1), 
                   "PolyFit: coeffs buffer too small");
 
     // === Fast Path: Quadratic Regression (Degree 2) ===
@@ -356,7 +356,7 @@ void poly_fit(
 
         // Step 5: Evaluate fitted values in parallel
         // f(x) = c₀ + c₁x + c₂x²
-        scl::threading::parallel_for(0, x.size, [&](size_t i) {
+        scl::threading::parallel_for(0, x.len, [&](size_t i) {
             fitted[i] = detail::poly_eval<3>(X, x[i]);
         });
     }
@@ -389,15 +389,15 @@ namespace detail {
     /// @param max_dist Neighborhood radius r
     /// @param sums Output accumulator [8 elements]
     SCL_FORCE_INLINE void accumulate_loess_window_simd(
-        Span<const Real> x,
-        Span<const Real> y,
+        Array<const Real> x,
+        Array<const Real> y,
         Real target_x,
         Real max_dist,
         Real* sums
     ) {
         namespace s = scl::simd;
         const s::Tag d;
-        const size_t N = x.size;
+        const size_t N = x.len;
         const size_t lanes = s::lanes();
 
         // SIMD accumulators
@@ -519,15 +519,15 @@ namespace detail {
 /// Memory: Zero heap allocation. Parallelized via scl::threading.
 template <int DEGREE = 2>
 void loess(
-    Span<const Real> x,
-    Span<const Real> y,
-    MutableSpan<Real> fitted,
+    Array<const Real> x,
+    Array<const Real> y,
+    Array<Real> fitted,
     double span = 0.3
 ) {
-    SCL_CHECK_DIM(x.size == y.size, "LOESS: x/y size mismatch");
-    SCL_CHECK_DIM(fitted.size == x.size, "LOESS: fitted buffer size mismatch");
+    SCL_CHECK_DIM(x.len == y.len, "LOESS: x/y size mismatch");
+    SCL_CHECK_DIM(fitted.len == x.len, "LOESS: fitted buffer size mismatch");
 
-    const Size n = x.size;
+    const Size n = x.len;
     const Size k = static_cast<Size>(std::ceil(span * n)); 
     
     // Parallelize over target points (read-only access to x, y)
@@ -586,8 +586,8 @@ void loess(
         max_dist *= 1.0000001;
 
         // === Step 3: Accumulate Weighted Normal Equations ===
-        Span<const Real> x_win(x.ptr + left, (right - left + 1));
-        Span<const Real> y_win(y.ptr + left, (right - left + 1));
+        Array<const Real> x_win(x.ptr + left, (right - left + 1));
+        Array<const Real> y_win(y.ptr + left, (right - left + 1));
 
         Real sums[8] = {0}; // Stack scratch buffer
         detail::accumulate_loess_window_simd(x_win, y_win, target_x, max_dist, sums);

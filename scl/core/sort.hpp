@@ -48,14 +48,14 @@ namespace scl::sort {
 /// @tparam T Data type (must be supported by Highway, e.g., Real, Index, int, etc.)
 /// @param data Mutable view of the array to sort.
 template <typename T>
-SCL_FORCE_INLINE void sort(MutableSpan<T> data) {
-    hwy::HWY_NAMESPACE::VQSortStatic(data.ptr, data.size, hwy::SortAscending());
+SCL_FORCE_INLINE void sort(Array<T> data) {
+    hwy::HWY_NAMESPACE::VQSortStatic(data.ptr, data.len, hwy::SortAscending());
 }
 
 /// @brief Sort a generic span in descending order (SIMD Optimized).
 template <typename T>
-SCL_FORCE_INLINE void sort_descending(MutableSpan<T> data) {
-    hwy::HWY_NAMESPACE::VQSortStatic(data.ptr, data.size, hwy::SortDescending());
+SCL_FORCE_INLINE void sort_descending(Array<T> data) {
+    hwy::HWY_NAMESPACE::VQSortStatic(data.ptr, data.len, hwy::SortDescending());
 }
 
 // =============================================================================
@@ -311,16 +311,16 @@ namespace detail {
 /// @param keys Mutable span of keys
 /// @param values Mutable span of values (same size as keys)
 template <typename Key, typename Value>
-SCL_FORCE_INLINE void sort_pairs(MutableSpan<Key> keys, MutableSpan<Value> values) {
+SCL_FORCE_INLINE void sort_pairs(Array<Key> keys, Array<Value> values) {
 #ifndef NDEBUG
-    SCL_ASSERT(keys.size == values.size, "Sort keys and values must have same size");
+    SCL_ASSERT(keys.len == values.len, "Sort keys and values must have same size");
 #endif
 
-    if (SCL_UNLIKELY(keys.size <= 1)) return;
+    if (SCL_UNLIKELY(keys.len <= 1)) return;
 
     struct alignas(SCL_ALIGNMENT) Pair { Key k; Value v; };
     
-    const size_t n = keys.size;
+    const size_t n = keys.len;
     const size_t buffer_bytes = n * sizeof(Pair);
     
     // Strategy selection based on size
@@ -388,16 +388,16 @@ SCL_FORCE_INLINE void sort_pairs(MutableSpan<Key> keys, MutableSpan<Value> value
 /// Used by argsort_descending (e.g. finding Top-K highest expression genes).
 /// Same optimizations as sort_pairs().
 template <typename Key, typename Value>
-SCL_FORCE_INLINE void sort_pairs_descending(MutableSpan<Key> keys, MutableSpan<Value> values) {
+SCL_FORCE_INLINE void sort_pairs_descending(Array<Key> keys, Array<Value> values) {
 #ifndef NDEBUG
-    SCL_ASSERT(keys.size == values.size, "Sort keys and values must have same size");
+    SCL_ASSERT(keys.len == values.len, "Sort keys and values must have same size");
 #endif
 
-    if (SCL_UNLIKELY(keys.size <= 1)) return;
+    if (SCL_UNLIKELY(keys.len <= 1)) return;
 
     struct alignas(SCL_ALIGNMENT) Pair { Key k; Value v; };
     
-    const size_t n = keys.size;
+    const size_t n = keys.len;
     const size_t buffer_bytes = n * sizeof(Pair);
     
     if (buffer_bytes <= detail::STACK_BUFFER_THRESHOLD) {
@@ -464,12 +464,12 @@ SCL_FORCE_INLINE void sort_pairs_descending(MutableSpan<Key> keys, MutableSpan<V
 // =============================================================================
 
 /// @brief Sort Real numbers (float32/64) ascending.
-SCL_FORCE_INLINE void sort_real(MutableRealSpan data) {
+SCL_FORCE_INLINE void sort_real(Array<Real> data) {
     sort<Real>(data);
 }
 
 /// @brief Sort Indices (int64) ascending.
-SCL_FORCE_INLINE void sort_index(MutableIndexSpan data) {
+SCL_FORCE_INLINE void sort_index(Array<Index> data) {
     sort<Index>(data);
 }
 

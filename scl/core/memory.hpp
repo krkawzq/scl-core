@@ -178,8 +178,8 @@ public:
     const T& operator[](size_t i) const noexcept { return ptr_[i]; }
     
     /// @brief Get as Span
-    MutableSpan<T> span() noexcept { return MutableSpan<T>(ptr_, count_); }
-    Span<const T> span() const noexcept { return Span<const T>(ptr_, count_); }
+    Array<T> span() noexcept { return Array<T>(ptr_, count_); }
+    Array<const T> span() const noexcept { return Array<const T>(ptr_, count_); }
     
     /// @brief Check if buffer is valid
     explicit operator bool() const noexcept { return ptr_ != nullptr; }
@@ -195,7 +195,7 @@ private:
 
 /// @brief Fill memory with a value using aggressive SIMD unrolling.
 template <typename T>
-SCL_FORCE_INLINE void fill(MutableSpan<T> span, T value) {
+SCL_FORCE_INLINE void fill(Array<T> span, T value) {
     namespace s = scl::simd;
     const s::Tag d;
     const size_t N = span.size;
@@ -227,7 +227,7 @@ SCL_FORCE_INLINE void fill(MutableSpan<T> span, T value) {
 
 /// @brief Zero out memory.
 template <typename T>
-SCL_FORCE_INLINE void zero(MutableSpan<T> span) {
+SCL_FORCE_INLINE void zero(Array<T> span) {
     if constexpr (std::is_trivial_v<T>) {
         std::memset(span.ptr, 0, span.byte_size());
     } else {
@@ -248,7 +248,7 @@ SCL_FORCE_INLINE void zero(MutableSpan<T> span) {
 /// Use this when you are absolutely certain inputs are distinct buffers.
 /// Compilers can optimize this better than `memmove`.
 template <typename T>
-SCL_FORCE_INLINE void copy_fast(Span<const T> src, MutableSpan<T> dst) {
+SCL_FORCE_INLINE void copy_fast(Array<const T> src, Array<T> dst) {
     // Debug-only checks. In Release, this executes 0 instructions overhead.
     SCL_ASSERT(src.size == dst.size, "copy_fast: Size mismatch");
     SCL_ASSERT(src.end() <= dst.begin() || dst.end() <= src.begin(), 
@@ -270,7 +270,7 @@ SCL_FORCE_INLINE void copy_fast(Span<const T> src, MutableSpan<T> dst) {
 /// Safe to use even if `src` and `dst` overlap (e.g., sliding a window).
 /// Slightly slower than `copy_fast`.
 template <typename T>
-SCL_FORCE_INLINE void copy(Span<const T> src, MutableSpan<T> dst) {
+SCL_FORCE_INLINE void copy(Array<const T> src, Array<T> dst) {
     SCL_ASSERT(src.size == dst.size, "copy: Size mismatch");
 
     if constexpr (std::is_trivially_copyable_v<T>) {
@@ -296,7 +296,7 @@ SCL_FORCE_INLINE void copy(Span<const T> src, MutableSpan<T> dst) {
 /// Best for: Large buffers (> 1MB) that will NOT be read immediately.
 /// Avoid for: Small buffers (cache bypass overhead is too high).
 template <typename T>
-SCL_FORCE_INLINE void stream_copy(Span<const T> src, MutableSpan<T> dst) {
+SCL_FORCE_INLINE void stream_copy(Array<const T> src, Array<T> dst) {
     SCL_ASSERT(src.size == dst.size, "stream_copy: Size mismatch");
     // Overlap check skipped for speed, implies UB if violated.
 

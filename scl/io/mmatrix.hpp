@@ -1,42 +1,27 @@
 #pragma once
 
 #include "scl/io/mmap.hpp"
-#include "scl/core/matrix.hpp"
+#include "scl/core/type.hpp"
 #include "scl/core/sparse.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <vector>
 #include <tuple>
-#include <future>
 #include <cstring>
 
 // =============================================================================
 /// @file mmatrix.hpp
-/// @brief Memory-Mapped CSR Matrix Data Structures
+/// @brief Memory-Mapped Sparse Matrix
 ///
-/// Provides zero-copy CSR matrix views over memory-mapped files, enabling
-/// out-of-core computation on TB-scale sparse matrices.
+/// Provides zero-copy sparse matrix views over memory-mapped files.
+/// Enables out-of-core computation on TB-scale sparse matrices.
 ///
-/// Design Philosophy:
-///
-/// 1. Composable: Built on top of generic MappedArray from mmap.hpp
-/// 2. Pure Data Structures: No file organization assumptions
-/// 3. SparseLike Interface: Seamless integration with SCL kernels
-/// 4. Flexible Initialization: Support any file layout
-///
-/// Core Components:
-///
-/// - MappedCustomSparse: CSR matrix view over three MappedArrays
-/// - MappedVirtualSparse: Zero-copy row slicing with indirection
-/// - OwnedCSR: Heap-allocated CSR matrix (materialization target)
-///
-/// Performance:
-///
-/// - SIMD-accelerated materialization
-/// - Parallel row copying
-/// - Streaming memory copy (bypasses cache)
-/// - Huge page support
+/// Design:
+/// - Built on MappedArray from mmap.hpp
+/// - Satisfies SparseLike concept
+/// - Zero-copy operations
+/// - Parallel materialization
 // =============================================================================
 
 namespace scl::io {
@@ -45,42 +30,19 @@ namespace scl::io {
 // Forward Declarations
 // =============================================================================
 
-template <typename T> class MappedCustomSparse;
-template <typename T> class MappedVirtualSparse;
-template <typename T> struct OwnedCSR;
+template <typename T, bool IsCSR> class MappedCustomSparse;
+template <typename T, bool IsCSR> class MappedVirtualSparse;
+template <typename T, bool IsCSR> struct OwnedSparse;
 
 namespace detail {
 
-// =============================================================================
-// Memory Copy Strategy
-// =============================================================================
-
-enum class CopyPolicy {
-    Safe,       ///< memmove - handles overlapping regions
-    Fast,       ///< memcpy/SIMD - assumes no overlap
-    Streaming   ///< Non-temporal stores - bypasses cache
-};
-
-/// @brief Generic memory copy with policy selection.
-template <typename T, CopyPolicy Policy = CopyPolicy::Fast>
-inline void memory_copy(const T* src, T* dst, Size count) {
-    if constexpr (Policy == CopyPolicy::Safe) {
-        std::memmove(dst, src, count * sizeof(T));
-    } else if constexpr (Policy == CopyPolicy::Fast) {
-        std::memcpy(dst, src, count * sizeof(T));
-    } else if constexpr (Policy == CopyPolicy::Streaming) {
-        // For streaming, use memcpy (compiler + OS optimize for non-temporal access)
-        std::memcpy(dst, src, count * sizeof(T));
-    }
-}
-
-/// @brief Parallel memory copy.
-template <typename T, CopyPolicy Policy = CopyPolicy::Fast>
-inline void parallel_memory_copy(const T* src, T* dst, Size count) {
+/// @brief Parallel memory copy
+template <typename T>
+inline void parallel_copy(const T* src, T* dst, Size count) {
     constexpr Size MIN_PARALLEL = 1024 * 1024;
     
     if (count < MIN_PARALLEL) {
-        memory_copy<T, Policy>(src, dst, count);
+        std::memcpy(dst, src, count * sizeof(T));
         return;
     }
     
@@ -91,7 +53,7 @@ inline void parallel_memory_copy(const T* src, T* dst, Size count) {
         Size start = tid * chunk;
         Size end = std::min(start + chunk, count);
         if (start < end) {
-            memory_copy<T, Policy>(src + start, dst + start, end - start);
+            std::memcpy(dst + start, src + start, (end - start) * sizeof(T));
         }
     });
 }
@@ -99,27 +61,24 @@ inline void parallel_memory_copy(const T* src, T* dst, Size count) {
 } // namespace detail
 
 // =============================================================================
-// MappedCustomSparse: Pure CSR Matrix View
+// MappedCustomSparse: Memory-Mapped Sparse Matrix
 // =============================================================================
 
-/// @brief CSR matrix view over three independent MappedArrays.
+/// @brief Sparse matrix view over memory-mapped arrays
 ///
-/// Makes ZERO assumptions about file organization - user provides three arrays.
-/// This is a pure data structure that happens to work with memory-mapped data.
-///
-/// Satisfies SparseLike<true> concept for seamless kernel integration.
-/// Implements concept-based interface (not inheritance-based).
-///
-/// @tparam T Value type (typically float or double)
-template <typename T>
+/// Satisfies SparseLike<IsCSR> concept.
+/// Zero I/O assumptions - user provides mapped arrays.
+template <typename T, bool IsCSR>
 class MappedCustomSparse {
 public:
     using ValueType = T;
-    using Tag = TagCSR;
+    using Tag = TagSparse<IsCSR>;
+    
+    static constexpr bool is_csr = IsCSR;
+    static constexpr bool is_csc = !IsCSR;
 
     const Index rows;
     const Index cols;
-    const Index nnz;
 
 private:
     MappedArray<T> _data;
@@ -127,36 +86,24 @@ private:
     MappedArray<Index> _indptr;
 
 public:
-    /// @brief Construct from three pre-mapped arrays (pure, zero I/O assumptions).
-    ///
-    /// This is the fundamental constructor - no file paths, no hardcoded structure.
-    /// Users map files however they want and pass arrays here.
-    ///
-    /// @param data Values array
-    /// @param indices Column indices array
-    /// @param indptr Row pointers array (size: rows+1)
-    /// @param num_rows Number of rows
-    /// @param num_cols Number of columns
-    /// @param num_nnz Number of non-zero elements
+    /// @brief Construct from three memory-mapped arrays
     MappedCustomSparse(
         MappedArray<T>&& data,
         MappedArray<Index>&& indices,
         MappedArray<Index>&& indptr,
         Index num_rows,
-        Index num_cols,
-        Index num_nnz
+        Index num_cols
     )
-        : rows(num_rows), cols(num_cols), nnz(num_nnz),
+        : rows(num_rows), cols(num_cols),
           _data(std::move(data)),
           _indices(std::move(indices)),
           _indptr(std::move(indptr))
     {
-        SCL_CHECK_ARG(rows >= 0 && cols >= 0 && nnz >= 0, "Invalid dimensions");
+        SCL_CHECK_ARG(rows >= 0 && cols >= 0, "Invalid dimensions");
         
-        if (_indptr.size() != static_cast<Size>(rows + 1)) {
-            throw ValueError("indptr size mismatch: expected " + 
-                           std::to_string(rows + 1) + ", got " + 
-                           std::to_string(_indptr.size()));
+        Index expected_indptr_size = IsCSR ? (rows + 1) : (cols + 1);
+        if (_indptr.size() != static_cast<Size>(expected_indptr_size)) {
+            throw std::runtime_error("indptr size mismatch");
         }
     }
 
@@ -165,59 +112,73 @@ public:
     MappedCustomSparse(const MappedCustomSparse&) = delete;
     MappedCustomSparse& operator=(const MappedCustomSparse&) = delete;
 
-    // -------------------------------------------------------------------------
-    // SparseLike Interface (CSR: IsCSR = true)
-    // -------------------------------------------------------------------------
+    // SparseLike Interface
+    SCL_NODISCARD SCL_FORCE_INLINE Index nnz() const {
+        Index primary_dim = IsCSR ? rows : cols;
+        return _indptr[primary_dim];
+    }
 
-    SCL_NODISCARD SCL_FORCE_INLINE Index row_length(Index i) const {
-#if !defined(NDEBUG)
-        SCL_ASSERT(i >= 0 && i < rows, "Row out of bounds");
-#endif
+    // CSR interface
+    SCL_NODISCARD SCL_FORCE_INLINE Array<T> row_values(Index i) const requires (IsCSR) {
+        Index start = _indptr[i];
+        Index end = _indptr[i + 1];
+        return Array<T>(const_cast<T*>(_data.data() + start), static_cast<Size>(end - start));
+    }
+
+    SCL_NODISCARD SCL_FORCE_INLINE Array<Index> row_indices(Index i) const requires (IsCSR) {
+        Index start = _indptr[i];
+        Index end = _indptr[i + 1];
+        return Array<Index>(const_cast<Index*>(_indices.data() + start), static_cast<Size>(end - start));
+    }
+
+    SCL_NODISCARD SCL_FORCE_INLINE Index row_length(Index i) const requires (IsCSR) {
         return _indptr[i + 1] - _indptr[i];
     }
 
-    SCL_NODISCARD SCL_FORCE_INLINE Span<T> row_values(Index i) const {
-#if !defined(NDEBUG)
-        SCL_ASSERT(i >= 0 && i < rows, "Row out of bounds");
-#endif
-        Index start = _indptr[i];
-        Size len = static_cast<Size>(row_length(i));
-        return Span<T>(const_cast<T*>(_data.data() + start), len);
+    // CSC interface
+    SCL_NODISCARD SCL_FORCE_INLINE Array<T> col_values(Index j) const requires (!IsCSR) {
+        Index start = _indptr[j];
+        Index end = _indptr[j + 1];
+        return Array<T>(const_cast<T*>(_data.data() + start), static_cast<Size>(end - start));
     }
 
-    SCL_NODISCARD SCL_FORCE_INLINE Span<Index> row_indices(Index i) const {
-#if !defined(NDEBUG)
-        SCL_ASSERT(i >= 0 && i < rows, "Row out of bounds");
-#endif
-        Index start = _indptr[i];
-        Size len = static_cast<Size>(row_length(i));
-        return Span<Index>(const_cast<Index*>(_indices.data() + start), len);
+    SCL_NODISCARD SCL_FORCE_INLINE Array<Index> col_indices(Index j) const requires (!IsCSR) {
+        Index start = _indptr[j];
+        Index end = _indptr[j + 1];
+        return Array<Index>(const_cast<Index*>(_indices.data() + start), static_cast<Size>(end - start));
     }
 
-    // -------------------------------------------------------------------------
-    // Direct Access
-    // -------------------------------------------------------------------------
+    SCL_NODISCARD SCL_FORCE_INLINE Index col_length(Index j) const requires (!IsCSR) {
+        return _indptr[j + 1] - _indptr[j];
+    }
 
+    // Direct access
     SCL_NODISCARD T* data() const noexcept { return const_cast<T*>(_data.data()); }
     SCL_NODISCARD Index* indices() const noexcept { return const_cast<Index*>(_indices.data()); }
     SCL_NODISCARD Index* indptr() const noexcept { return const_cast<Index*>(_indptr.data()); }
 
-    SCL_NODISCARD const MappedArray<T>& mapped_data() const noexcept { return _data; }
-    SCL_NODISCARD const MappedArray<Index>& mapped_indices() const noexcept { return _indices; }
-    SCL_NODISCARD const MappedArray<Index>& mapped_indptr() const noexcept { return _indptr; }
-
-    // -------------------------------------------------------------------------
     // Materialization
-    // -------------------------------------------------------------------------
+    OwnedSparse<T, IsCSR> materialize() const {
+        Index total_nnz = nnz();
+        Index primary_dim = IsCSR ? rows : cols;
+        
+        std::vector<T> data_copy(total_nnz);
+        std::vector<Index> indices_copy(total_nnz);
+        std::vector<Index> indptr_copy(primary_dim + 1);
+        
+        detail::parallel_copy(_data.data(), data_copy.data(), _data.size());
+        detail::parallel_copy(_indices.data(), indices_copy.data(), _indices.size());
+        std::memcpy(indptr_copy.data(), _indptr.data(), _indptr.size() * sizeof(Index));
+        
+        return OwnedSparse<T, IsCSR>(
+            std::move(data_copy), 
+            std::move(indices_copy), 
+            std::move(indptr_copy),
+            rows, cols
+        );
+    }
 
-    OwnedCSR<T> materialize() const;
-    OwnedCSR<T> materialize_async() const;
-    OwnedCSR<T> copy_rows(Span<const Index> row_selection) const;
-
-    // -------------------------------------------------------------------------
-    // Memory Hints
-    // -------------------------------------------------------------------------
-
+    // Memory hints
     void prefetch() const noexcept {
         _data.prefetch();
         _indices.prefetch();
@@ -229,350 +190,226 @@ public:
         _indices.drop_cache();
         _indptr.drop_cache();
     }
-
-    SCL_NODISCARD Size estimate_memory_size() const noexcept {
-        return _data.byte_size() + _indices.byte_size() + _indptr.byte_size();
-    }
 };
 
 // =============================================================================
-// MappedVirtualSparse: Zero-Copy Row Slicing
+// MappedVirtualSparse: Zero-Copy Row/Col Slicing
 // =============================================================================
 
-/// @brief Virtual sparse matrix with indirection over memory-mapped data.
+/// @brief Virtual sparse matrix with indirection over memory-mapped data
 ///
-/// Enables zero-copy row slicing through indirection array.
-/// Minimal memory overhead: O(selected_rows) for row_map.
-///
-/// Satisfies SparseLike<true> concept for seamless kernel integration.
-/// Implements concept-based interface (not inheritance-based).
-///
-/// @tparam T Value type
-template <typename T>
+/// Enables zero-copy slicing through indirection array.
+/// Minimal overhead: O(selected_elements) for map.
+template <typename T, bool IsCSR>
 class MappedVirtualSparse {
 public:
     using ValueType = T;
-    using Tag = TagCSR;
+    using Tag = TagSparse<IsCSR>;
+    
+    static constexpr bool is_csr = IsCSR;
+    static constexpr bool is_csc = !IsCSR;
 
     const Index rows;
     const Index cols;
-    const Index src_rows;
 
 private:
     const MappedArray<T>* _src_data;
     const MappedArray<Index>* _src_indices;
     const MappedArray<Index>* _src_indptr;
-    const Index* _row_map;
-    const Index* _src_row_lengths;
-    bool _owns_row_map;
-    std::vector<Index> _owned_row_map;
+    const Index* _map;
+    Index _src_primary_dim;
 
 public:
     MappedVirtualSparse(
         const MappedArray<T>& src_data,
         const MappedArray<Index>& src_indices,
         const MappedArray<Index>& src_indptr,
-        Span<const Index> row_map,
-        Index num_src_rows,
-        Index num_cols,
-        const Index* src_row_lengths = nullptr
+        Array<const Index> map,
+        Index src_rows,
+        Index src_cols
     )
-        : rows(static_cast<Index>(row_map.size)),
-          cols(num_cols),
-          src_rows(num_src_rows),
+        : rows(IsCSR ? static_cast<Index>(map.len) : src_rows),
+          cols(IsCSR ? src_cols : static_cast<Index>(map.len)),
           _src_data(&src_data),
           _src_indices(&src_indices),
           _src_indptr(&src_indptr),
-          _row_map(row_map.ptr),
-          _src_row_lengths(src_row_lengths),
-          _owns_row_map(false)
-    {
-        SCL_CHECK_ARG(rows >= 0 && rows <= num_src_rows, "Invalid row count");
-        SCL_CHECK_ARG(cols >= 0, "Invalid column count");
-    }
-
-    MappedVirtualSparse(const MappedCustomSparse<T>& source, Span<const Index> row_map)
-        : MappedVirtualSparse(
-            source.mapped_data(),
-            source.mapped_indices(),
-            source.mapped_indptr(),
-            row_map,
-            source.rows,
-            source.cols,
-            nullptr
-        )
+          _map(map.ptr),
+          _src_primary_dim(IsCSR ? src_rows : src_cols)
     {}
 
-    MappedVirtualSparse(MappedVirtualSparse&&) noexcept = default;
-    MappedVirtualSparse& operator=(MappedVirtualSparse&&) noexcept = default;
-    MappedVirtualSparse(const MappedVirtualSparse&) = delete;
-    MappedVirtualSparse& operator=(const MappedVirtualSparse&) = delete;
-
-    // -------------------------------------------------------------------------
-    // SparseLike Interface (CSR: IsCSR = true)
-    // -------------------------------------------------------------------------
-
-    /// @brief Get total number of non-zero elements.
-    ///
-    /// Computes nnz by summing row lengths (O(rows) computation).
-    /// For performance-critical code, consider caching this value.
     SCL_NODISCARD Index nnz() const {
         Index total = 0;
-        for (Index i = 0; i < rows; ++i) {
-            total += row_length(i);
+        Index primary_dim = IsCSR ? rows : cols;
+        for (Index i = 0; i < primary_dim; ++i) {
+            Index phys_idx = _map[i];
+            total += _src_indptr->data()[phys_idx + 1] - _src_indptr->data()[phys_idx];
         }
         return total;
     }
 
-    SCL_NODISCARD SCL_FORCE_INLINE Index row_length(Index i) const {
-#if !defined(NDEBUG)
-        SCL_ASSERT(i >= 0 && i < rows, "Row out of bounds");
-#endif
-        Index phys_row = _row_map[i];
-        
-        if (_src_row_lengths) {
-            return _src_row_lengths[phys_row];
-        } else {
-            const Index* indptr = _src_indptr->data();
-            return indptr[phys_row + 1] - indptr[phys_row];
-        }
-    }
-
-    SCL_NODISCARD SCL_FORCE_INLINE Span<T> row_values(Index i) const {
-#if !defined(NDEBUG)
-        SCL_ASSERT(i >= 0 && i < rows, "Row out of bounds");
-#endif
-        Index phys_row = _row_map[i];
+    // CSR interface
+    SCL_NODISCARD SCL_FORCE_INLINE Array<T> row_values(Index i) const requires (IsCSR) {
+        Index phys_row = _map[i];
         const Index* indptr = _src_indptr->data();
         Index start = indptr[phys_row];
-        Size len = static_cast<Size>(row_length(i));
-        
-        return Span<T>(const_cast<T*>(_src_data->data() + start), len);
+        Size len = static_cast<Size>(indptr[phys_row + 1] - start);
+        return Array<T>(const_cast<T*>(_src_data->data() + start), len);
     }
 
-    SCL_NODISCARD SCL_FORCE_INLINE Span<Index> row_indices(Index i) const {
-#if !defined(NDEBUG)
-        SCL_ASSERT(i >= 0 && i < rows, "Row out of bounds");
-#endif
-        Index phys_row = _row_map[i];
+    SCL_NODISCARD SCL_FORCE_INLINE Array<Index> row_indices(Index i) const requires (IsCSR) {
+        Index phys_row = _map[i];
         const Index* indptr = _src_indptr->data();
         Index start = indptr[phys_row];
-        Size len = static_cast<Size>(row_length(i));
-        
-        return Span<Index>(const_cast<Index*>(_src_indices->data() + start), len);
+        Size len = static_cast<Size>(indptr[phys_row + 1] - start);
+        return Array<Index>(const_cast<Index*>(_src_indices->data() + start), len);
     }
 
-    // -------------------------------------------------------------------------
+    SCL_NODISCARD SCL_FORCE_INLINE Index row_length(Index i) const requires (IsCSR) {
+        Index phys_row = _map[i];
+        const Index* indptr = _src_indptr->data();
+        return indptr[phys_row + 1] - indptr[phys_row];
+    }
+
+    // CSC interface
+    SCL_NODISCARD SCL_FORCE_INLINE Array<T> col_values(Index j) const requires (!IsCSR) {
+        Index phys_col = _map[j];
+        const Index* indptr = _src_indptr->data();
+        Index start = indptr[phys_col];
+        Size len = static_cast<Size>(indptr[phys_col + 1] - start);
+        return Array<T>(const_cast<T*>(_src_data->data() + start), len);
+    }
+
+    SCL_NODISCARD SCL_FORCE_INLINE Array<Index> col_indices(Index j) const requires (!IsCSR) {
+        Index phys_col = _map[j];
+        const Index* indptr = _src_indptr->data();
+        Index start = indptr[phys_col];
+        Size len = static_cast<Size>(indptr[phys_col + 1] - start);
+        return Array<Index>(const_cast<Index*>(_src_indices->data() + start), len);
+    }
+
+    SCL_NODISCARD SCL_FORCE_INLINE Index col_length(Index j) const requires (!IsCSR) {
+        Index phys_col = _map[j];
+        const Index* indptr = _src_indptr->data();
+        return indptr[phys_col + 1] - indptr[phys_col];
+    }
+
     // Materialization
-    // -------------------------------------------------------------------------
-
-    OwnedCSR<T> materialize() const;
-
-    SCL_NODISCARD Size estimate_memory_size() const noexcept {
-        Index total_nnz = 0;
-        for (Index i = 0; i < rows; ++i) {
-            total_nnz += row_length(i);
+    OwnedSparse<T, IsCSR> materialize() const {
+        Index primary_dim = IsCSR ? rows : cols;
+        Index total_nnz = nnz();
+        
+        std::vector<T> data_copy(total_nnz);
+        std::vector<Index> indices_copy(total_nnz);
+        std::vector<Index> indptr_copy(primary_dim + 1);
+        
+        indptr_copy[0] = 0;
+        Index offset = 0;
+        
+        for (Index i = 0; i < primary_dim; ++i) {
+            auto vals = IsCSR ? row_values(i) : col_values(i);
+            auto inds = IsCSR ? row_indices(i) : col_indices(i);
+            
+            std::memcpy(data_copy.data() + offset, vals.ptr, vals.len * sizeof(T));
+            std::memcpy(indices_copy.data() + offset, inds.ptr, inds.len * sizeof(Index));
+            
+            offset += vals.len;
+            indptr_copy[i + 1] = offset;
         }
-        return static_cast<Size>(total_nnz) * (sizeof(T) + sizeof(Index)) +
-               static_cast<Size>(rows + 1) * sizeof(Index);
+        
+        return OwnedSparse<T, IsCSR>(
+            std::move(data_copy),
+            std::move(indices_copy),
+            std::move(indptr_copy),
+            rows, cols
+        );
     }
 };
 
 // =============================================================================
-// OwnedCSR: Heap-Allocated CSR Matrix
+// OwnedSparse: Heap-Allocated Sparse Matrix
 // =============================================================================
 
-/// @brief CSR matrix with owned heap storage.
+/// @brief Sparse matrix with owned heap storage
 ///
-/// Target for materialization operations. Manages memory lifetime.
-///
-/// @tparam T Value type
-template <typename T>
-struct OwnedCSR {
+/// Target for materialization. Manages memory lifetime.
+template <typename T, bool IsCSR>
+struct OwnedSparse {
     std::vector<T> data;
     std::vector<Index> indices;
     std::vector<Index> indptr;
     
     Index rows;
     Index cols;
-    Index nnz;
     
-    OwnedCSR() : rows(0), cols(0), nnz(0) {}
+    OwnedSparse() : rows(0), cols(0) {}
     
-    OwnedCSR(
+    OwnedSparse(
         std::vector<T>&& d,
         std::vector<Index>&& i,
         std::vector<Index>&& p,
-        Index r, Index c, Index n
+        Index r, Index c
     )
-        : data(std::move(d)), indices(std::move(i)), indptr(std::move(p)),
-          rows(r), cols(c), nnz(n)
+        : data(std::move(d)), 
+          indices(std::move(i)), 
+          indptr(std::move(p)),
+          rows(r), cols(c)
     {}
     
-    /// @brief Get CustomCSR view (non-owning).
-    CustomCSR<T> view() noexcept {
-        return CustomCSR<T>(data.data(), indices.data(), indptr.data(), rows, cols, nnz);
-    }
-    
-    // -------------------------------------------------------------------------
-    // Zero-Copy Python Interface
-    // -------------------------------------------------------------------------
-    
-    /// @brief Release ownership of vectors (for Python binding).
-    std::tuple<std::vector<T>, std::vector<Index>, std::vector<Index>>
-    release_vectors() && {
-        return std::make_tuple(std::move(data), std::move(indices), std::move(indptr));
-    }
-    
-    /// @brief Get buffer info (for Python buffer protocol).
-    std::tuple<T*, Size, Index*, Size, Index*, Size, Index, Index, Index>
-    buffer_info() noexcept {
-        return std::make_tuple(
-            data.data(), data.size(),
-            indices.data(), indices.size(),
-            indptr.data(), indptr.size(),
-            rows, cols, nnz
+    /// @brief Get CustomSparse view (non-owning)
+    CustomSparse<T, IsCSR> view() noexcept {
+        return CustomSparse<T, IsCSR>(
+            data.data(), 
+            indices.data(), 
+            indptr.data(), 
+            rows, cols
         );
+    }
+    
+    /// @brief Get nnz
+    Index nnz() const {
+        Index primary_dim = IsCSR ? rows : cols;
+        return indptr[primary_dim];
     }
 };
 
 // =============================================================================
-// Materialization Implementations
-// =============================================================================
-
-template <typename T>
-OwnedCSR<T> MappedCustomSparse<T>::materialize() const {
-    std::vector<T> data_copy(nnz);
-    std::vector<Index> indices_copy(nnz);
-    std::vector<Index> indptr_copy(rows + 1);
-    
-    // Use streaming policy for large arrays (bypasses cache)
-    detail::parallel_memory_copy<T, detail::CopyPolicy::Streaming>(
-        _data.data(), data_copy.data(), _data.size()
-    );
-    detail::parallel_memory_copy<Index, detail::CopyPolicy::Streaming>(
-        _indices.data(), indices_copy.data(), _indices.size()
-    );
-    // indptr is small, use fast policy
-    detail::memory_copy<Index, detail::CopyPolicy::Fast>(
-        _indptr.data(), indptr_copy.data(), _indptr.size()
-    );
-    
-    return OwnedCSR<T>(std::move(data_copy), std::move(indices_copy), std::move(indptr_copy), rows, cols, nnz);
-}
-
-template <typename T>
-OwnedCSR<T> MappedCustomSparse<T>::materialize_async() const {
-    return std::async(std::launch::async, [this]() { return materialize(); }).get();
-}
-
-template <typename T>
-OwnedCSR<T> MappedCustomSparse<T>::copy_rows(Span<const Index> row_selection) const {
-    Index total_nnz = 0;
-    for (Size i = 0; i < row_selection.size; ++i) {
-        total_nnz += row_length(row_selection[i]);
-    }
-    
-    std::vector<T> out_data;
-    std::vector<Index> out_indices;
-    std::vector<Index> out_indptr;
-    
-    out_data.reserve(total_nnz);
-    out_indices.reserve(total_nnz);
-    out_indptr.reserve(row_selection.size + 1);
-    out_indptr.push_back(0);
-    
-    for (Size i = 0; i < row_selection.size; ++i) {
-        Index row_idx = row_selection[i];
-        auto vals = row_values(row_idx);
-        auto idxs = row_indices(row_idx);
-        
-        out_data.insert(out_data.end(), vals.begin(), vals.end());
-        out_indices.insert(out_indices.end(), idxs.begin(), idxs.end());
-        out_indptr.push_back(static_cast<Index>(out_data.size()));
-    }
-    
-    return OwnedCSR<T>(std::move(out_data), std::move(out_indices), std::move(out_indptr), 
-                       static_cast<Index>(row_selection.size), cols, total_nnz);
-}
-
-template <typename T>
-OwnedCSR<T> MountedVirtualSparse<T>::materialize() const {
-    // Phase 1: Parallel row length computation
-    std::vector<Index> row_sizes(rows);
-    
-    scl::threading::parallel_for(Index(0), rows, [&](Index i) {
-        row_sizes[i] = row_length(i);
-    });
-    
-    // Phase 2: Exclusive scan for indptr
-    std::vector<Index> out_indptr(rows + 1);
-    out_indptr[0] = 0;
-    
-    Index total_nnz = 0;
-    for (Index i = 0; i < rows; ++i) {
-        total_nnz += row_sizes[i];
-        out_indptr[i + 1] = total_nnz;
-    }
-    
-    // Phase 3: Allocate output arrays
-    std::vector<T> out_data(total_nnz);
-    std::vector<Index> out_indices(total_nnz);
-    
-    // Phase 4: Parallel copy (lock-free, non-overlapping writes)
-    scl::threading::parallel_for(Index(0), rows, [&](Index i) {
-        Index phys_row = _row_map[i];
-        const Index* indptr = _src_indptr->data();
-        
-        Index src_start = indptr[phys_row];
-        Index dest_start = out_indptr[i];
-        Size len = static_cast<Size>(row_sizes[i]);
-        
-        if (len > 0) {
-            detail::memory_copy<T, detail::CopyPolicy::Fast>(
-                _src_data->data() + src_start,
-                out_data.data() + dest_start,
-                len
-            );
-            
-            detail::memory_copy<Index, detail::CopyPolicy::Fast>(
-                _src_indices->data() + src_start,
-                out_indices.data() + dest_start,
-                len
-            );
-        }
-    });
-    
-    return OwnedCSR<T>(std::move(out_data), std::move(out_indices), std::move(out_indptr), rows, cols, total_nnz);
-}
-
-// =============================================================================
 // Type Aliases
 // =============================================================================
 
-// =============================================================================
-// Concept Verification (Compile-Time Checks)
-// =============================================================================
+// MappedCustomSparse aliases
+template <typename T>
+using MappedCustomCSR = MappedCustomSparse<T, true>;
 
-// Verify that MountMatrix and MountedVirtualSparse satisfy SparseLike concept
-static_assert(SparseLike<MountMatrix<Real>, true>, "MountMatrix must satisfy SparseLike<true> concept");
-static_assert(SparseLike<MountedVirtualSparse<Real>, true>, "MountedVirtualSparse must satisfy SparseLike<true> concept");
+template <typename T>
+using MappedCustomCSC = MappedCustomSparse<T, false>;
 
-// =============================================================================
-// Type Aliases
-// =============================================================================
+using MappedCustomCSRReal = MappedCustomCSR<Real>;
+using MappedCustomCSCReal = MappedCustomCSC<Real>;
 
-using MountMatrixF32 = MountMatrix<float>;
-using MountMatrixF64 = MountMatrix<double>;
-using MountMatrixReal = MountMatrix<Real>;
+// MappedVirtualSparse aliases
+template <typename T>
+using MappedVirtualCSR = MappedVirtualSparse<T, true>;
 
-using MountedVirtualSparseF32 = MountedVirtualSparse<float>;
-using MountedVirtualSparseF64 = MountedVirtualSparse<double>;
-using MountedVirtualSparseReal = MountedVirtualSparse<Real>;
+template <typename T>
+using MappedVirtualCSC = MappedVirtualSparse<T, false>;
 
-using OwnedCSRF32 = OwnedCSR<float>;
-using OwnedCSRF64 = OwnedCSR<double>;
+using MappedVirtualCSRReal = MappedVirtualCSR<Real>;
+using MappedVirtualCSCReal = MappedVirtualCSC<Real>;
+
+// OwnedSparse aliases
+template <typename T>
+using OwnedCSR = OwnedSparse<T, true>;
+
+template <typename T>
+using OwnedCSC = OwnedSparse<T, false>;
+
 using OwnedCSRReal = OwnedCSR<Real>;
+using OwnedCSCReal = OwnedCSC<Real>;
+
+// Concept verification
+static_assert(SparseLike<MappedCustomCSR<Real>, true>);
+static_assert(SparseLike<MappedCustomCSC<Real>, false>);
+static_assert(SparseLike<MappedVirtualCSR<Real>, true>);
+static_assert(SparseLike<MappedVirtualCSC<Real>, false>);
 
 } // namespace scl::io
-

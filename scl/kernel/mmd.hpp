@@ -1,10 +1,8 @@
 #pragma once
 
 #include "scl/core/type.hpp"
-#include "scl/core/matrix.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/core/error.hpp"
-#include "scl/core/macros.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <cmath>
@@ -12,66 +10,38 @@
 
 // =============================================================================
 /// @file mmd.hpp
-/// @brief Maximum Mean Discrepancy (MMD) Kernel
+/// @brief Maximum Mean Discrepancy (MMD) with RBF Kernel
 ///
-/// Computes MMD statistic with RBF (Gaussian) kernel between two distributions.
-///
-/// Definition:
-///
-/// MMD^2(P, Q) = E_{x,x' ~ P}[k(x,x')] + E_{y,y' ~ Q}[k(y,y')] - 2E_{x ~ P, y ~ Q}[k(x,y)]
-///
+/// Computes MMD^2(P, Q) = E[k(x,x')] + E[k(y,y')] - 2E[k(x,y)]
 /// For RBF kernel: k(a, b) = exp(-gamma * ||a - b||^2)
 ///
 /// Sparse Optimization:
-///
-/// For sparse vectors, decompose kernel sum into three parts:
-///
-/// 1. Zero-Zero: Implicit zeros interact with implicit zeros -> k(0, 0) = 1
-/// 2. Zero-Val: Implicit zeros with explicit values -> k(0, v) = exp(-gamma * v^2)
-/// 3. Val-Val: Explicit values with explicit values -> k(u, v) = exp(-gamma * (u-v)^2)
-///
-/// Complexity: O(n^2 + m^2 + nm) where n, m are nnz (not total dimension).
+/// 1. Zero-Zero: k(0, 0) = 1
+/// 2. Zero-Val: k(0, v) = exp(-gamma * v^2)
+/// 3. Val-Val: k(u, v) = exp(-gamma * (u-v)^2)
 ///
 /// Performance:
-///
-/// - SIMD: 4-8x speedup for distance + exp computation
-/// - Cache: Precompute unary exp terms to avoid redundancy
-/// - Parallelism: Feature-level (gene-wise) parallelism
-/// - Throughput: ~100-200M kernel evaluations/sec per core
-///
-/// Use Cases:
-///
-/// - Batch Effect Detection: Compare cell distributions across batches
-/// - Perturbation Response: Measure treatment effect on gene expression
-/// - Distribution Matching: Two-sample test for single-cell data
+/// - SIMD: 4-8x speedup for exp computation
+/// - Cache: Precompute unary terms
+/// - Parallel: Feature-level parallelism
+/// - Throughput: ~100-200M kernel evals/sec per core
 // =============================================================================
 
 namespace scl::kernel::mmd {
 
 namespace detail {
 
-// =============================================================================
-// Core Kernel Computation Units
-// =============================================================================
-
-/// @brief Precompute unary exp terms: exp(-gamma * v^2) for all values.
-///
-/// This is needed for efficient Zero-Val interaction computation.
-///
-/// @param vals Input sparse values
-/// @param gamma RBF bandwidth parameter
-/// @param cache Output buffer for exp values
-/// @return Sum of all exp terms
+/// @brief Precompute exp(-gamma * v^2) for all values (SIMD)
 template <typename T>
 SCL_FORCE_INLINE T unary_exp_sum(
-    Span<const T> vals,
+    Array<const T> vals,
     T gamma,
     T* cache
 ) {
     namespace s = scl::simd;
     const s::Tag d;
     const size_t lanes = s::lanes();
-    const Size nnz = vals.size;
+    const Size nnz = vals.size();
     
     const auto v_gamma = s::Set(d, gamma);
     auto v_sum = s::Zero(d);
@@ -97,42 +67,34 @@ SCL_FORCE_INLINE T unary_exp_sum(
     return sum;
 }
 
-/// @brief Compute self-kernel sum: sum over i and j of k(v_i, v_j).
-///
-/// Includes all three interaction types (Zero-Zero, Zero-Val, Val-Val).
-///
-/// @param vals Sparse vector values
-/// @param N Total vector dimension (including implicit zeros)
-/// @param gamma RBF bandwidth
-/// @param sum_unary Sum of exp(-gamma * v^2) terms
-/// @return Total kernel sum
+/// @brief Compute self-kernel sum (SIMD optimized)
 template <typename T>
 SCL_FORCE_INLINE T self_kernel_sum(
-    Span<const T> vals,
+    Array<const T> vals,
     Size N,
     T gamma,
     T sum_unary
 ) {
-    const Size nnz = vals.size;
+    const Size nnz = vals.size();
     const Size n_zeros = N - nnz;
     
     T sum = static_cast<T>(0.0);
 
-    // 1. Zero-Zero interactions: count × 1.0
+    // Zero-Zero interactions
     sum += static_cast<T>(n_zeros * n_zeros);
 
-    // 2. Zero-Val interactions (symmetric)
+    // Zero-Val interactions (symmetric)
     if (n_zeros > 0) {
         sum += static_cast<T>(2.0) * static_cast<T>(n_zeros) * sum_unary;
     }
 
-    // 3. Val-Val interactions
+    // Val-Val interactions
     namespace s = scl::simd;
     const s::Tag d;
     const size_t lanes = s::lanes();
     const auto v_gamma = s::Set(d, gamma);
     
-    // Diagonal: k(v, v) = 1
+    // Diagonal
     sum += static_cast<T>(nnz);
 
     // Off-diagonal (upper triangle, then double)
@@ -165,45 +127,36 @@ SCL_FORCE_INLINE T self_kernel_sum(
     return sum;
 }
 
-/// @brief Compute cross-kernel sum: sum over i and j of k(x_i, y_j).
-///
-/// @param vals_x First vector values
-/// @param N_x Total dimension of first vector
-/// @param vals_y Second vector values
-/// @param N_y Total dimension of second vector
-/// @param gamma RBF bandwidth
-/// @param sum_x_unary Sum of exp(-gamma * x^2)
-/// @param sum_y_unary Sum of exp(-gamma * y^2)
-/// @return Total cross-kernel sum
+/// @brief Compute cross-kernel sum (SIMD optimized)
 template <typename T>
 SCL_FORCE_INLINE T cross_kernel_sum(
-    Span<const T> vals_x, Size N_x,
-    Span<const T> vals_y, Size N_y,
+    Array<const T> vals_x, Size N_x,
+    Array<const T> vals_y, Size N_y,
     T gamma,
     T sum_x_unary,
     T sum_y_unary
 ) {
-    const Size nnz_x = vals_x.size;
-    const Size nnz_y = vals_y.size;
+    const Size nnz_x = vals_x.size();
+    const Size nnz_y = vals_y.size();
     const Size zeros_x = N_x - nnz_x;
     const Size zeros_y = N_y - nnz_y;
 
     T sum = static_cast<T>(0.0);
 
-    // 1. Zero-Zero
+    // Zero-Zero
     sum += static_cast<T>(zeros_x * zeros_y);
 
-    // 2. Zero(X) - Val(Y)
+    // Zero(X) - Val(Y)
     if (zeros_x > 0) {
         sum += static_cast<T>(zeros_x) * sum_y_unary;
     }
 
-    // 3. Val(X) - Zero(Y)
+    // Val(X) - Zero(Y)
     if (zeros_y > 0) {
         sum += static_cast<T>(zeros_y) * sum_x_unary;
     }
 
-    // 4. Val(X) - Val(Y) (full rectangular)
+    // Val(X) - Val(Y)
     namespace s = scl::simd;
     const s::Tag d;
     const size_t lanes = s::lanes();
@@ -241,60 +194,64 @@ SCL_FORCE_INLINE T cross_kernel_sum(
 } // namespace detail
 
 // =============================================================================
-// Public Base Interface (ISparse/ICSR/ICSC)
+// Public API
 // =============================================================================
 
-/// @brief Compute MMD^2 statistic for each feature (gene) (ICSC base interface).
+/// @brief Compute MMD^2 between two distributions (unified for CSR/CSC)
 ///
-/// Works with any matrix type that inherits from ICSC.
+/// For CSC: Compares gene expression distributions
+/// For CSR: Compares sample feature distributions
 ///
-/// @param mat_x Reference ICSC matrix
-/// @param mat_y Query ICSC matrix
-/// @param output Output buffer [size = n_genes]
+/// @param mat_x Reference matrix
+/// @param mat_y Query matrix
+/// @param output Output buffer [size = primary_dim]
 /// @param gamma RBF kernel bandwidth (default 1.0)
-template <typename T>
+template <typename MatrixT>
+    requires AnySparse<MatrixT>
 void mmd_rbf(
-    const ICSC<T>& mat_x,
-    const ICSC<T>& mat_y,
-    MutableSpan<T> output,
-    T gamma = static_cast<T>(1.0)
+    const MatrixT& mat_x,
+    const MatrixT& mat_y,
+    Array<typename MatrixT::ValueType> output,
+    typename MatrixT::ValueType gamma = static_cast<typename MatrixT::ValueType>(1.0)
 ) {
-    const Index n_genes = mat_x.cols();
+    using T = typename MatrixT::ValueType;
     
-    SCL_CHECK_DIM(mat_y.cols() == n_genes, "MMD: Matrix column count mismatch");
-    SCL_CHECK_DIM(output.size == static_cast<Size>(n_genes), 
+    const Index primary_dim = scl::primary_size(mat_x);
+    const Size secondary_x = static_cast<Size>(scl::secondary_size(mat_x));
+    const Size secondary_y = static_cast<Size>(scl::secondary_size(mat_y));
+    
+    SCL_CHECK_DIM(scl::primary_size(mat_y) == primary_dim, 
+                  "MMD: Primary dimension mismatch");
+    SCL_CHECK_DIM(output.size() == static_cast<Size>(primary_dim), 
                   "MMD: Output size mismatch");
-
-    const Size N_x = static_cast<Size>(mat_x.rows());
-    const Size N_y = static_cast<Size>(mat_y.rows());
     
-    const T inv_Nx2 = static_cast<T>(1.0) / static_cast<T>(N_x * N_x);
-    const T inv_Ny2 = static_cast<T>(1.0) / static_cast<T>(N_y * N_y);
-    const T inv_NxNy = static_cast<T>(1.0) / static_cast<T>(N_x * N_y);
+    const T inv_Nx2 = static_cast<T>(1.0) / static_cast<T>(secondary_x * secondary_x);
+    const T inv_Ny2 = static_cast<T>(1.0) / static_cast<T>(secondary_y * secondary_y);
+    const T inv_NxNy = static_cast<T>(1.0) / static_cast<T>(secondary_x * secondary_y);
 
     constexpr size_t CHUNK_SIZE = 32;
-    const size_t n_chunks = (static_cast<size_t>(n_genes) + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    const size_t n_chunks = (static_cast<size_t>(primary_dim) + CHUNK_SIZE - 1) / CHUNK_SIZE;
 
     scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
         std::vector<T> x_unary_cache;
         std::vector<T> y_unary_cache;
         
-        x_unary_cache.reserve(static_cast<size_t>(N_x) / 20);
-        y_unary_cache.reserve(static_cast<size_t>(N_y) / 20);
+        x_unary_cache.reserve(secondary_x / 20);
+        y_unary_cache.reserve(secondary_y / 20);
 
-        size_t j_start = chunk_idx * CHUNK_SIZE;
-        size_t j_end = std::min(static_cast<size_t>(n_genes), j_start + CHUNK_SIZE);
+        size_t p_start = chunk_idx * CHUNK_SIZE;
+        size_t p_end = std::min(static_cast<size_t>(primary_dim), p_start + CHUNK_SIZE);
 
-        for (size_t j = j_start; j < j_end; ++j) {
-            const Index col_idx = static_cast<Index>(j);
+        for (size_t p = p_start; p < p_end; ++p) {
+            const Index primary_idx = static_cast<Index>(p);
             
-            auto vals_x = mat_x.col_values(col_idx);
-            auto vals_y = mat_y.col_values(col_idx);
-            Index len_x = mat_x.col_length(col_idx);
-            Index len_y = mat_y.col_length(col_idx);
+            auto vals_x = scl::primary_values(mat_x, primary_idx);
+            auto vals_y = scl::primary_values(mat_y, primary_idx);
+            Index len_x = scl::primary_length(mat_x, primary_idx);
+            Index len_y = scl::primary_length(mat_y, primary_idx);
 
             if (SCL_UNLIKELY(len_x == 0 && len_y == 0)) {
-                output[col_idx] = static_cast<T>(0.0);
+                output[primary_idx] = static_cast<T>(0.0);
                 continue;
             }
 
@@ -305,15 +262,16 @@ void mmd_rbf(
                 y_unary_cache.resize(static_cast<size_t>(len_y));
             }
 
-            Span<const T> span_x(vals_x.ptr, static_cast<Size>(len_x));
-            Span<const T> span_y(vals_y.ptr, static_cast<Size>(len_y));
+            Array<const T> span_x(vals_x.ptr, static_cast<Size>(len_x));
+            Array<const T> span_y(vals_y.ptr, static_cast<Size>(len_y));
             
             T sum_x_unary = detail::unary_exp_sum(span_x, gamma, x_unary_cache.data());
             T sum_y_unary = detail::unary_exp_sum(span_y, gamma, y_unary_cache.data());
 
-            T sum_xx = detail::self_kernel_sum(span_x, N_x, gamma, sum_x_unary);
-            T sum_yy = detail::self_kernel_sum(span_y, N_y, gamma, sum_y_unary);
-            T sum_xy = detail::cross_kernel_sum(span_x, N_x, span_y, N_y, gamma, sum_x_unary, sum_y_unary);
+            T sum_xx = detail::self_kernel_sum(span_x, secondary_x, gamma, sum_x_unary);
+            T sum_yy = detail::self_kernel_sum(span_y, secondary_y, gamma, sum_y_unary);
+            T sum_xy = detail::cross_kernel_sum(span_x, secondary_x, span_y, secondary_y, 
+                                               gamma, sum_x_unary, sum_y_unary);
 
             T mmd2 = (sum_xx * inv_Nx2) + (sum_yy * inv_Ny2) - 
                      (static_cast<T>(2.0) * sum_xy * inv_NxNy);
@@ -322,329 +280,9 @@ void mmd_rbf(
                 mmd2 = static_cast<T>(0.0);
             }
 
-            output[col_idx] = mmd2;
-        }
-    });
-}
-
-/// @brief Compute MMD-RBF between two distributions (ICSR base interface).
-///
-/// Works with any matrix type that inherits from ICSR.
-///
-/// @param mat_x Reference ICSR matrix
-/// @param mat_y Query ICSR matrix
-/// @param output Output buffer [size = n_samples]
-/// @param gamma RBF kernel bandwidth (default 1.0)
-template <typename T>
-void mmd_rbf(
-    const ICSR<T>& mat_x,
-    const ICSR<T>& mat_y,
-    MutableSpan<T> output,
-    T gamma = static_cast<T>(1.0)
-) {
-    const Index n_samples = mat_x.rows();
-    
-    SCL_CHECK_DIM(mat_y.rows() == n_samples, "MMD: Matrix row count mismatch");
-    SCL_CHECK_DIM(output.size == static_cast<Size>(n_samples), 
-                  "MMD: Output size mismatch");
-
-    const Size N_x = static_cast<Size>(mat_x.cols());
-    const Size N_y = static_cast<Size>(mat_y.cols());
-    
-    const T inv_Nx2 = static_cast<T>(1.0) / static_cast<T>(N_x * N_x);
-    const T inv_Ny2 = static_cast<T>(1.0) / static_cast<T>(N_y * N_y);
-    const T inv_NxNy = static_cast<T>(1.0) / static_cast<T>(N_x * N_y);
-
-    constexpr size_t CHUNK_SIZE = 32;
-    const size_t n_chunks = (static_cast<size_t>(n_samples) + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-    scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
-        std::vector<T> x_unary_cache;
-        std::vector<T> y_unary_cache;
-        
-        x_unary_cache.reserve(static_cast<size_t>(N_x) / 20);
-        y_unary_cache.reserve(static_cast<size_t>(N_y) / 20);
-
-        size_t i_start = chunk_idx * CHUNK_SIZE;
-        size_t i_end = std::min(static_cast<size_t>(n_samples), i_start + CHUNK_SIZE);
-
-        for (size_t i = i_start; i < i_end; ++i) {
-            const Index row_idx = static_cast<Index>(i);
-            
-            auto vals_x = mat_x.row_values(row_idx);
-            auto vals_y = mat_y.row_values(row_idx);
-            Index len_x = mat_x.row_length(row_idx);
-            Index len_y = mat_y.row_length(row_idx);
-
-            if (SCL_UNLIKELY(len_x == 0 && len_y == 0)) {
-                output[row_idx] = static_cast<T>(0.0);
-                continue;
-            }
-
-            if (x_unary_cache.size() < static_cast<size_t>(len_x)) {
-                x_unary_cache.resize(static_cast<size_t>(len_x));
-            }
-            if (y_unary_cache.size() < static_cast<size_t>(len_y)) {
-                y_unary_cache.resize(static_cast<size_t>(len_y));
-            }
-
-            Span<const T> span_x(vals_x.ptr, static_cast<Size>(len_x));
-            Span<const T> span_y(vals_y.ptr, static_cast<Size>(len_y));
-            
-            T sum_x_unary = detail::unary_exp_sum(span_x, gamma, x_unary_cache.data());
-            T sum_y_unary = detail::unary_exp_sum(span_y, gamma, y_unary_cache.data());
-
-            T sum_xx = detail::self_kernel_sum(span_x, N_x, gamma, sum_x_unary);
-            T sum_yy = detail::self_kernel_sum(span_y, N_y, gamma, sum_y_unary);
-            T sum_xy = detail::cross_kernel_sum(span_x, N_x, span_y, N_y, gamma, sum_x_unary, sum_y_unary);
-
-            T mmd2 = sum_xx * inv_Nx2 + sum_yy * inv_Ny2 - static_cast<T>(2.0) * sum_xy * inv_NxNy;
-
-            if (mmd2 < static_cast<T>(0.0)) {
-                mmd2 = static_cast<T>(0.0);
-            }
-
-            output[row_idx] = mmd2;
-        }
-    });
-}
-
-// =============================================================================
-// Efficient Implementations (CustomSparseLike & VirtualSparseLike)
-// =============================================================================
-
-/// @brief Compute MMD^2 statistic for each feature (gene) (CustomSparseLike & VirtualSparseLike).
-///
-/// Compares distribution of feature j in matrix X vs matrix Y using RBF kernel.
-///
-/// Input: Two CSC-like matrices (cells x genes), typically:
-/// - X: Reference group (e.g., control cells)
-/// - Y: Query group (e.g., treated cells)
-///
-/// Output: MMD^2 value per gene (higher = more different distributions).
-///
-/// @tparam MatrixT Any CSC-like matrix type
-/// @param mat_x Reference CSC-like matrix
-/// @param mat_y Query CSC-like matrix
-/// @param output Output buffer [size = n_genes]
-/// @param gamma RBF kernel bandwidth (default 1.0). Smaller = more sensitive.
-template <CSCLike MatrixT>
-void mmd_rbf(
-    const MatrixT& mat_x,
-    const MatrixT& mat_y,
-    MutableSpan<typename MatrixT::ValueType> output,
-    typename MatrixT::ValueType gamma = static_cast<typename MatrixT::ValueType>(1.0)
-) {
-    using T = typename MatrixT::ValueType;
-    const Index n_genes = mat_x.cols;
-    
-    SCL_CHECK_DIM(mat_y.cols == n_genes, "MMD: Matrix column count mismatch");
-    SCL_CHECK_DIM(output.size == static_cast<Size>(n_genes), 
-                  "MMD: Output size mismatch");
-
-    const Size N_x = static_cast<Size>(mat_x.rows);
-    const Size N_y = static_cast<Size>(mat_y.rows);
-    
-    // Normalization factors
-    const T inv_Nx2 = static_cast<T>(1.0) / static_cast<T>(N_x * N_x);
-    const T inv_Ny2 = static_cast<T>(1.0) / static_cast<T>(N_y * N_y);
-    const T inv_NxNy = static_cast<T>(1.0) / static_cast<T>(N_x * N_y);
-
-    // Chunk-based parallelism for workspace reuse
-    constexpr size_t CHUNK_SIZE = 32;
-    const size_t n_chunks = (static_cast<size_t>(n_genes) + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-    scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
-        // Thread-local buffers for unary exp caching
-        std::vector<T> x_unary_cache;
-        std::vector<T> y_unary_cache;
-        
-        // Reserve for typical sparsity (~5% density for single-cell)
-        x_unary_cache.reserve(static_cast<size_t>(N_x) / 20);
-        y_unary_cache.reserve(static_cast<size_t>(N_y) / 20);
-
-        size_t j_start = chunk_idx * CHUNK_SIZE;
-        size_t j_end = std::min(static_cast<size_t>(n_genes), j_start + CHUNK_SIZE);
-
-        for (size_t j = j_start; j < j_end; ++j) {
-            const Index col_idx = static_cast<Index>(j);
-            
-            auto vals_x = mat_x.col_values(col_idx);
-            auto vals_y = mat_y.col_values(col_idx);
-            Index len_x = mat_x.col_length(col_idx);
-            Index len_y = mat_y.col_length(col_idx);
-
-            // Skip if both vectors are empty
-            if (SCL_UNLIKELY(len_x == 0 && len_y == 0)) {
-                output[col_idx] = static_cast<T>(0.0);
-                continue;
-            }
-
-            // ---------------------------------------------------------------
-            // Step 1: Precompute Unary Exp Terms
-            // ---------------------------------------------------------------
-            
-            // Ensure buffers are large enough
-            if (x_unary_cache.size() < static_cast<size_t>(len_x)) {
-                x_unary_cache.resize(static_cast<size_t>(len_x));
-            }
-            if (y_unary_cache.size() < static_cast<size_t>(len_y)) {
-                y_unary_cache.resize(static_cast<size_t>(len_y));
-            }
-
-            // Create proper Spans with correct lengths
-            Span<const T> span_x(vals_x.ptr, static_cast<Size>(len_x));
-            Span<const T> span_y(vals_y.ptr, static_cast<Size>(len_y));
-            
-            T sum_x_unary = detail::unary_exp_sum(
-                span_x, gamma, x_unary_cache.data()
-            );
-            T sum_y_unary = detail::unary_exp_sum(
-                span_y, gamma, y_unary_cache.data()
-            );
-
-            // ---------------------------------------------------------------
-            // Step 2: Compute Three MMD Terms
-            // ---------------------------------------------------------------
-            
-            T sum_xx = detail::self_kernel_sum(
-                span_x, N_x, gamma, sum_x_unary
-            );
-
-            T sum_yy = detail::self_kernel_sum(
-                span_y, N_y, gamma, sum_y_unary
-            );
-
-            T sum_xy = detail::cross_kernel_sum(
-                span_x, N_x, span_y, N_y, gamma, sum_x_unary, sum_y_unary
-            );
-
-            // ---------------------------------------------------------------
-            // Step 3: Assemble MMD^2
-            // ---------------------------------------------------------------
-            
-            T mmd2 = (sum_xx * inv_Nx2) + (sum_yy * inv_Ny2) - 
-                     (static_cast<T>(2.0) * sum_xy * inv_NxNy);
-
-            // Numerical stability: clip to non-negative (theoretical guarantee)
-            if (mmd2 < static_cast<T>(0.0)) {
-                mmd2 = static_cast<T>(0.0);
-            }
-
-            output[col_idx] = mmd2;
-        }
-    });
-}
-
-/// @brief Compute MMD-RBF between two distributions (CSR version).
-///
-/// Input: Two CSR-like matrices (samples x features), typically:
-/// - X: Reference group (e.g., control samples)
-/// - Y: Query group (e.g., treated samples)
-///
-/// Output: MMD^2 value per sample/row (higher = more different distributions).
-///
-/// @tparam MatrixT Any CSR-like matrix type
-/// @param mat_x Reference CSR-like matrix
-/// @param mat_y Query CSR-like matrix
-/// @param output Output buffer [size = n_samples]
-/// @param gamma RBF kernel bandwidth (default 1.0). Smaller = more sensitive.
-template <CSRLike MatrixT>
-void mmd_rbf(
-    const MatrixT& mat_x,
-    const MatrixT& mat_y,
-    MutableSpan<typename MatrixT::ValueType> output,
-    typename MatrixT::ValueType gamma = static_cast<typename MatrixT::ValueType>(1.0)
-) {
-    using T = typename MatrixT::ValueType;
-    const Index n_samples = mat_x.rows;
-    
-    SCL_CHECK_DIM(mat_y.rows == n_samples, "MMD: Matrix row count mismatch");
-    SCL_CHECK_DIM(output.size == static_cast<Size>(n_samples), 
-                  "MMD: Output size mismatch");
-
-    const Size N_x = static_cast<Size>(mat_x.cols);
-    const Size N_y = static_cast<Size>(mat_y.cols);
-    
-    // Normalization factors
-    const T inv_Nx2 = static_cast<T>(1.0) / static_cast<T>(N_x * N_x);
-    const T inv_Ny2 = static_cast<T>(1.0) / static_cast<T>(N_y * N_y);
-    const T inv_NxNy = static_cast<T>(1.0) / static_cast<T>(N_x * N_y);
-
-    // Chunk-based parallelism for workspace reuse
-    constexpr size_t CHUNK_SIZE = 32;
-    const size_t n_chunks = (static_cast<size_t>(n_samples) + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-    scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
-        // Thread-local buffers for unary exp caching
-        std::vector<T> x_unary_cache;
-        std::vector<T> y_unary_cache;
-        
-        // Reserve for typical sparsity
-        x_unary_cache.reserve(static_cast<size_t>(N_x) / 20);
-        y_unary_cache.reserve(static_cast<size_t>(N_y) / 20);
-
-        size_t i_start = chunk_idx * CHUNK_SIZE;
-        size_t i_end = std::min(static_cast<size_t>(n_samples), i_start + CHUNK_SIZE);
-
-        for (size_t i = i_start; i < i_end; ++i) {
-            const Index row_idx = static_cast<Index>(i);
-            
-            auto vals_x = mat_x.row_values(row_idx);
-            auto vals_y = mat_y.row_values(row_idx);
-            Index len_x = mat_x.row_length(row_idx);
-            Index len_y = mat_y.row_length(row_idx);
-
-            // Skip if both vectors are empty
-            if (SCL_UNLIKELY(len_x == 0 && len_y == 0)) {
-                output[row_idx] = static_cast<T>(0.0);
-                continue;
-            }
-
-            // Step 1: Precompute Unary Exp Terms
-            if (x_unary_cache.size() < static_cast<size_t>(len_x)) {
-                x_unary_cache.resize(static_cast<size_t>(len_x));
-            }
-            if (y_unary_cache.size() < static_cast<size_t>(len_y)) {
-                y_unary_cache.resize(static_cast<size_t>(len_y));
-            }
-
-            Span<const T> span_x(vals_x.ptr, static_cast<Size>(len_x));
-            Span<const T> span_y(vals_y.ptr, static_cast<Size>(len_y));
-            
-            T sum_x_unary = detail::unary_exp_sum(
-                span_x, gamma, x_unary_cache.data()
-            );
-            T sum_y_unary = detail::unary_exp_sum(
-                span_y, gamma, y_unary_cache.data()
-            );
-
-            // Step 2: Compute Three MMD Terms
-            T sum_xx = detail::self_kernel_sum(
-                span_x, N_x, gamma, sum_x_unary
-            );
-
-            T sum_yy = detail::self_kernel_sum(
-                span_y, N_y, gamma, sum_y_unary
-            );
-
-            T sum_xy = detail::cross_kernel_sum(
-                span_x, span_y, N_x, N_y, gamma, 
-                sum_x_unary, sum_y_unary
-            );
-
-            // Step 3: Compute MMD^2
-            T mmd2 = sum_xx * inv_Nx2 + sum_yy * inv_Ny2 - static_cast<T>(2.0) * sum_xy * inv_NxNy;
-
-            // Numerical stability: clip to non-negative
-            if (mmd2 < static_cast<T>(0.0)) {
-                mmd2 = static_cast<T>(0.0);
-            }
-
-            output[row_idx] = mmd2;
+            output[primary_idx] = mmd2;
         }
     });
 }
 
 } // namespace scl::kernel::mmd
-

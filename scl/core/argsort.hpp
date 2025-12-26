@@ -15,11 +15,11 @@ namespace detail {
     /// @brief Serial Iota with Aggressive SIMD Unrolling.
     /// Fills [0, 1, 2, ... N].
     /// Optimized for throughput using Instruction Level Parallelism (ILP).
-    SCL_FORCE_INLINE void iota_serial(MutableIndexSpan indices) {
+    SCL_FORCE_INLINE void iota_serial(Array<Index> indices) {
         namespace s = scl::simd;
         
         const s::IndexTag d;
-        const size_t N = indices.size;
+        const size_t N = indices.len;
         const size_t lanes = s::lanes();
         
         // Prepare steps for 4-way unrolling
@@ -79,15 +79,15 @@ namespace detail {
 // =============================================================================
 
 template <typename T>
-SCL_FORCE_INLINE void argsort_inplace(MutableSpan<T> keys, MutableIndexSpan indices) {
-    SCL_ASSERT(keys.size == indices.size, "Argsort: Size mismatch");
+SCL_FORCE_INLINE void argsort_inplace(Array<T> keys, Array<Index> indices) {
+    SCL_ASSERT(keys.len == indices.len, "Argsort: Size mismatch");
     detail::iota_serial(indices);
     scl::sort::sort_pairs(keys, indices);
 }
 
 template <typename T>
-SCL_FORCE_INLINE void argsort_inplace_descending(MutableSpan<T> keys, MutableIndexSpan indices) {
-    SCL_ASSERT(keys.size == indices.size, "Argsort: Size mismatch");
+SCL_FORCE_INLINE void argsort_inplace_descending(Array<T> keys, Array<Index> indices) {
+    SCL_ASSERT(keys.len == indices.len, "Argsort: Size mismatch");
     detail::iota_serial(indices);
     scl::sort::sort_pairs_descending(keys, indices);
 }
@@ -98,15 +98,15 @@ SCL_FORCE_INLINE void argsort_inplace_descending(MutableSpan<T> keys, MutableInd
 
 template <typename T>
 SCL_FORCE_INLINE void argsort_buffered(
-    Span<const T> keys, 
-    MutableIndexSpan indices, 
-    MutableSpan<Byte> buffer
+    Array<const T> keys, 
+    Array<Index> indices, 
+    Array<Byte> buffer
 ) {
-    SCL_ASSERT(keys.size == indices.size, "Argsort: Indices size mismatch");
-    SCL_ASSERT(buffer.size >= keys.byte_size(), "Argsort: Buffer too small");
+    SCL_ASSERT(keys.len == indices.len, "Argsort: Indices size mismatch");
+    SCL_ASSERT(buffer.len >= keys.byte_size(), "Argsort: Buffer too small");
 
     T* buffer_ptr = reinterpret_cast<T*>(buffer.ptr);
-    MutableSpan<T> key_copy(buffer_ptr, keys.size);
+    Array<T> key_copy(buffer_ptr, keys.len);
 
     // Use unified memory component
     scl::memory::copy_fast(keys, key_copy);
@@ -116,15 +116,15 @@ SCL_FORCE_INLINE void argsort_buffered(
 
 template <typename T>
 SCL_FORCE_INLINE void argsort_buffered_descending(
-    Span<const T> keys, 
-    MutableIndexSpan indices, 
-    MutableSpan<Byte> buffer
+    Array<const T> keys, 
+    Array<Index> indices, 
+    Array<Byte> buffer
 ) {
-    SCL_ASSERT(keys.size == indices.size, "Argsort: Indices size mismatch");
-    SCL_ASSERT(buffer.size >= keys.byte_size(), "Argsort: Buffer too small");
+    SCL_ASSERT(keys.len == indices.len, "Argsort: Indices size mismatch");
+    SCL_ASSERT(buffer.len >= keys.byte_size(), "Argsort: Buffer too small");
 
     T* buffer_ptr = reinterpret_cast<T*>(buffer.ptr);
-    MutableSpan<T> key_copy(buffer_ptr, keys.size);
+    Array<T> key_copy(buffer_ptr, keys.len);
 
     // Use unified memory component
     scl::memory::copy_fast(keys, key_copy);
@@ -137,10 +137,10 @@ SCL_FORCE_INLINE void argsort_buffered_descending(
 // =============================================================================
 
 template <typename T>
-SCL_FORCE_INLINE void argsort_indirect(Span<const T> keys, MutableIndexSpan indices) {
-    SCL_ASSERT(keys.size == indices.size, "Argsort: Size mismatch");
+SCL_FORCE_INLINE void argsort_indirect(Array<const T> keys, Array<Index> indices) {
+    SCL_ASSERT(keys.len == indices.len, "Argsort: Size mismatch");
     detail::iota_serial(indices); // SIMD Optimized initialization
-    std::sort(indices.ptr, indices.ptr + indices.size, 
+    std::sort(indices.ptr, indices.ptr + indices.len, 
         [&](Index a, Index b) {
             return keys[a] < keys[b];
         }

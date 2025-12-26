@@ -251,16 +251,16 @@ struct MemHandle {
     /// @brief Create a Span view of the memory.
     ///
     /// @tparam T Element type
-    /// @return Span<T> wrapping the memory
+    /// @return Array<T> wrapping the memory
     template <typename T>
-    [[nodiscard]] Span<T> as_span() const noexcept {
-        return Span<T>(as<T>(), count<T>());
+    [[nodiscard]] Array<T> as_span() const noexcept {
+        return Array<T>(as<T>(), count<T>());
     }
 
     /// @brief Create a mutable Span view.
     template <typename T>
-    [[nodiscard]] MutableSpan<T> as_mutable_span() const noexcept {
-        return MutableSpan<T>(as<T>(), count<T>());
+    [[nodiscard]] Array<T> as_mutable_span() const noexcept {
+        return Array<T>(as<T>(), count<T>());
     }
 };
 
