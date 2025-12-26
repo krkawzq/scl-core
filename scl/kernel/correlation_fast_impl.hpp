@@ -1,0 +1,111 @@
+#pragma once
+
+#include "scl/core/type.hpp"
+#include "scl/core/simd.hpp"
+#include "scl/core/error.hpp"
+#include "scl/core/sparse.hpp"
+#include "scl/threading/parallel_for.hpp"
+
+#include <cmath>
+
+// =============================================================================
+/// @file correlation_fast_impl.hpp
+/// @brief Extreme Performance Correlation for CustomSparse
+///
+/// Ultra-optimized statistics computation with:
+/// - Batch SIMD on contiguous data
+/// - Fused mean/variance calculation
+/// - Cache-optimized memory access
+///
+/// Performance Target: 2-3x faster than generic
+// =============================================================================
+
+namespace scl::kernel::correlation::fast {
+
+// =============================================================================
+// Fast Path: Batch Statistics Computation
+// =============================================================================
+
+/// @brief Ultra-fast statistics (CustomSparse)
+///
+/// Optimization: Direct data access + 4-way unrolled SIMD
+template <typename T, bool IsCSR>
+    requires CustomSparseLike<CustomSparse<T, IsCSR>, IsCSR>
+SCL_FORCE_INLINE auto compute_stats_fast(const CustomSparse<T, IsCSR>& matrix) {
+    using ValueType = typename CustomSparse<T, IsCSR>::ValueType;
+    const Index primary_dim = scl::primary_size(matrix);
+    const Size secondary_dim = static_cast<Size>(scl::secondary_size(matrix));
+    const Real inv_n = static_cast<Real>(1.0) / static_cast<Real>(secondary_dim);
+
+    struct Stats {
+        std::vector<Real> means;
+        std::vector<Real> inv_stds;
+    };
+    
+    Stats stats;
+    stats.means.resize(primary_dim);
+    stats.inv_stds.resize(primary_dim);
+
+    namespace s = scl::simd;
+    const s::Tag d;
+    const size_t lanes = s::lanes();
+
+    scl::threading::parallel_for(0, static_cast<size_t>(primary_dim), [&](size_t p) {
+        Index start = matrix.indptr[p];
+        Index end = matrix.indptr[p + 1];
+        Index len = end - start;
+        
+        const ValueType* SCL_RESTRICT vals = matrix.data + start;
+        
+        // Fused SIMD accumulation
+        auto v_sum = s::Zero(d);
+        auto v_sq_sum = s::Zero(d);
+        
+        Index k = 0;
+        
+        // 4-way unrolled
+        for (; k + 4 * lanes <= len; k += 4 * lanes) {
+            auto v0 = s::Load(d, vals + k + 0 * lanes);
+            auto v1 = s::Load(d, vals + k + 1 * lanes);
+            auto v2 = s::Load(d, vals + k + 2 * lanes);
+            auto v3 = s::Load(d, vals + k + 3 * lanes);
+            
+            v_sum = s::Add(v_sum, v0);
+            v_sum = s::Add(v_sum, v1);
+            v_sum = s::Add(v_sum, v2);
+            v_sum = s::Add(v_sum, v3);
+            
+            v_sq_sum = s::MulAdd(v0, v0, v_sq_sum);
+            v_sq_sum = s::MulAdd(v1, v1, v_sq_sum);
+            v_sq_sum = s::MulAdd(v2, v2, v_sq_sum);
+            v_sq_sum = s::MulAdd(v3, v3, v_sq_sum);
+        }
+        
+        for (; k + lanes <= len; k += lanes) {
+            auto v = s::Load(d, vals + k);
+            v_sum = s::Add(v_sum, v);
+            v_sq_sum = s::MulAdd(v, v, v_sq_sum);
+        }
+        
+        Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
+        Real sq_sum = s::GetLane(s::SumOfLanes(d, v_sq_sum));
+
+        for (; k < len; ++k) {
+            Real v = static_cast<Real>(vals[k]);
+            sum += v;
+            sq_sum += v * v;
+        }
+
+        Real mean = sum * inv_n;
+        Real var = (sq_sum * inv_n) - (mean * mean);
+        if (var < 0) var = 0;
+
+        stats.means[p] = mean;
+        stats.inv_stds[p] = (var > 0) ? (1.0 / std::sqrt(var)) : 0.0;
+    });
+
+    return stats;
+}
+
+} // namespace scl::kernel::correlation::fast
+
