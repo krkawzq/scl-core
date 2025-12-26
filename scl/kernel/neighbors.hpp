@@ -155,7 +155,14 @@ SCL_FORCE_INLINE void find_sigma(
 // Public API
 // =============================================================================
 
-/// @brief Exact K-Nearest Neighbors for sparse data.
+// =============================================================================
+// Layer 1: Virtual Interface (ISparse-based, Generic but Slower)
+// =============================================================================
+
+/// @brief Exact K-Nearest Neighbors for sparse data (Virtual Interface).
+///
+/// Generic implementation using ISparse base class.
+/// Works with any sparse matrix type but may have virtual call overhead.
 ///
 /// Computes exact KNN using distance decomposition formula.
 /// Suitable for moderate-size datasets (N < 50K) or when precision is critical.
@@ -164,18 +171,168 @@ SCL_FORCE_INLINE void find_sigma(
 ///
 /// Output: K nearest neighbors for each cell (excluding self).
 ///
-/// @param matrix Input sparse matrix (CSR format)
+/// @param matrix CSR sparse matrix (via ISparse interface)
 /// @param k Number of neighbors to find
 /// @param out_indices Output neighbor indices [size = n_cells x k]
 /// @param out_distances Output distances [size = n_cells x k]
 template <typename T>
 void knn_sparse(
-    const CSRMatrix<T>& matrix,
+    const ICSR<T>& matrix,
     Size k,
     MutableSpan<Index> out_indices,
     MutableSpan<T> out_distances
 ) {
-    const Index R = matrix.rows;
+    const Index R = matrix.rows();
+    const Size N = static_cast<Size>(R);
+    
+    SCL_CHECK_ARG(k >= 1 && k < N, "KNN: k must be in range [1, n_cells)");
+    SCL_CHECK_DIM(out_indices.size == N * k, "KNN: Indices output size mismatch");
+    SCL_CHECK_DIM(out_distances.size == N * k, "KNN: Distances output size mismatch");
+
+    // -------------------------------------------------------------------------
+    // Step 1: Precompute Squared Norms (SIMD Optimized)
+    // -------------------------------------------------------------------------
+    
+    std::vector<T> norms_sq(N);
+    
+    scl::threading::parallel_for(0, N, [&](size_t i) {
+        Index row_idx = static_cast<Index>(i);
+        auto vals = matrix.primary_values(row_idx);
+        
+        namespace s = scl::simd;
+        const s::Tag d;
+        const size_t lanes = s::lanes();
+        
+        auto v_sum = s::Zero(d);
+        size_t k_idx = 0;
+        
+        for (; k_idx + lanes <= vals.size; k_idx += lanes) {
+            auto v = s::Load(d, vals.ptr + k_idx);
+            v_sum = s::MulAdd(v, v, v_sum);
+        }
+        
+        T sum_sq = s::GetLane(s::SumOfLanes(d, v_sum));
+        
+        for (; k_idx < vals.size; ++k_idx) {
+            T val = vals[k_idx];
+            sum_sq += val * val;
+        }
+        
+        norms_sq[i] = sum_sq;
+    });
+
+    // -------------------------------------------------------------------------
+    // Step 2: Compute Distances + Top-K Selection (Fused, Chunked)
+    // -------------------------------------------------------------------------
+    
+    // Process in chunks to reuse thread-local buffers
+    constexpr size_t CHUNK_SIZE = 64;
+    const size_t n_chunks = (N + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+    scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
+        // Thread-local buffers (reused across chunk)
+        std::vector<T> dist_buffer(N);
+        std::vector<Index> idx_buffer(N);
+        
+        // Initialize index buffer once
+        for (Size j = 0; j < N; ++j) {
+            idx_buffer[j] = static_cast<Index>(j);
+        }
+
+        size_t i_start = chunk_idx * CHUNK_SIZE;
+        size_t i_end = std::min(N, i_start + CHUNK_SIZE);
+
+        for (size_t i = i_start; i < i_end; ++i) {
+            const Index row_i = static_cast<Index>(i);
+            auto idx_i = matrix.primary_indices(row_i);
+            auto val_i = matrix.primary_values(row_i);
+            const T norm_i = norms_sq[i];
+
+            // A. Compute distances to all cells
+            for (Size j = 0; j < N; ++j) {
+                if (SCL_UNLIKELY(i == j)) {
+                    // Self-distance is 0 (will be excluded later)
+                    dist_buffer[j] = static_cast<T>(0.0);
+                    continue;
+                }
+
+                const Index row_j = static_cast<Index>(j);
+                auto idx_j = matrix.primary_indices(row_j);
+                auto val_j = matrix.primary_values(row_j);
+
+                // Sparse dot product
+                T dot = scl::kernel::gram::detail::dot_product(
+                    idx_i.ptr, val_i.ptr, idx_i.size,
+                    idx_j.ptr, val_j.ptr, idx_j.size
+                );
+
+                // Distance: ||x-y||^2 = ||x||^2 + ||y||^2 - 2<x,y>
+                T d2 = norm_i + norms_sq[j] - static_cast<T>(2.0) * dot;
+                
+                // Numerical stability: clip to non-negative
+                if (d2 < static_cast<T>(0.0)) {
+                    d2 = static_cast<T>(0.0);
+                }
+                
+                dist_buffer[j] = d2;
+            }
+
+            // B. Select Top-(k+1) (include self for now)
+            const Size search_k = k + 1;
+            detail::partial_argsort(
+                idx_buffer.data(), 
+                dist_buffer.data(), 
+                N, 
+                search_k
+            );
+
+            // C. Write output (skip self)
+            Size written = 0;
+            for (Size r = 0; r < search_k && written < k; ++r) {
+                Index neighbor = idx_buffer[r];
+                
+                // Skip self-loop
+                if (neighbor == row_i) continue;
+
+                Size out_idx = i * k + written;
+                out_indices[out_idx] = neighbor;
+                out_distances[out_idx] = std::sqrt(dist_buffer[neighbor]);
+                written++;
+            }
+        }
+    });
+}
+
+// =============================================================================
+// Layer 2: Concept-Based (CSRLike, Optimized for Custom/Virtual)
+// =============================================================================
+
+/// @brief Exact K-Nearest Neighbors for sparse data (Concept-based, Optimized).
+///
+/// High-performance implementation for CSRLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
+///
+/// Computes exact KNN using distance decomposition formula.
+/// Suitable for moderate-size datasets (N < 50K) or when precision is critical.
+///
+/// Input: CSR matrix (cells x features)
+///
+/// Output: K nearest neighbors for each cell (excluding self).
+///
+/// @tparam MatrixT Any CSR-like matrix type (CustomSparse or VirtualSparse)
+/// @param matrix Input sparse matrix (CSR format)
+/// @param k Number of neighbors to find
+/// @param out_indices Output neighbor indices [size = n_cells x k]
+/// @param out_distances Output distances [size = n_cells x k]
+template <CSRLike MatrixT>
+void knn_sparse(
+    const MatrixT& matrix,
+    Size k,
+    MutableSpan<Index> out_indices,
+    MutableSpan<typename MatrixT::ValueType> out_distances
+) {
+    using T = typename MatrixT::ValueType;
+    const Index R = scl::rows(matrix);
     const Size N = static_cast<Size>(R);
     
     SCL_CHECK_ARG(k >= 1 && k < N, "KNN: k must be in range [1, n_cells)");
@@ -391,27 +548,84 @@ void affinity_weights(
     });
 }
 
-/// @brief Complete KNN + UMAP connectivity pipeline.
+/// @brief Complete KNN + UMAP connectivity pipeline (Virtual Interface).
+///
+/// Generic implementation using ISparse base class.
+/// Works with any sparse matrix type but may have virtual call overhead.
 ///
 /// Executes the full workflow:
 /// 1. Compute exact KNN graph
 /// 2. Find perplexity-matched sigmas
 /// 3. Compute smooth affinity weights
 ///
-/// @param matrix Input sparse matrix (CSR, cells x features)
+/// @param matrix CSR sparse matrix (via ISparse interface)
 /// @param k Number of neighbors
 /// @param out_indices KNN indices [size = n_cells x k]
 /// @param out_distances KNN distances [size = n_cells x k]
 /// @param out_weights UMAP weights [size = n_cells x k]
 template <typename T>
 void knn_graph(
-    const CSRMatrix<T>& matrix,
+    const ICSR<T>& matrix,
     Size k,
     MutableSpan<Index> out_indices,
     MutableSpan<T> out_distances,
     MutableSpan<T> out_weights
 ) {
-    const Size N = static_cast<Size>(matrix.rows);
+    const Size N = static_cast<Size>(matrix.rows());
+    
+    SCL_CHECK_DIM(out_indices.size == N * k, "KNN: Indices size mismatch");
+    SCL_CHECK_DIM(out_distances.size == N * k, "KNN: Distances size mismatch");
+    SCL_CHECK_DIM(out_weights.size == N * k, "KNN: Weights size mismatch");
+
+    // Step 1: Compute exact KNN
+    knn_sparse(matrix, k, out_indices, out_distances);
+
+    // Step 2: Compute bandwidth parameters
+    std::vector<T> sigmas(N);
+    std::vector<T> rhos(N);
+    
+    find_connectivities(
+        out_indices, out_distances, k,
+        {sigmas.data(), sigmas.size()},
+        {rhos.data(), rhos.size()}
+    );
+
+    // Step 3: Compute affinity weights
+    affinity_weights(
+        out_indices, out_distances,
+        {sigmas.data(), sigmas.size()},
+        {rhos.data(), rhos.size()},
+        k,
+        out_weights
+    );
+}
+
+/// @brief Complete KNN + UMAP connectivity pipeline (Concept-based, Optimized).
+///
+/// High-performance implementation for CSRLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
+///
+/// Executes the full workflow:
+/// 1. Compute exact KNN graph
+/// 2. Find perplexity-matched sigmas
+/// 3. Compute smooth affinity weights
+///
+/// @tparam MatrixT Any CSR-like matrix type (CustomSparse or VirtualSparse)
+/// @param matrix Input sparse matrix (CSR, cells x features)
+/// @param k Number of neighbors
+/// @param out_indices KNN indices [size = n_cells x k]
+/// @param out_distances KNN distances [size = n_cells x k]
+/// @param out_weights UMAP weights [size = n_cells x k]
+template <CSRLike MatrixT>
+void knn_graph(
+    const MatrixT& matrix,
+    Size k,
+    MutableSpan<Index> out_indices,
+    MutableSpan<typename MatrixT::ValueType> out_distances,
+    MutableSpan<typename MatrixT::ValueType> out_weights
+) {
+    using T = typename MatrixT::ValueType;
+    const Size N = static_cast<Size>(scl::rows(matrix));
     
     SCL_CHECK_DIM(out_indices.size == N * k, "KNN: Indices size mismatch");
     SCL_CHECK_DIM(out_distances.size == N * k, "KNN: Distances size mismatch");
@@ -444,25 +658,160 @@ void knn_graph(
 // Extended Functionality
 // =============================================================================
 
-/// @brief Cosine similarity KNN (normalized Euclidean).
+/// @brief Cosine similarity KNN (normalized Euclidean) (Virtual Interface).
+///
+/// Generic implementation using ISparse base class.
+/// Works with any sparse matrix type but may have virtual call overhead.
 ///
 /// Computes KNN based on cosine similarity: sim(x,y) = <x,y> / (||x|| * ||y||)
 ///
 /// Equivalent to Euclidean KNN on L2-normalized vectors, but computed directly
 /// on unnormalized data.
 ///
-/// @param matrix Input sparse matrix (CSR format)
+/// @param matrix CSR sparse matrix (via ISparse interface)
 /// @param k Number of neighbors to find
 /// @param out_indices Output neighbor indices [size = n_cells x k]
 /// @param out_similarities Output cosine similarities [size = n_cells x k]
 template <typename T>
 void knn_cosine(
-    const CSRMatrix<T>& matrix,
+    const ICSR<T>& matrix,
     Size k,
     MutableSpan<Index> out_indices,
     MutableSpan<T> out_similarities
 ) {
-    const Index R = matrix.rows;
+    const Index R = matrix.rows();
+    const Size N = static_cast<Size>(R);
+    
+    SCL_CHECK_ARG(k >= 1 && k < N, "KNN: k must be in range [1, n_cells)");
+    SCL_CHECK_DIM(out_indices.size == N * k, "KNN: Indices output size mismatch");
+    SCL_CHECK_DIM(out_similarities.size == N * k, "KNN: Similarities output size mismatch");
+
+    // Precompute norms
+    std::vector<T> norms(N);
+    
+    scl::threading::parallel_for(0, N, [&](size_t i) {
+        Index row_idx = static_cast<Index>(i);
+        auto vals = matrix.primary_values(row_idx);
+        
+        namespace s = scl::simd;
+        const s::Tag d;
+        const size_t lanes = s::lanes();
+        
+        auto v_sum = s::Zero(d);
+        size_t k_idx = 0;
+        
+        for (; k_idx + lanes <= vals.size; k_idx += lanes) {
+            auto v = s::Load(d, vals.ptr + k_idx);
+            v_sum = s::MulAdd(v, v, v_sum);
+        }
+        
+        T sum_sq = s::GetLane(s::SumOfLanes(d, v_sum));
+        
+        for (; k_idx < vals.size; ++k_idx) {
+            T val = vals[k_idx];
+            sum_sq += val * val;
+        }
+        
+        norms[i] = std::sqrt(sum_sq);
+    });
+
+    // Compute similarities + Top-K
+    constexpr size_t CHUNK_SIZE = 64;
+    const size_t n_chunks = (N + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+    scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
+        std::vector<T> sim_buffer(N);
+        std::vector<Index> idx_buffer(N);
+        
+        for (Size j = 0; j < N; ++j) {
+            idx_buffer[j] = static_cast<Index>(j);
+        }
+
+        size_t i_start = chunk_idx * CHUNK_SIZE;
+        size_t i_end = std::min(N, i_start + CHUNK_SIZE);
+
+        for (size_t i = i_start; i < i_end; ++i) {
+            const Index row_i = static_cast<Index>(i);
+            auto idx_i = matrix.primary_indices(row_i);
+            auto val_i = matrix.primary_values(row_i);
+            const T norm_i = norms[i];
+
+            // Compute cosine similarities
+            for (Size j = 0; j < N; ++j) {
+                if (SCL_UNLIKELY(i == j)) {
+                    sim_buffer[j] = static_cast<T>(1.0);  // Self-similarity
+                    continue;
+                }
+
+                const Index row_j = static_cast<Index>(j);
+                auto idx_j = matrix.primary_indices(row_j);
+                auto val_j = matrix.primary_values(row_j);
+
+                T dot = scl::kernel::gram::detail::dot_product(
+                    idx_i.ptr, val_i.ptr, idx_i.size,
+                    idx_j.ptr, val_j.ptr, idx_j.size
+                );
+
+                // Cosine similarity: <x,y> / (||x|| * ||y||)
+                T denom = norm_i * norms[j];
+                T sim = (denom > static_cast<T>(0.0)) ? (dot / denom) : static_cast<T>(0.0);
+                
+                sim_buffer[j] = sim;
+            }
+
+            // Select Top-K (largest similarities)
+            // Use negative similarity for partial_sort (wants smallest)
+            for (Size j = 0; j < N; ++j) {
+                sim_buffer[j] = -sim_buffer[j];
+            }
+
+            const Size search_k = k + 1;
+            detail::partial_argsort(
+                idx_buffer.data(), 
+                sim_buffer.data(), 
+                N, 
+                search_k
+            );
+
+            // Write output (skip self, restore positive similarity)
+            Size written = 0;
+            for (Size r = 0; r < search_k && written < k; ++r) {
+                Index neighbor = idx_buffer[r];
+                if (neighbor == row_i) continue;
+
+                Size out_idx = i * k + written;
+                out_indices[out_idx] = neighbor;
+                out_similarities[out_idx] = -sim_buffer[neighbor];  // Restore sign
+                written++;
+            }
+        }
+    });
+}
+
+/// @brief Cosine similarity KNN (normalized Euclidean) (Concept-based, Optimized).
+///
+/// High-performance implementation for CSRLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
+///
+/// Computes KNN based on cosine similarity: sim(x,y) = <x,y> / (||x|| * ||y||)
+///
+/// Equivalent to Euclidean KNN on L2-normalized vectors, but computed directly
+/// on unnormalized data.
+///
+/// @tparam MatrixT Any CSR-like matrix type (CustomSparse or VirtualSparse)
+/// @param matrix Input sparse matrix (CSR format)
+/// @param k Number of neighbors to find
+/// @param out_indices Output neighbor indices [size = n_cells x k]
+/// @param out_similarities Output cosine similarities [size = n_cells x k]
+template <CSRLike MatrixT>
+void knn_cosine(
+    const MatrixT& matrix,
+    Size k,
+    MutableSpan<Index> out_indices,
+    MutableSpan<typename MatrixT::ValueType> out_similarities
+) {
+    using T = typename MatrixT::ValueType;
+    const Index R = scl::rows(matrix);
     const Size N = static_cast<Size>(R);
     
     SCL_CHECK_ARG(k >= 1 && k < N, "KNN: k must be in range [1, n_cells)");
@@ -672,19 +1021,20 @@ void symmetrize_graph(
 /// @param k Number of neighbors
 /// @param out_indices Output indices into reference [size = n_query x k]
 /// @param out_distances Output distances [size = n_query x k]
-template <typename T>
+template <CSRLike RefMatrixT, CSRLike QueryMatrixT>
 void knn_query(
-    const CSRMatrix<T>& reference,
-    const CSRMatrix<T>& query,
+    const RefMatrixT& reference,
+    const QueryMatrixT& query,
     Size k,
     MutableSpan<Index> out_indices,
-    MutableSpan<T> out_distances
+    MutableSpan<typename RefMatrixT::ValueType> out_distances
 ) {
-    const Size N_ref = static_cast<Size>(reference.rows);
-    const Size N_query = static_cast<Size>(query.rows);
+    using T = typename RefMatrixT::ValueType;
+    const Size N_ref = static_cast<Size>(scl::rows(reference));
+    const Size N_query = static_cast<Size>(scl::rows(query));
     
     SCL_CHECK_ARG(k >= 1 && k <= N_ref, "KNN Query: k out of range");
-    SCL_CHECK_DIM(reference.cols == query.cols, "KNN Query: Feature dimension mismatch");
+    SCL_CHECK_DIM(scl::cols(reference) == scl::cols(query), "KNN Query: Feature dimension mismatch");
     SCL_CHECK_DIM(out_indices.size == N_query * k, "KNN Query: Indices size mismatch");
     SCL_CHECK_DIM(out_distances.size == N_query * k, "KNN Query: Distances size mismatch");
 

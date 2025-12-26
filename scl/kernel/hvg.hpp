@@ -95,14 +95,214 @@ SCL_FORCE_INLINE void select_top_k(
 // Method 1: Dispersion-Based (CellRanger/Seurat)
 // =============================================================================
 
-/// @brief Select HVGs using dispersion (variance/mean) ranking (CSC version).
+namespace detail {
+
+/// @brief Base implementation using ISparse interface (CSC version).
+///
+/// Works with any sparse matrix type that inherits from ICSC.
+/// This is the fallback for custom types that use virtual inheritance.
+///
+/// @param matrix Input ICSC matrix (cells x genes)
+/// @param n_top Number of HVGs to select
+/// @param out_indices Output: Indices of selected genes [size >= n_top]
+/// @param out_mask Output: Binary mask [size = n_genes]
+/// @param out_dispersions Output: Dispersion values [size = n_genes]
+template <typename T>
+void select_by_dispersion_base_csc(
+    const ICSC<T>& matrix,
+    Size n_top,
+    MutableSpan<Index> out_indices,
+    MutableSpan<uint8_t> out_mask,
+    MutableSpan<Real> out_dispersions
+) {
+    const Index n_genes = matrix.cols();
+    
+    SCL_CHECK_DIM(out_dispersions.size == static_cast<Size>(n_genes),
+                  "HVG: Dispersions size mismatch");
+    
+    // Compute statistics using virtual interface
+    std::vector<Real> means(n_genes);
+    std::vector<Real> vars(n_genes);
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(n_genes), [&](size_t j) {
+        Index col_idx = static_cast<Index>(j);
+        auto col_vals = matrix.col_values(col_idx);
+        Index len = matrix.col_length(col_idx);
+        
+        if (len == 0) {
+            means[j] = 0.0;
+            vars[j] = 0.0;
+            return;
+        }
+        
+        // Compute mean
+        Real sum = 0.0;
+        for (Index k = 0; k < len; ++k) {
+            sum += static_cast<Real>(col_vals[k]);
+        }
+        Real mean = sum / static_cast<Real>(matrix.rows());
+        means[j] = mean;
+        
+        // Compute variance
+        Real var_sum = 0.0;
+        for (Index k = 0; k < len; ++k) {
+            Real diff = static_cast<Real>(col_vals[k]) - mean;
+            var_sum += diff * diff;
+        }
+        // Include zeros in variance calculation
+        Real n_zeros = static_cast<Real>(matrix.rows() - len);
+        var_sum += n_zeros * mean * mean;
+        vars[j] = var_sum / static_cast<Real>(matrix.rows() - 1);
+    });
+    
+    // Compute dispersion
+    scl::kernel::feature::dispersion(
+        {means.data(), static_cast<Size>(n_genes)},
+        {vars.data(), static_cast<Size>(n_genes)},
+        out_dispersions
+    );
+    
+    // Select top-K
+    select_top_k(
+        Span<const Real>(out_dispersions.ptr, out_dispersions.size), 
+        n_top, 
+        out_indices, 
+        out_mask
+    );
+}
+
+/// @brief Base implementation using ISparse interface (CSR version).
+///
+/// @param matrix Input ICSR matrix (samples x features)
+/// @param n_top Number of highly variable samples to select
+/// @param out_indices Output: Indices of selected samples [size >= n_top]
+/// @param out_mask Output: Binary mask [size = n_samples]
+/// @param out_dispersions Output: Dispersion values [size = n_samples]
+template <typename T>
+void select_by_dispersion_base_csr(
+    const ICSR<T>& matrix,
+    Size n_top,
+    MutableSpan<Index> out_indices,
+    MutableSpan<uint8_t> out_mask,
+    MutableSpan<Real> out_dispersions
+) {
+    const Index n_samples = matrix.rows();
+    
+    SCL_CHECK_DIM(out_dispersions.size == static_cast<Size>(n_samples),
+                  "HVG: Dispersions size mismatch");
+    
+    // Compute statistics using virtual interface
+    std::vector<Real> means(n_samples);
+    std::vector<Real> vars(n_samples);
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(n_samples), [&](size_t i) {
+        Index row_idx = static_cast<Index>(i);
+        auto row_vals = matrix.row_values(row_idx);
+        Index len = matrix.row_length(row_idx);
+        
+        if (len == 0) {
+            means[i] = 0.0;
+            vars[i] = 0.0;
+            return;
+        }
+        
+        // Compute mean
+        Real sum = 0.0;
+        for (Index k = 0; k < len; ++k) {
+            sum += static_cast<Real>(row_vals[k]);
+        }
+        Real mean = sum / static_cast<Real>(matrix.cols());
+        means[i] = mean;
+        
+        // Compute variance
+        Real var_sum = 0.0;
+        for (Index k = 0; k < len; ++k) {
+            Real diff = static_cast<Real>(row_vals[k]) - mean;
+            var_sum += diff * diff;
+        }
+        Real n_zeros = static_cast<Real>(matrix.cols() - len);
+        var_sum += n_zeros * mean * mean;
+        vars[i] = var_sum / static_cast<Real>(matrix.cols() - 1);
+    });
+    
+    // Compute dispersion
+    scl::kernel::feature::dispersion(
+        {means.data(), static_cast<Size>(n_samples)},
+        {vars.data(), static_cast<Size>(n_samples)},
+        out_dispersions
+    );
+    
+    // Select top-K
+    select_top_k(
+        Span<const Real>(out_dispersions.ptr, out_dispersions.size), 
+        n_top, 
+        out_indices, 
+        out_mask
+    );
+}
+
+} // namespace detail
+
+// =============================================================================
+// Public Base Interface (ISparse/ICSC/ICSR)
+// =============================================================================
+
+/// @brief Select HVGs using dispersion ranking (ICSC base interface).
+///
+/// Works with any matrix type that inherits from ICSC.
+/// This is the base implementation for virtual inheritance.
+///
+/// @param matrix Input ICSC matrix (cells x genes)
+/// @param n_top Number of HVGs to select
+/// @param out_indices Output: Indices of selected genes [size >= n_top]
+/// @param out_mask Output: Binary mask [size = n_genes]
+/// @param out_dispersions Output: Dispersion values [size = n_genes]
+template <typename T>
+void select_by_dispersion(
+    const ICSC<T>& matrix,
+    Size n_top,
+    MutableSpan<Index> out_indices,
+    MutableSpan<uint8_t> out_mask,
+    MutableSpan<Real> out_dispersions
+) {
+    detail::select_by_dispersion_base_csc(matrix, n_top, out_indices, out_mask, out_dispersions);
+}
+
+/// @brief Select HVGs using dispersion ranking (ICSR base interface).
+///
+/// Works with any matrix type that inherits from ICSR.
+///
+/// @param matrix Input ICSR matrix (samples x features)
+/// @param n_top Number of highly variable samples to select
+/// @param out_indices Output: Indices of selected samples [size >= n_top]
+/// @param out_mask Output: Binary mask [size = n_samples]
+/// @param out_dispersions Output: Dispersion values [size = n_samples]
+template <typename T>
+void select_by_dispersion(
+    const ICSR<T>& matrix,
+    Size n_top,
+    MutableSpan<Index> out_indices,
+    MutableSpan<uint8_t> out_mask,
+    MutableSpan<Real> out_dispersions
+) {
+    detail::select_by_dispersion_base_csr(matrix, n_top, out_indices, out_mask, out_dispersions);
+}
+
+// =============================================================================
+// Layer 2: Concept-Based (CSCLike/CSRLike, Optimized for Custom/Virtual)
+// =============================================================================
+
+/// @brief Select HVGs using dispersion (variance/mean) ranking (Concept-based, Optimized, CSC).
+///
+/// High-performance implementation for CSCLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
 ///
 /// Algorithm:
 /// 1. Compute mean and variance per gene
 /// 2. Compute dispersion = variance / mean
 /// 3. Select top-K genes by dispersion
 ///
-/// @tparam MatrixT Any CSC-like matrix type
+/// @tparam MatrixT Any CSC-like matrix type (CustomSparse or VirtualSparse)
 /// @param matrix Input CSC-like matrix (cells x genes)
 /// @param n_top Number of HVGs to select
 /// @param out_indices Output: Indices of selected genes [size >= n_top]
@@ -116,12 +316,171 @@ void select_by_dispersion(
     MutableSpan<uint8_t> out_mask,
     MutableSpan<Real> out_dispersions
 ) {
+    const Index n_genes = scl::cols(matrix);
+    
+    SCL_CHECK_DIM(out_dispersions.size == static_cast<Size>(n_genes),
+                  "HVG: Dispersions size mismatch");
+    
+    // Compute statistics using unified interface (works for both Custom and Virtual)
+    std::vector<Real> means(n_genes);
+    std::vector<Real> vars(n_genes);
+    
+    scl::kernel::feature::standard_moments(
+        matrix,
+        {means.data(), static_cast<Size>(n_genes)},
+        {vars.data(), static_cast<Size>(n_genes)}
+    );
+    
+    // Compute dispersion
+    scl::kernel::feature::dispersion(
+        {means.data(), static_cast<Size>(n_genes)},
+        {vars.data(), static_cast<Size>(n_genes)},
+        out_dispersions
+    );
+    
+    // Select top-K
+    select_top_k(
+        Span<const Real>(out_dispersions.ptr, out_dispersions.size), 
+        n_top, 
+        out_indices, 
+        out_mask
+    );
+}
+
+/// @brief Select HVGs using dispersion ranking (Concept-based, Optimized, CSR).
+///
+/// High-performance implementation for CSRLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
+///
+/// @tparam MatrixT Any CSR-like matrix type (CustomSparse or VirtualSparse)
+/// @param matrix Input CSR-like matrix (samples x features)
+/// @param n_top Number of highly variable samples to select
+/// @param out_indices Output: Indices of selected samples [size >= n_top]
+/// @param out_mask Output: Binary mask [size = n_samples]
+/// @param out_dispersions Output: Dispersion values [size = n_samples]
+template <CSRLike MatrixT>
+void select_by_dispersion(
+    const MatrixT& matrix,
+    Size n_top,
+    MutableSpan<Index> out_indices,
+    MutableSpan<uint8_t> out_mask,
+    MutableSpan<Real> out_dispersions
+) {
+    const Index n_samples = scl::rows(matrix);
+    
+    SCL_CHECK_DIM(out_dispersions.size == static_cast<Size>(n_samples),
+                  "HVG: Dispersions size mismatch");
+    
+    // Compute statistics using unified interface
+    std::vector<Real> means(n_samples);
+    std::vector<Real> vars(n_samples);
+    
+    scl::kernel::feature::standard_moments(
+        matrix,
+        {means.data(), static_cast<Size>(n_samples)},
+        {vars.data(), static_cast<Size>(n_samples)}
+    );
+    
+    // Compute dispersion
+    scl::kernel::feature::dispersion(
+        {means.data(), static_cast<Size>(n_samples)},
+        {vars.data(), static_cast<Size>(n_samples)},
+        out_dispersions
+    );
+    
+    // Select top-K
+    select_top_k(
+        Span<const Real>(out_dispersions.ptr, out_dispersions.size), 
+        n_top, 
+        out_indices, 
+        out_mask
+    );
+}
+
+// =============================================================================
+// Specialized Implementations (CustomSparseLike/VirtualSparseLike, Optional)
+// =============================================================================
+//
+// Note: The unified CSCLike/CSRLike versions above work for both Custom and Virtual.
+// These specialized versions are kept for backward compatibility and potential
+// future optimizations if performance profiling shows significant differences.
+// =============================================================================
+
+/// @brief Select HVGs using dispersion (variance/mean) ranking (Custom CSC version).
+///
+/// Specialized for CustomSparseLike matrices (contiguous storage).
+/// Uses optimized feature::standard_moments for better performance.
+///
+/// @tparam MatrixT Any CustomCSC-like matrix type
+/// @param matrix Input CSC-like matrix (cells x genes)
+/// @param n_top Number of HVGs to select
+/// @param out_indices Output: Indices of selected genes [size >= n_top]
+/// @param out_mask Output: Binary mask [size = n_genes]
+/// @param out_dispersions Output: Dispersion values [size = n_genes]
+template <CustomCSCLike MatrixT>
+void select_by_dispersion(
+    const MatrixT& matrix,
+    Size n_top,
+    MutableSpan<Index> out_indices,
+    MutableSpan<uint8_t> out_mask,
+    MutableSpan<Real> out_dispersions
+) {
     const Index n_genes = matrix.cols;
     
     SCL_CHECK_DIM(out_dispersions.size == static_cast<Size>(n_genes),
                   "HVG: Dispersions size mismatch");
     
-    // Compute statistics
+    // Compute statistics (optimized for contiguous storage)
+    std::vector<Real> means(n_genes);
+    std::vector<Real> vars(n_genes);
+    
+    scl::kernel::feature::standard_moments(
+        matrix,
+        {means.data(), static_cast<Size>(n_genes)},
+        {vars.data(), static_cast<Size>(n_genes)}
+    );
+    
+    // Compute dispersion
+    scl::kernel::feature::dispersion(
+        {means.data(), static_cast<Size>(n_genes)},
+        {vars.data(), static_cast<Size>(n_genes)},
+        out_dispersions
+    );
+    
+    // Select top-K
+    select_top_k(
+        Span<const Real>(out_dispersions.ptr, out_dispersions.size), 
+        n_top, 
+        out_indices, 
+        out_mask
+    );
+}
+
+/// @brief Select HVGs using dispersion ranking (Virtual CSC version).
+///
+/// Optimized for VirtualSparseLike matrices (discontiguous storage).
+/// Uses unified SparseLike interface for compatibility.
+///
+/// @tparam MatrixT Any VirtualCSC-like matrix type
+/// @param matrix Input Virtual CSC matrix (cells x genes)
+/// @param n_top Number of HVGs to select
+/// @param out_indices Output: Indices of selected genes [size >= n_top]
+/// @param out_mask Output: Binary mask [size = n_genes]
+/// @param out_dispersions Output: Dispersion values [size = n_genes]
+template <VirtualCSCLike MatrixT>
+void select_by_dispersion(
+    const MatrixT& matrix,
+    Size n_top,
+    MutableSpan<Index> out_indices,
+    MutableSpan<uint8_t> out_mask,
+    MutableSpan<Real> out_dispersions
+) {
+    const Index n_genes = matrix.cols;
+    
+    SCL_CHECK_DIM(out_dispersions.size == static_cast<Size>(n_genes),
+                  "HVG: Dispersions size mismatch");
+    
+    // Virtual matrices can use feature::standard_moments (supports CSCLike)
     std::vector<Real> means(n_genes);
     std::vector<Real> vars(n_genes);
     
@@ -149,13 +508,15 @@ void select_by_dispersion(
 
 /// @brief Select HVGs using dispersion ranking (CSR version).
 ///
-/// @tparam MatrixT Any CSR-like matrix type
+/// This overload works with CustomSparseLike matrices (contiguous storage).
+///
+/// @tparam MatrixT Any CustomCSR-like matrix type
 /// @param matrix Input CSR-like matrix (samples x features)
 /// @param n_top Number of highly variable samples to select
 /// @param out_indices Output: Indices of selected samples [size >= n_top]
 /// @param out_mask Output: Binary mask [size = n_samples]
 /// @param out_dispersions Output: Dispersion values [size = n_samples]
-template <CSRLike MatrixT>
+template <CustomCSRLike MatrixT>
 void select_by_dispersion(
     const MatrixT& matrix,
     Size n_top,
@@ -168,7 +529,57 @@ void select_by_dispersion(
     SCL_CHECK_DIM(out_dispersions.size == static_cast<Size>(n_samples),
                   "HVG: Dispersions size mismatch");
     
-    // Compute statistics
+    // Compute statistics (optimized for contiguous storage)
+    std::vector<Real> means(n_samples);
+    std::vector<Real> vars(n_samples);
+    
+    scl::kernel::feature::standard_moments(
+        matrix,
+        {means.data(), static_cast<Size>(n_samples)},
+        {vars.data(), static_cast<Size>(n_samples)}
+    );
+    
+    // Compute dispersion
+    scl::kernel::feature::dispersion(
+        {means.data(), static_cast<Size>(n_samples)},
+        {vars.data(), static_cast<Size>(n_samples)},
+        out_dispersions
+    );
+    
+    // Select top-K
+    select_top_k(
+        Span<const Real>(out_dispersions.ptr, out_dispersions.size), 
+        n_top, 
+        out_indices, 
+        out_mask
+    );
+}
+
+/// @brief Select HVGs using dispersion ranking (Virtual CSR version).
+///
+/// Optimized for VirtualSparseLike matrices (discontiguous storage).
+/// Uses unified SparseLike interface for compatibility.
+///
+/// @tparam MatrixT Any VirtualCSR-like matrix type
+/// @param matrix Input Virtual CSR matrix (samples x features)
+/// @param n_top Number of highly variable samples to select
+/// @param out_indices Output: Indices of selected samples [size >= n_top]
+/// @param out_mask Output: Binary mask [size = n_samples]
+/// @param out_dispersions Output: Dispersion values [size = n_samples]
+template <VirtualCSRLike MatrixT>
+void select_by_dispersion(
+    const MatrixT& matrix,
+    Size n_top,
+    MutableSpan<Index> out_indices,
+    MutableSpan<uint8_t> out_mask,
+    MutableSpan<Real> out_dispersions
+) {
+    const Index n_samples = matrix.rows;
+    
+    SCL_CHECK_DIM(out_dispersions.size == static_cast<Size>(n_samples),
+                  "HVG: Dispersions size mismatch");
+    
+    // Virtual matrices can use feature::standard_moments (supports CSRLike)
     std::vector<Real> means(n_samples);
     std::vector<Real> vars(n_samples);
     

@@ -165,22 +165,75 @@ SCL_FORCE_INLINE void softmax_unit(
 // Public API (Chunked Parallelism)
 // =============================================================================
 
-/// @brief Row-wise Softmax for Generic CSR-like Matrices.
+// =============================================================================
+// Layer 1: Virtual Interface (ISparse-based, Generic but Slower)
+// =============================================================================
+
+/// @brief Row-wise Softmax (Virtual Interface, CSR).
+///
+/// Generic implementation using ISparse base class.
+/// Works with any sparse matrix type but may have virtual call overhead.
 ///
 /// Each row is independently normalized to a probability distribution.
 /// Output is dense (row-major).
 ///
 /// Uses chunked parallelism with workspace reuse to minimize allocation overhead.
 ///
-/// @tparam MatrixT Any CSR-like matrix type
+/// @param matrix CSR sparse matrix (via ISparse interface)
+/// @param output Output buffer (size = rows × cols)
+template <typename T>
+void softmax(const ICSR<T>& matrix, MutableSpan<T> output) {
+    const Index R = matrix.rows();
+    const Index C = matrix.cols();
+    SCL_CHECK_DIM(output.size == static_cast<Size>(R) * static_cast<Size>(C), 
+                  "Softmax: Output size mismatch");
+
+    constexpr size_t CHUNK_SIZE = 32; 
+    const size_t n_chunks = (static_cast<size_t>(R) + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+    scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
+        std::vector<T> workspace;
+        workspace.reserve(256);
+
+        size_t i_start = chunk_idx * CHUNK_SIZE;
+        size_t i_end = std::min(static_cast<size_t>(R), i_start + CHUNK_SIZE);
+
+        for (size_t i = i_start; i < i_end; ++i) {
+            Index row_idx = static_cast<Index>(i);
+            detail::softmax_unit<T>(
+                matrix.primary_values(row_idx),
+                matrix.primary_indices(row_idx),
+                output.ptr + (i * static_cast<Size>(C)),
+                C,
+                workspace
+            );
+        }
+    });
+}
+
+// =============================================================================
+// Layer 2: Concept-Based (CSRLike/CSCLike, Optimized for Custom/Virtual)
+// =============================================================================
+
+/// @brief Row-wise Softmax (Concept-based, Optimized, CSR).
+///
+/// High-performance implementation for CSRLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
+///
+/// Each row is independently normalized to a probability distribution.
+/// Output is dense (row-major).
+///
+/// Uses chunked parallelism with workspace reuse to minimize allocation overhead.
+///
+/// @tparam MatrixT Any CSR-like matrix type (CustomSparse or VirtualSparse)
 /// @param matrix Input CSR-like matrix
 /// @param output Output buffer (size = rows × cols)
 template <CSRLike MatrixT>
 void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
     using T = typename MatrixT::ValueType;
-    const Index R = matrix.rows;
-    const Index C = matrix.cols;
-    SCL_CHECK_DIM(output.size == static_cast<Size>(R * C), 
+    const Index R = scl::rows(matrix);
+    const Index C = scl::cols(matrix);
+    SCL_CHECK_DIM(output.size == static_cast<Size>(R) * static_cast<Size>(C), 
                   "Softmax: Output size mismatch");
 
     // Chunk size trade-off:
@@ -199,7 +252,7 @@ void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> out
         size_t i_end = std::min(static_cast<size_t>(R), i_start + CHUNK_SIZE);
 
         for (size_t i = i_start; i < i_end; ++i) {
-            detail::softmax_unit<typename MatrixT::ValueType>(
+            detail::softmax_unit<T>(
                 matrix.row_values(static_cast<Index>(i)),
                 matrix.row_indices(static_cast<Index>(i)),
                 output.ptr + (i * static_cast<Size>(C)),
@@ -210,20 +263,21 @@ void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> out
     });
 }
 
-/// @brief Column-wise Softmax for Generic CSC-like Matrices.
+/// @brief Column-wise Softmax (Virtual Interface, CSC).
+///
+/// Generic implementation using ISparse base class.
+/// Works with any sparse matrix type but may have virtual call overhead.
 ///
 /// Each column is independently normalized to a probability distribution.
 /// Output is dense (column-major).
 ///
-/// @tparam MatrixT Any CSC-like matrix type
-/// @param matrix Input CSC-like matrix
+/// @param matrix CSC sparse matrix (via ISparse interface)
 /// @param output Output buffer (size = rows × cols)
-template <CSCLike MatrixT>
-void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
-    using T = typename MatrixT::ValueType;
-    const Index R = matrix.rows;
-    const Index C = matrix.cols;
-    SCL_CHECK_DIM(output.size == static_cast<Size>(R * C), 
+template <typename T>
+void softmax(const ICSC<T>& matrix, MutableSpan<T> output) {
+    const Index R = matrix.rows();
+    const Index C = matrix.cols();
+    SCL_CHECK_DIM(output.size == static_cast<Size>(R) * static_cast<Size>(C), 
                   "Softmax: Output size mismatch");
 
     constexpr size_t CHUNK_SIZE = 32;
@@ -237,7 +291,49 @@ void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> out
         size_t j_end = std::min(static_cast<size_t>(C), j_start + CHUNK_SIZE);
 
         for (size_t j = j_start; j < j_end; ++j) {
-            detail::softmax_unit<typename MatrixT::ValueType>(
+            Index col_idx = static_cast<Index>(j);
+            detail::softmax_unit<T>(
+                matrix.primary_values(col_idx),
+                matrix.primary_indices(col_idx),
+                output.ptr + (j * static_cast<Size>(R)),
+                R,
+                workspace
+            );
+        }
+    });
+}
+
+/// @brief Column-wise Softmax (Concept-based, Optimized, CSC).
+///
+/// High-performance implementation for CSCLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
+///
+/// Each column is independently normalized to a probability distribution.
+/// Output is dense (column-major).
+///
+/// @tparam MatrixT Any CSC-like matrix type (CustomSparse or VirtualSparse)
+/// @param matrix Input CSC-like matrix
+/// @param output Output buffer (size = rows × cols)
+template <CSCLike MatrixT>
+void softmax(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
+    const Index R = scl::rows(matrix);
+    const Index C = scl::cols(matrix);
+    SCL_CHECK_DIM(output.size == static_cast<Size>(R) * static_cast<Size>(C), 
+                  "Softmax: Output size mismatch");
+
+    constexpr size_t CHUNK_SIZE = 32;
+    const size_t n_chunks = (static_cast<size_t>(C) + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+    scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
+        std::vector<T> workspace;
+        workspace.reserve(256);
+
+        size_t j_start = chunk_idx * CHUNK_SIZE;
+        size_t j_end = std::min(static_cast<size_t>(C), j_start + CHUNK_SIZE);
+
+        for (size_t j = j_start; j < j_end; ++j) {
+            detail::softmax_unit<T>(
                 matrix.col_values(static_cast<Index>(j)),
                 matrix.col_indices(static_cast<Index>(j)),
                 output.ptr + (j * static_cast<Size>(R)),

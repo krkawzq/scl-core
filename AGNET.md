@@ -16,11 +16,30 @@ We strictly enforce a "Human-in-the-Loop" architecture. Code is not just logic; 
 
 All public APIs, classes, functions, and important internal logic must use Doxygen-style triple-slash comments (`///`). Single-line comments (`//`) are acceptable for brief inline notes.
 
-**Format**: Plain Text Only (No Markdown/LaTeX)
+**Format**: Plain Text Only (STRICTLY No Markdown/LaTeX)
 
-* **NO Markdown Syntax**: Do NOT use `**bold**`, `` `code` ``, `# headers`, `- lists`, or ```` code blocks ````` in comments.
-* **NO LaTeX Syntax**: Do NOT use `$...$` for mathematical formulas. Write formulas in plain text (e.g., `sigma(z)_i = e^(z_i) / sum(e^(z_j))`).
-* **NO Owner Tags**: Do NOT include `[Owner: Human]` or `[Owner: AI]` markers in comments.
+**CRITICAL RULE**: Code comments and documentation MUST use plain text ONLY. Any use of Markdown or LaTeX syntax is STRICTLY FORBIDDEN.
+
+* **NO Markdown Syntax**:
+  * Do NOT use `**bold**` or `*italic*` - use UPPERCASE or "quotes" for emphasis
+  * Do NOT use `` `code` `` - just write code directly
+  * Do NOT use `# headers` - use section labels like "Section:" or separators
+  * Do NOT use `- lists` or `* lists` - use numbered lists with plain text (1., 2., 3.) or indent with spaces
+  * Do NOT use ```` code blocks ```` - describe code in plain text or show it directly
+  * Do NOT use `[links](url)` - write URLs directly
+
+* **NO LaTeX Syntax**:
+  * Do NOT use `$...$` or `$$...$$` for mathematical formulas
+  * Do NOT use `\frac{}{}`, `\sum`, `\int`, or any LaTeX commands
+  * Write formulas in plain text using ASCII characters:
+    * Good: `sigma(z)_i = e^(z_i) / sum(e^(z_j))`
+    * Good: `gradient = (y - y_pred) / n`
+    * Good: `distance = sqrt(sum((x_i - y_i)^2))`
+    * Bad: `$\sigma(z)_i = \frac{e^{z_i}}{\sum e^{z_j}}$`
+
+* **NO Special Tags**:
+  * Do NOT include `[Owner: Human]` or `[Owner: AI]` markers in comments
+  * Do NOT use `@human`, `@ai`, or similar ownership annotations
 
 **Comment Structure**:
 

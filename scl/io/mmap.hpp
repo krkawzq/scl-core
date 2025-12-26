@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scl/core/type.hpp"
+#include "scl/core/matrix.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 
@@ -65,8 +66,12 @@ namespace scl::io {
 /// - write_from(): Serial by design (no nested parallelism)
 ///
 /// @tparam T Element type (must be trivially copyable)
+///
+/// Satisfies ArrayLike concept for seamless integration with SCL utilities.
 template <typename T>
 class MappedArray {
+public:
+    using value_type = T;
 private:
     void* _ptr;
     Size _num_elements;
@@ -387,6 +392,14 @@ public:
         SCL_MMAP_ADVISE_SEQUENTIAL(_ptr, _byte_size);
     }
 };
+
+// =============================================================================
+// Concept Verification (Compile-Time Checks)
+// =============================================================================
+
+// Verify that MappedArray satisfies ArrayLike concept
+static_assert(ArrayLike<MappedArray<Real>>, "MappedArray must satisfy ArrayLike concept");
+static_assert(ArrayLike<MappedArray<Index>>, "MappedArray<Index> must satisfy ArrayLike concept");
 
 // =============================================================================
 // Type Aliases

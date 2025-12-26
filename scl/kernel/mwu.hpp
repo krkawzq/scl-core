@@ -436,10 +436,78 @@ SCL_FORCE_INLINE void mwu_test_impl(
 } // namespace detail
 
 // =============================================================================
-// Public API
+// Public Base Interface (ISparse/ICSR/ICSC)
 // =============================================================================
 
-/// @brief Mann-Whitney U test for each gene (CSC version).
+/// @brief Mann-Whitney U test for each gene (ICSC base interface).
+///
+/// Works with any matrix type that inherits from ICSC.
+///
+/// @param matrix Input ICSC matrix (cells x genes)
+/// @param group_ids Cell labels: 0=Group0, 1=Group1, other=ignored
+/// @param out_u_stats Output: U statistics [size = n_genes]
+/// @param out_p_values Output: P-values [size = n_genes]
+/// @param out_log2_fc Output: Log2 fold changes [size = n_genes]
+template <typename T>
+void mwu_test(
+    const ICSC<T>& matrix,
+    Span<const int32_t> group_ids,
+    MutableSpan<Real> out_u_stats,
+    MutableSpan<Real> out_p_values,
+    MutableSpan<Real> out_log2_fc
+) {
+    const Index n_genes = matrix.cols();
+    const Index n_cells = matrix.rows();
+    
+    SCL_CHECK_DIM(group_ids.size == static_cast<Size>(n_cells), 
+                  "MWU: group_ids size must match n_cells");
+    SCL_CHECK_DIM(out_u_stats.size == static_cast<Size>(n_genes), 
+                  "MWU: U stats output size mismatch");
+    SCL_CHECK_DIM(out_p_values.size == static_cast<Size>(n_genes), 
+                  "MWU: P-values output size mismatch");
+    SCL_CHECK_DIM(out_log2_fc.size == static_cast<Size>(n_genes), 
+                  "MWU: Log2FC output size mismatch");
+    
+    detail::mwu_test_impl(matrix, group_ids, out_u_stats, out_p_values, out_log2_fc);
+}
+
+/// @brief Mann-Whitney U test for each sample (ICSR base interface).
+///
+/// Works with any matrix type that inherits from ICSR.
+///
+/// @param matrix Input ICSR matrix (samples x features)
+/// @param group_ids Feature labels: 0=Group0, 1=Group1, other=ignored
+/// @param out_u_stats Output: U statistics [size = n_samples]
+/// @param out_p_values Output: P-values [size = n_samples]
+/// @param out_log2_fc Output: Log2 fold changes [size = n_samples]
+template <typename T>
+void mwu_test(
+    const ICSR<T>& matrix,
+    Span<const int32_t> group_ids,
+    MutableSpan<Real> out_u_stats,
+    MutableSpan<Real> out_p_values,
+    MutableSpan<Real> out_log2_fc
+) {
+    const Index n_samples = matrix.rows();
+    const Index n_features = matrix.cols();
+    
+    SCL_CHECK_DIM(group_ids.size == static_cast<Size>(n_features), 
+                  "MWU: group_ids size must match n_features");
+    SCL_CHECK_DIM(out_u_stats.size == static_cast<Size>(n_samples), 
+                  "MWU: U stats output size mismatch");
+    SCL_CHECK_DIM(out_p_values.size == static_cast<Size>(n_samples), 
+                  "MWU: P-values output size mismatch");
+    SCL_CHECK_DIM(out_log2_fc.size == static_cast<Size>(n_samples), 
+                  "MWU: Log2FC output size mismatch");
+    
+    detail::mwu_test_impl(matrix, group_ids, out_u_stats, out_p_values, out_log2_fc);
+}
+
+// =============================================================================
+// Efficient Implementations (CustomSparseLike & VirtualSparseLike)
+// =============================================================================
+
+/// @brief Mann-Whitney U test for each gene (CustomSparseLike & VirtualSparseLike).
 ///
 /// Optimized for sparse single-cell data.
 ///
@@ -472,7 +540,7 @@ void mwu_test(
     detail::mwu_test_impl(matrix, group_ids, out_u_stats, out_p_values, out_log2_fc);
 }
 
-/// @brief Mann-Whitney U test for each sample (CSR version).
+/// @brief Mann-Whitney U test for each sample (CustomSparseLike & VirtualSparseLike).
 ///
 /// Optimized for sparse data.
 ///

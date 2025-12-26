@@ -64,6 +64,91 @@ SCL_FORCE_INLINE void count_group_sizes(
 /// @param group_ids Row labels (size = matrix.rows).
 /// @param n_groups Number of groups.
 /// @param out_counts Output buffer (size = matrix.cols * n_groups).
+// =============================================================================
+// Layer 1: Virtual Interface (ISparse-based, Generic but Slower)
+// =============================================================================
+
+/// @brief Count non-zero elements per group (Virtual Interface, CSC).
+///
+/// Generic implementation using ISparse base class.
+template <typename T>
+SCL_FORCE_INLINE void group_count_nonzero(
+    const ICSC<T>& matrix,
+    Span<const int32_t> group_ids,
+    Size n_groups,
+    MutableSpan<Real> out_counts
+) {
+    SCL_CHECK_DIM(out_counts.size == static_cast<Size>(matrix.cols()) * n_groups, "Output buffer size mismatch");
+
+    // Initialize output to 0
+    scl::threading::parallel_for(0, out_counts.size, [&](size_t i) {
+        out_counts[i] = 0.0;
+    });
+
+    // Parallelize over columns (Gene-wise)
+    scl::threading::parallel_for(0, static_cast<size_t>(matrix.cols()), [&](size_t c) {
+        Index col_idx = static_cast<Index>(c);
+        auto indices = matrix.primary_indices(col_idx);
+        Index len = matrix.primary_length(col_idx);
+        
+        // Pointer to the start of this column's result block
+        Real* res_ptr = out_counts.ptr + (c * n_groups);
+
+        for (Index k = 0; k < len; ++k) {
+            Index row = indices[k];
+            int32_t g = group_ids[row];
+            
+            if (g >= 0 && static_cast<Size>(g) < n_groups) {
+                res_ptr[g] += 1.0;
+            }
+        }
+    });
+}
+
+/// @brief Count non-zero elements per group (Virtual Interface, CSR).
+///
+/// Generic implementation using ISparse base class.
+template <typename T>
+SCL_FORCE_INLINE void group_count_nonzero(
+    const ICSR<T>& matrix,
+    Span<const int32_t> group_ids,
+    Size n_groups,
+    MutableSpan<Real> out_counts
+) {
+    SCL_CHECK_DIM(out_counts.size == static_cast<Size>(matrix.rows()) * n_groups, "Output buffer size mismatch");
+
+    // Initialize output to 0
+    scl::threading::parallel_for(0, out_counts.size, [&](size_t i) {
+        out_counts[i] = 0.0;
+    });
+
+    // Parallelize over rows
+    scl::threading::parallel_for(0, static_cast<size_t>(matrix.rows()), [&](size_t r) {
+        Index row_idx = static_cast<Index>(r);
+        auto indices = matrix.primary_indices(row_idx);
+        Index len = matrix.primary_length(row_idx);
+        
+        Real* res_ptr = out_counts.ptr + (r * n_groups);
+
+        for (Index k = 0; k < len; ++k) {
+            Index col = indices[k];
+            int32_t g = group_ids[col];
+            
+            if (g >= 0 && static_cast<Size>(g) < n_groups) {
+                res_ptr[g] += 1.0;
+            }
+        }
+    });
+}
+
+// =============================================================================
+// Layer 2: Concept-Based (CSCLike/CSRLike, Optimized for Custom/Virtual)
+// =============================================================================
+
+/// @brief Count non-zero elements per group (Concept-based, Optimized, CSC).
+///
+/// High-performance implementation for CSCLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
 template <CSCLike MatrixT>
 SCL_FORCE_INLINE void group_count_nonzero(
     const MatrixT& matrix,
@@ -71,7 +156,7 @@ SCL_FORCE_INLINE void group_count_nonzero(
     Size n_groups,
     MutableSpan<Real> out_counts // Using Real for compatibility with downstream
 ) {
-    SCL_CHECK_DIM(out_counts.size == matrix.cols * n_groups, "Output buffer size mismatch");
+    SCL_CHECK_DIM(out_counts.size == static_cast<Size>(scl::cols(matrix)) * n_groups, "Output buffer size mismatch");
 
     // Initialize output to 0
     scl::threading::parallel_for(0, out_counts.size, [&](size_t i) {
@@ -81,10 +166,10 @@ SCL_FORCE_INLINE void group_count_nonzero(
     // Parallelize over columns (Gene-wise)
     // No atomics needed because each thread owns a generic slice of output:
     // [c * n_groups, (c+1) * n_groups]
-    scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
+    scl::threading::parallel_for(0, static_cast<size_t>(scl::cols(matrix)), [&](size_t c) {
         Index col_idx = static_cast<Index>(c);
-        auto indices = matrix.col_indices(col_idx);
-        Index len = matrix.col_length(col_idx);
+        auto indices = scl::primary_indices(matrix, col_idx);
+        Index len = scl::primary_length(matrix, col_idx);
         
         // Pointer to the start of this column's result block
         Real* res_ptr = out_counts.ptr + (c * n_groups);
@@ -114,6 +199,9 @@ SCL_FORCE_INLINE void group_count_nonzero(
 /// @param out_means Output buffer (size = cols * n_groups).
 /// @param include_zeros If true, denominator is group_size (implicit zeros included).
 ///                      If false, denominator is count of non-zeros.
+/// @brief Calculate group means (Concept-based, Optimized, CSC).
+///
+/// High-performance implementation for CSCLike matrices.
 template <CSCLike MatrixT>
 SCL_FORCE_INLINE void group_mean(
     const MatrixT& matrix,
@@ -123,7 +211,7 @@ SCL_FORCE_INLINE void group_mean(
     MutableSpan<Real> out_means,
     bool include_zeros = true
 ) {
-    SCL_CHECK_DIM(out_means.size == matrix.cols * n_groups, "Output buffer size mismatch");
+    SCL_CHECK_DIM(out_means.size == static_cast<Size>(scl::cols(matrix)) * n_groups, "Output buffer size mismatch");
     if (include_zeros) {
         SCL_CHECK_DIM(group_sizes.size == n_groups, "Group sizes required for include_zeros=true");
     }
@@ -136,11 +224,11 @@ SCL_FORCE_INLINE void group_mean(
 
     // 2. Accumulate Sums (Parallel over Columns)
     // Note: We use out_means as the 'Sum' accumulator temporarily
-    scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
+    scl::threading::parallel_for(0, static_cast<size_t>(scl::cols(matrix)), [&](size_t c) {
         Index col_idx = static_cast<Index>(c);
-        auto indices = matrix.col_indices(col_idx);
-        auto values  = matrix.col_values(col_idx);
-        Index len = matrix.col_length(col_idx);
+        auto indices = scl::primary_indices(matrix, col_idx);
+        auto values  = scl::primary_values(matrix, col_idx);
+        Index len = scl::primary_length(matrix, col_idx);
         
         Real* res_ptr = out_means.ptr + (c * n_groups);
         
@@ -192,6 +280,9 @@ SCL_FORCE_INLINE void group_mean(
 ///
 /// @param out_means Output Sum (initially), then Mean.
 /// @param out_vars  Output SumSq (initially), then Variance.
+/// @brief Calculate Mean and Variance (Concept-based, Optimized, CSC).
+///
+/// High-performance implementation for CSCLike matrices.
 template <CSCLike MatrixT>
 SCL_FORCE_INLINE void group_stats(
     const MatrixT& matrix,
@@ -203,7 +294,7 @@ SCL_FORCE_INLINE void group_stats(
     int ddof = 1,
     bool include_zeros = true
 ) {
-    const Size total_size = matrix.cols * n_groups;
+    const Size total_size = static_cast<Size>(scl::cols(matrix)) * n_groups;
     SCL_CHECK_DIM(out_means.size == total_size, "Means buffer size mismatch");
     SCL_CHECK_DIM(out_vars.size == total_size, "Vars buffer size mismatch");
 
@@ -214,11 +305,11 @@ SCL_FORCE_INLINE void group_stats(
     });
 
     // 2. Accumulate Sum and SumSq
-    scl::threading::parallel_for(0, matrix.cols, [&](size_t c) {
+    scl::threading::parallel_for(0, static_cast<size_t>(scl::cols(matrix)), [&](size_t c) {
         Index col_idx = static_cast<Index>(c);
-        auto indices = matrix.col_indices(col_idx);
-        auto values  = matrix.col_values(col_idx);
-        Index len = matrix.col_length(col_idx);
+        auto indices = scl::primary_indices(matrix, col_idx);
+        auto values  = scl::primary_values(matrix, col_idx);
+        Index len = scl::primary_length(matrix, col_idx);
         
         Real* mean_ptr = out_means.ptr + (c * n_groups);
         Real* var_ptr  = out_vars.ptr + (c * n_groups);
@@ -280,6 +371,9 @@ SCL_FORCE_INLINE void group_stats(
 /// @param group_ids Column labels (size = matrix.cols).
 /// @param n_groups Number of groups.
 /// @param out_counts Output buffer (size = matrix.rows * n_groups).
+/// @brief Count non-zero elements per group (Concept-based, Optimized, CSR).
+///
+/// High-performance implementation for CSRLike matrices.
 template <CSRLike MatrixT>
 SCL_FORCE_INLINE void group_count_nonzero(
     const MatrixT& matrix,
@@ -287,7 +381,7 @@ SCL_FORCE_INLINE void group_count_nonzero(
     Size n_groups,
     MutableSpan<Real> out_counts
 ) {
-    SCL_CHECK_DIM(out_counts.size == matrix.rows * n_groups, "Output buffer size mismatch");
+    SCL_CHECK_DIM(out_counts.size == static_cast<Size>(scl::rows(matrix)) * n_groups, "Output buffer size mismatch");
 
     // Initialize output to 0
     scl::threading::parallel_for(0, out_counts.size, [&](size_t i) {
@@ -295,10 +389,10 @@ SCL_FORCE_INLINE void group_count_nonzero(
     });
 
     // Parallelize over rows
-    scl::threading::parallel_for(0, matrix.rows, [&](size_t r) {
+    scl::threading::parallel_for(0, static_cast<size_t>(scl::rows(matrix)), [&](size_t r) {
         Index row_idx = static_cast<Index>(r);
-        auto indices = matrix.row_indices(row_idx);
-        Index len = matrix.row_length(row_idx);
+        auto indices = scl::primary_indices(matrix, row_idx);
+        Index len = scl::primary_length(matrix, row_idx);
         
         Real* res_ptr = out_counts.ptr + (r * n_groups);
 
@@ -321,6 +415,9 @@ SCL_FORCE_INLINE void group_count_nonzero(
 /// @param group_sizes Total size of each group.
 /// @param out_means Output buffer (size = rows * n_groups).
 /// @param include_zeros If true, denominator is group_size.
+/// @brief Calculate group means (Concept-based, Optimized, CSR).
+///
+/// High-performance implementation for CSRLike matrices.
 template <CSRLike MatrixT>
 SCL_FORCE_INLINE void group_mean(
     const MatrixT& matrix,
@@ -330,7 +427,7 @@ SCL_FORCE_INLINE void group_mean(
     MutableSpan<Real> out_means,
     bool include_zeros = true
 ) {
-    SCL_CHECK_DIM(out_means.size == matrix.rows * n_groups, "Output buffer size mismatch");
+    SCL_CHECK_DIM(out_means.size == static_cast<Size>(scl::rows(matrix)) * n_groups, "Output buffer size mismatch");
     if (include_zeros) {
         SCL_CHECK_DIM(group_sizes.size == n_groups, "Group sizes required for include_zeros=true");
     }
@@ -341,11 +438,11 @@ SCL_FORCE_INLINE void group_mean(
     });
 
     // Accumulate sums
-    scl::threading::parallel_for(0, matrix.rows, [&](size_t r) {
+    scl::threading::parallel_for(0, static_cast<size_t>(scl::rows(matrix)), [&](size_t r) {
         Index row_idx = static_cast<Index>(r);
-        auto indices = matrix.row_indices(row_idx);
-        auto values  = matrix.row_values(row_idx);
-        Index len = matrix.row_length(row_idx);
+        auto indices = scl::primary_indices(matrix, row_idx);
+        auto values  = scl::primary_values(matrix, row_idx);
+        Index len = scl::primary_length(matrix, row_idx);
         
         Real* res_ptr = out_means.ptr + (r * n_groups);
         
@@ -384,6 +481,9 @@ SCL_FORCE_INLINE void group_mean(
 /// @param out_vars Output buffer (size = rows * n_groups).
 /// @param ddof Delta degrees of freedom.
 /// @param include_zeros If true, denominator includes all group members.
+/// @brief Calculate Mean and Variance (Concept-based, Optimized, CSR).
+///
+/// High-performance implementation for CSRLike matrices.
 template <CSRLike MatrixT>
 SCL_FORCE_INLINE void group_stats(
     const MatrixT& matrix,
@@ -395,7 +495,7 @@ SCL_FORCE_INLINE void group_stats(
     int ddof = 1,
     bool include_zeros = true
 ) {
-    const Size total_size = matrix.rows * n_groups;
+    const Size total_size = static_cast<Size>(scl::rows(matrix)) * n_groups;
     SCL_CHECK_DIM(out_means.size == total_size, "Means buffer size mismatch");
     SCL_CHECK_DIM(out_vars.size == total_size, "Vars buffer size mismatch");
 
@@ -406,11 +506,11 @@ SCL_FORCE_INLINE void group_stats(
     });
 
     // Accumulate Sum and SumSq
-    scl::threading::parallel_for(0, matrix.rows, [&](size_t r) {
+    scl::threading::parallel_for(0, static_cast<size_t>(scl::rows(matrix)), [&](size_t r) {
         Index row_idx = static_cast<Index>(r);
-        auto indices = matrix.row_indices(row_idx);
-        auto values  = matrix.row_values(row_idx);
-        Index len = matrix.row_length(row_idx);
+        auto indices = scl::primary_indices(matrix, row_idx);
+        auto values  = scl::primary_values(matrix, row_idx);
+        Index len = scl::primary_length(matrix, row_idx);
         
         Real* mean_ptr = out_means.ptr + (r * n_groups);
         Real* var_ptr  = out_vars.ptr + (r * n_groups);

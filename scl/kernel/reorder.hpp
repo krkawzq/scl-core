@@ -2,6 +2,7 @@
 
 #include "scl/core/type.hpp"
 #include "scl/core/matrix.hpp"
+#include "scl/core/sparse.hpp"
 #include "scl/core/sort.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
@@ -129,7 +130,9 @@ void permute_cols(
     Span<const Index> old_to_new_map,
     Index new_cols_dim = -1
 ) {
-    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(matrix.cols), 
+    const Index cols = scl::cols(matrix);
+    const Index rows = scl::rows(matrix);
+    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(cols), 
                   "Permute: Map dimension must match matrix.cols");
     
     // Validate bijection (optional debug check)
@@ -144,7 +147,7 @@ void permute_cols(
         matrix.cols = new_cols_dim;
     }
 
-    scl::threading::parallel_for(0, static_cast<size_t>(matrix.rows), [&](size_t i) {
+    scl::threading::parallel_for(0, static_cast<size_t>(rows), [&](size_t i) {
         Index row_idx = static_cast<Index>(i);
         Index len = matrix.row_length(row_idx);
         
@@ -192,7 +195,9 @@ void permute_rows(
     Span<const Index> old_to_new_map,
     Index new_rows_dim = -1
 ) {
-    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(matrix.rows), 
+    const Index rows = scl::rows(matrix);
+    const Index cols = scl::cols(matrix);
+    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(rows), 
                   "Permute: Map dimension must match matrix.rows");
     
     // Validate bijection (optional debug check)
@@ -207,7 +212,7 @@ void permute_rows(
         matrix.rows = new_rows_dim;
     }
 
-    scl::threading::parallel_for(0, static_cast<size_t>(matrix.cols), [&](size_t j) {
+    scl::threading::parallel_for(0, static_cast<size_t>(cols), [&](size_t j) {
         Index col_idx = static_cast<Index>(j);
         Index len = matrix.col_length(col_idx);
         
@@ -269,16 +274,18 @@ void align_cols(
     MutableSpan<Index> out_new_lengths,
     Index new_cols_dim
 ) {
-    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(matrix.cols), 
+    const Index rows = scl::rows(matrix);
+    const Index cols = scl::cols(matrix);
+    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(cols), 
                   "Align: Map dimension must match matrix.cols");
-    SCL_CHECK_DIM(out_new_lengths.size == static_cast<Size>(matrix.rows), 
+    SCL_CHECK_DIM(out_new_lengths.size == static_cast<Size>(rows), 
                   "Align: Output lengths buffer must match matrix.rows");
     SCL_CHECK_ARG(new_cols_dim > 0, "Align: New column dimension must be positive");
 
     // Update matrix dimension
     matrix.cols = new_cols_dim;
 
-    scl::threading::parallel_for(0, static_cast<size_t>(matrix.rows), [&](size_t i) {
+    scl::threading::parallel_for(0, static_cast<size_t>(rows), [&](size_t i) {
         Index row_idx = static_cast<Index>(i);
         Index start = matrix.indptr[row_idx];
         Index current_len = matrix.row_length(row_idx);
@@ -367,16 +374,18 @@ void align_rows(
     MutableSpan<Index> out_new_lengths,
     Index new_rows_dim
 ) {
-    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(matrix.rows), 
+    const Index rows = scl::rows(matrix);
+    const Index cols = scl::cols(matrix);
+    SCL_CHECK_DIM(old_to_new_map.size == static_cast<Size>(rows), 
                   "Align: Map dimension must match matrix.rows");
-    SCL_CHECK_DIM(out_new_lengths.size == static_cast<Size>(matrix.cols), 
+    SCL_CHECK_DIM(out_new_lengths.size == static_cast<Size>(cols), 
                   "Align: Output lengths buffer must match matrix.cols");
     SCL_CHECK_ARG(new_rows_dim > 0, "Align: New row dimension must be positive");
 
     // Update matrix dimension
     matrix.rows = new_rows_dim;
 
-    scl::threading::parallel_for(0, static_cast<size_t>(matrix.cols), [&](size_t j) {
+    scl::threading::parallel_for(0, static_cast<size_t>(cols), [&](size_t j) {
         Index col_idx = static_cast<Index>(j);
         Index start = matrix.indptr[col_idx];
         Index current_len = matrix.col_length(col_idx);

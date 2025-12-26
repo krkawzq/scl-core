@@ -119,19 +119,67 @@ namespace scl {
 #endif
 
 // =============================================================================
-// SECTION 2: Integer Types
+// SECTION 2: Integer Types (Configurable Index Precision)
 // =============================================================================
 
 /// @brief Unified index type for array addressing and loop counters
 ///
-/// Design rationale: We use int64_t (not size_t) because:
-/// 1. NumPy Compatibility: NumPy defaults to int64 for indexing.
-/// 2. Large Dataset Support: Biological datasets can exceed 2^31 cells.
-/// 3. Signed Arithmetic: Allows negative indices (e.g., Python-style [-1]).
-/// 4. Cross-Platform Consistency: size_t varies (32-bit on some platforms).
+/// Design rationale: Signed integer for:
+/// 1. NumPy Compatibility: NumPy defaults to int64 for indexing
+/// 2. Large Dataset Support: Single-cell data can have billions of cells
+/// 3. Signed Arithmetic: Allows negative indices (Python-style [-1])
+/// 4. Sparse Matrix Standards: scipy.sparse uses int32/int64
+///
+/// Precision Selection (via SCL_INDEX_PRECISION in config.hpp):
+/// - int16: 2 bytes, max 32K elements
+/// - int32: 4 bytes, max 2B elements
+/// - int64: 8 bytes, max 9E18 elements (default)
 ///
 /// @note For pointer arithmetic, use `Size` instead.
-using Index = std::int64_t;
+
+#if defined(SCL_USE_INT16)
+    /// @brief Index type: 16-bit signed integer
+    ///
+    /// Selected when SCL_INDEX_PRECISION=0.
+    /// - Size: 2 bytes
+    /// - Range: [-32,768, 32,767]
+    /// - Use case: Embedded systems, small datasets
+    /// - Warning: Overflow risk for large data
+    using Index = std::int16_t;
+    
+    constexpr int INDEX_DTYPE_CODE = 0;
+    constexpr const char* INDEX_DTYPE_NAME = "int16";
+
+#elif defined(SCL_USE_INT32)
+    /// @brief Index type: 32-bit signed integer
+    ///
+    /// Selected when SCL_INDEX_PRECISION=1.
+    /// - Size: 4 bytes
+    /// - Range: [-2.1B, 2.1B]
+    /// - Use case: Standard workloads, good balance
+    /// - Compatible with: OpenMP defaults, most sparse libraries
+    using Index = std::int32_t;
+    
+    constexpr int INDEX_DTYPE_CODE = 1;
+    constexpr const char* INDEX_DTYPE_NAME = "int32";
+
+#elif defined(SCL_USE_INT64)
+    /// @brief Index type: 64-bit signed integer (default)
+    ///
+    /// Selected when SCL_INDEX_PRECISION=2 (default).
+    /// - Size: 8 bytes
+    /// - Range: [-9.2E18, 9.2E18]
+    /// - Use case: Large-scale single-cell data, future-proof
+    /// - Compatible with: NumPy default, scipy.sparse
+    using Index = std::int64_t;
+    
+    constexpr int INDEX_DTYPE_CODE = 2;
+    constexpr const char* INDEX_DTYPE_NAME = "int64";
+
+#else
+    #error "SCL Type Error: No index precision selected. " \
+           "This should be set by config.hpp."
+#endif
 
 /// @brief Unsigned size type (wraps `std::size_t`)
 ///
@@ -150,6 +198,53 @@ using Size = std::size_t;
 /// - Buffer serialization/deserialization
 /// - Byte-level data packing
 using Byte = std::uint8_t;
+
+/// @brief Generic pointer type for discontiguous storage patterns
+///
+/// Design rationale:
+/// - Represents generic memory pointer (same as void*)
+/// - Used in VirtualSparse/DequeCSR for pointer arrays
+/// - Enables fully discontiguous memory layouts
+///
+/// Use for:
+/// - Pointer arrays: Pointer*[n] stores pointers to each row's data
+/// - Discontiguous indexing: Each row at arbitrary memory location
+/// - Deque-backed storage: Each row in different deque segment
+///
+/// Storage Patterns:
+///
+/// **Custom Pattern (offset-based, contiguous)**:
+/// ```cpp
+/// struct CustomCSR {
+///     T* data;           // Single contiguous array
+///     Index* indices;    // Single contiguous array
+///     Index* indptr;     // Cumulative offsets: [0, len0, len0+len1, ...] (n+1)
+///     
+///     // Access row i:
+///     Index start = indptr[i];
+///     Index end = indptr[i+1];
+///     Span<T> vals(data + start, end - start);
+/// };
+/// ```
+///
+/// **Virtual Pattern (pointer-based, discontiguous)**:
+/// ```cpp
+/// struct VirtualDequeCSR {
+///     Pointer* data_ptrs;     // Array of pointers: [ptr_row0, ptr_row1, ...] (n)
+///     Pointer* indices_ptrs;  // Array of pointers: [ptr_idx0, ptr_idx1, ...] (n)
+///     Index* lengths;         // Row lengths: [len0, len1, ...] (n)
+///     
+///     // Access row i:
+///     T* row_data = static_cast<T*>(data_ptrs[i]);
+///     Index len = lengths[i];
+///     Span<T> vals(row_data, len);
+/// };
+/// ```
+///
+/// Distinction:
+/// - Index: Integer indexing (row/column numbers, dimensions)
+/// - Pointer: Generic memory pointer (void*, for arbitrary locations)
+using Pointer = void*;
 
 // =============================================================================
 // SECTION 3: Zero-Overhead View Types (Span)

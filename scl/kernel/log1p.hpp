@@ -2,8 +2,10 @@
 
 #include "scl/core/type.hpp"
 #include "scl/core/matrix.hpp"
+#include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/core/simd.hpp"
+#include "scl/core/dense.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <cmath>
@@ -402,7 +404,7 @@ SCL_FORCE_INLINE void expm1(
 /// @tparam T Element type (typically Real)
 /// @param mat Dense matrix [modified in-place]
 template <typename T>
-SCL_FORCE_INLINE void log1p_inplace(DenseMatrix<T>& mat) {
+SCL_FORCE_INLINE void log1p_inplace(DenseArray<T>& mat) {
     Span<T> data_span(mat.ptr, mat.size());
     log1p_inplace(data_span);
 }
@@ -412,7 +414,7 @@ SCL_FORCE_INLINE void log1p_inplace(DenseMatrix<T>& mat) {
 /// @tparam T Element type (typically Real)
 /// @param mat Dense matrix [modified in-place]
 template <typename T>
-SCL_FORCE_INLINE void log2p1_inplace(DenseMatrix<T>& mat) {
+SCL_FORCE_INLINE void log2p1_inplace(DenseArray<T>& mat) {
     Span<T> data_span(mat.ptr, mat.size());
     log2p1_inplace(data_span);
 }
@@ -422,13 +424,130 @@ SCL_FORCE_INLINE void log2p1_inplace(DenseMatrix<T>& mat) {
 /// @tparam T Element type (typically Real)
 /// @param mat Dense matrix [modified in-place]
 template <typename T>
-SCL_FORCE_INLINE void expm1_inplace(DenseMatrix<T>& mat) {
+SCL_FORCE_INLINE void expm1_inplace(DenseArray<T>& mat) {
     Span<T> data_span(mat.ptr, mat.size());
     expm1_inplace(data_span);
 }
 
 // =============================================================================
-// 5. Sparse Matrix Support (Contiguous Data)
+// 5. Sparse Matrix Support
+// =============================================================================
+
+namespace detail {
+
+/// @brief Base implementation using ISparse interface.
+///
+/// Works with any sparse matrix type that inherits from ISparse.
+/// Processes values row-by-row or column-by-column.
+///
+/// @tparam T Value type
+/// @tparam IsCSR true for CSR, false for CSC
+/// @param mat ISparse matrix [values modified in-place]
+template <typename T, bool IsCSR>
+void log1p_inplace_base(ISparse<T, IsCSR>& mat) {
+    const Index primary_size = IsCSR ? mat.rows() : mat.cols();
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(primary_size), [&](size_t i) {
+        Index idx = static_cast<Index>(i);
+        auto vals = IsCSR ? mat.row_values(idx) : mat.col_values(idx);
+        
+        if (vals.size > 0) {
+            MutableSpan<T> mutable_vals(const_cast<T*>(vals.ptr), vals.size);
+            log1p_inplace(mutable_vals);
+        }
+    });
+}
+
+/// @brief Base implementation for log2p1.
+template <typename T, bool IsCSR>
+void log2p1_inplace_base(ISparse<T, IsCSR>& mat) {
+    const Index primary_size = IsCSR ? mat.rows() : mat.cols();
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(primary_size), [&](size_t i) {
+        Index idx = static_cast<Index>(i);
+        auto vals = IsCSR ? mat.row_values(idx) : mat.col_values(idx);
+        
+        if (vals.size > 0) {
+            MutableSpan<T> mutable_vals(const_cast<T*>(vals.ptr), vals.size);
+            log2p1_inplace(mutable_vals);
+        }
+    });
+}
+
+/// @brief Base implementation for expm1.
+template <typename T, bool IsCSR>
+void expm1_inplace_base(ISparse<T, IsCSR>& mat) {
+    const Index primary_size = IsCSR ? mat.rows() : mat.cols();
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(primary_size), [&](size_t i) {
+        Index idx = static_cast<Index>(i);
+        auto vals = IsCSR ? mat.row_values(idx) : mat.col_values(idx);
+        
+        if (vals.size > 0) {
+            MutableSpan<T> mutable_vals(const_cast<T*>(vals.ptr), vals.size);
+            expm1_inplace(mutable_vals);
+        }
+    });
+}
+
+} // namespace detail
+
+// =============================================================================
+// Public Base Interface (ISparse/ICSR/ICSC)
+// =============================================================================
+
+/// @brief Apply ln(1 + x) to sparse matrix values (ICSR base interface).
+///
+/// Works with any matrix type that inherits from ICSR.
+///
+/// @param mat ICSR matrix [values modified in-place]
+template <typename T>
+SCL_FORCE_INLINE void log1p_inplace(ICSR<T>& mat) {
+    detail::log1p_inplace_base<T, true>(mat);
+}
+
+/// @brief Apply ln(1 + x) to sparse matrix values (ICSC base interface).
+///
+/// @param mat ICSC matrix [values modified in-place]
+template <typename T>
+SCL_FORCE_INLINE void log1p_inplace(ICSC<T>& mat) {
+    detail::log1p_inplace_base<T, false>(mat);
+}
+
+/// @brief Apply log2(1 + x) to sparse matrix values (ICSR base interface).
+///
+/// @param mat ICSR matrix [values modified in-place]
+template <typename T>
+SCL_FORCE_INLINE void log2p1_inplace(ICSR<T>& mat) {
+    detail::log2p1_inplace_base<T, true>(mat);
+}
+
+/// @brief Apply log2(1 + x) to sparse matrix values (ICSC base interface).
+///
+/// @param mat ICSC matrix [values modified in-place]
+template <typename T>
+SCL_FORCE_INLINE void log2p1_inplace(ICSC<T>& mat) {
+    detail::log2p1_inplace_base<T, false>(mat);
+}
+
+/// @brief Apply e^x - 1 to sparse matrix values (ICSR base interface).
+///
+/// @param mat ICSR matrix [values modified in-place]
+template <typename T>
+SCL_FORCE_INLINE void expm1_inplace(ICSR<T>& mat) {
+    detail::expm1_inplace_base<T, true>(mat);
+}
+
+/// @brief Apply e^x - 1 to sparse matrix values (ICSC base interface).
+///
+/// @param mat ICSC matrix [values modified in-place]
+template <typename T>
+SCL_FORCE_INLINE void expm1_inplace(ICSC<T>& mat) {
+    detail::expm1_inplace_base<T, false>(mat);
+}
+
+// =============================================================================
+// Efficient Implementations (CustomSparseLike)
 // =============================================================================
 
 /// @brief Apply ln(1 + x) to sparse matrix values (Optimized for contiguous data).
@@ -436,12 +555,12 @@ SCL_FORCE_INLINE void expm1_inplace(DenseMatrix<T>& mat) {
 /// Sparsity Preservation: Since ln(1 + 0) = 0, structural zeros
 /// remain zero. We only transform the explicit non-zero values.
 ///
-/// This overload is for matrices with contiguous data arrays (CustomCSR/CustomCSC).
+/// This overload is for CustomSparseLike matrices (contiguous storage).
 /// Uses optimized SIMD path for direct memory access.
 ///
 /// Note: Does NOT modify matrix structure (indices/pointers).
 ///
-/// @tparam MatrixT Sparse matrix type with contiguous data (CustomCSR, CustomCSC)
+/// @tparam MatrixT Any CustomSparseLike matrix type
 /// @param mat Sparse matrix [values modified in-place]
 ///
 /// Example: scRNA-seq log-normalization
@@ -451,33 +570,155 @@ SCL_FORCE_INLINE void expm1_inplace(DenseMatrix<T>& mat) {
 /// log1p_inplace(counts);           // log(CPM + 1)
 /// @endcode
 template <typename MatrixT>
-    requires ContiguousData<MatrixT> && SparseLike<MatrixT>
+    requires (CustomSparseLike<MatrixT, true> || CustomSparseLike<MatrixT, false>)
 SCL_FORCE_INLINE void log1p_inplace(MatrixT& mat) {
     // Direct access to contiguous non-zero values array
     Span<typename MatrixT::ValueType> data_span(mat.data, static_cast<Size>(mat.nnz));
     log1p_inplace(data_span);
 }
 
-/// @brief Apply log2(1 + x) to sparse matrix values (Optimized for contiguous data).
+/// @brief Apply log2(1 + x) to sparse matrix values (CustomSparseLike version).
 ///
-/// @tparam MatrixT Sparse matrix type with contiguous data
+/// @tparam MatrixT Any CustomSparseLike matrix type
 /// @param mat Sparse matrix [values modified in-place]
 template <typename MatrixT>
-    requires ContiguousData<MatrixT> && SparseLike<MatrixT>
+    requires (CustomSparseLike<MatrixT, true> || CustomSparseLike<MatrixT, false>)
 SCL_FORCE_INLINE void log2p1_inplace(MatrixT& mat) {
     Span<typename MatrixT::ValueType> data_span(mat.data, static_cast<Size>(mat.nnz));
     log2p1_inplace(data_span);
 }
 
-/// @brief Apply e^x - 1 to sparse matrix values (Optimized for contiguous data).
+/// @brief Apply e^x - 1 to sparse matrix values (CustomSparseLike version).
 ///
-/// @tparam MatrixT Sparse matrix type with contiguous data
+/// @tparam MatrixT Any CustomSparseLike matrix type
 /// @param mat Sparse matrix [values modified in-place]
 template <typename MatrixT>
-    requires ContiguousData<MatrixT> && SparseLike<MatrixT>
+    requires (CustomSparseLike<MatrixT, true> || CustomSparseLike<MatrixT, false>)
 SCL_FORCE_INLINE void expm1_inplace(MatrixT& mat) {
     Span<typename MatrixT::ValueType> data_span(mat.data, static_cast<Size>(mat.nnz));
     expm1_inplace(data_span);
+}
+
+// =============================================================================
+// Efficient Implementations (VirtualSparseLike)
+// =============================================================================
+
+/// @brief Apply ln(1 + x) to sparse matrix values (VirtualSparseLike version).
+///
+/// Optimized for VirtualSparseLike matrices (discontiguous storage).
+/// Processes values row-by-row or column-by-column for better cache locality.
+///
+/// @tparam MatrixT Any VirtualSparseLike matrix type
+/// @param mat Virtual sparse matrix [values modified in-place]
+/// @brief Apply ln(1 + x) to sparse matrix values (VirtualCSR version).
+///
+/// Optimized for VirtualCSR matrices (discontiguous storage).
+/// Processes values row-by-row for better cache locality.
+///
+/// @tparam MatrixT Any VirtualCSR-like matrix type
+/// @param mat Virtual CSR matrix [values modified in-place]
+template <VirtualCSRLike MatrixT>
+SCL_FORCE_INLINE void log1p_inplace(MatrixT& mat) {
+    scl::threading::parallel_for(0, static_cast<size_t>(mat.rows), [&](size_t i) {
+        Index idx = static_cast<Index>(i);
+        auto vals = mat.row_values(idx);
+        
+        if (vals.size > 0) {
+            MutableSpan<typename MatrixT::ValueType> mutable_vals(
+                const_cast<typename MatrixT::ValueType*>(vals.ptr), vals.size);
+            log1p_inplace(mutable_vals);
+        }
+    });
+}
+
+/// @brief Apply ln(1 + x) to sparse matrix values (VirtualCSC version).
+///
+/// @tparam MatrixT Any VirtualCSC-like matrix type
+/// @param mat Virtual CSC matrix [values modified in-place]
+template <VirtualCSCLike MatrixT>
+SCL_FORCE_INLINE void log1p_inplace(MatrixT& mat) {
+    scl::threading::parallel_for(0, static_cast<size_t>(mat.cols), [&](size_t j) {
+        Index idx = static_cast<Index>(j);
+        auto vals = mat.col_values(idx);
+        
+        if (vals.size > 0) {
+            MutableSpan<typename MatrixT::ValueType> mutable_vals(
+                const_cast<typename MatrixT::ValueType*>(vals.ptr), vals.size);
+            log1p_inplace(mutable_vals);
+        }
+    });
+}
+
+/// @brief Apply log2(1 + x) to sparse matrix values (VirtualCSR version).
+///
+/// @tparam MatrixT Any VirtualCSR-like matrix type
+/// @param mat Virtual CSR matrix [values modified in-place]
+template <VirtualCSRLike MatrixT>
+SCL_FORCE_INLINE void log2p1_inplace(MatrixT& mat) {
+    scl::threading::parallel_for(0, static_cast<size_t>(mat.rows), [&](size_t i) {
+        Index idx = static_cast<Index>(i);
+        auto vals = mat.row_values(idx);
+        
+        if (vals.size > 0) {
+            MutableSpan<typename MatrixT::ValueType> mutable_vals(
+                const_cast<typename MatrixT::ValueType*>(vals.ptr), vals.size);
+            log2p1_inplace(mutable_vals);
+        }
+    });
+}
+
+/// @brief Apply log2(1 + x) to sparse matrix values (VirtualCSC version).
+///
+/// @tparam MatrixT Any VirtualCSC-like matrix type
+/// @param mat Virtual CSC matrix [values modified in-place]
+template <VirtualCSCLike MatrixT>
+SCL_FORCE_INLINE void log2p1_inplace(MatrixT& mat) {
+    scl::threading::parallel_for(0, static_cast<size_t>(mat.cols), [&](size_t j) {
+        Index idx = static_cast<Index>(j);
+        auto vals = mat.col_values(idx);
+        
+        if (vals.size > 0) {
+            MutableSpan<typename MatrixT::ValueType> mutable_vals(
+                const_cast<typename MatrixT::ValueType*>(vals.ptr), vals.size);
+            log2p1_inplace(mutable_vals);
+        }
+    });
+}
+
+/// @brief Apply e^x - 1 to sparse matrix values (VirtualCSR version).
+///
+/// @tparam MatrixT Any VirtualCSR-like matrix type
+/// @param mat Virtual CSR matrix [values modified in-place]
+template <VirtualCSRLike MatrixT>
+SCL_FORCE_INLINE void expm1_inplace(MatrixT& mat) {
+    scl::threading::parallel_for(0, static_cast<size_t>(mat.rows), [&](size_t i) {
+        Index idx = static_cast<Index>(i);
+        auto vals = mat.row_values(idx);
+        
+        if (vals.size > 0) {
+            MutableSpan<typename MatrixT::ValueType> mutable_vals(
+                const_cast<typename MatrixT::ValueType*>(vals.ptr), vals.size);
+            expm1_inplace(mutable_vals);
+        }
+    });
+}
+
+/// @brief Apply e^x - 1 to sparse matrix values (VirtualCSC version).
+///
+/// @tparam MatrixT Any VirtualCSC-like matrix type
+/// @param mat Virtual CSC matrix [values modified in-place]
+template <VirtualCSCLike MatrixT>
+SCL_FORCE_INLINE void expm1_inplace(MatrixT& mat) {
+    scl::threading::parallel_for(0, static_cast<size_t>(mat.cols), [&](size_t j) {
+        Index idx = static_cast<Index>(j);
+        auto vals = mat.col_values(idx);
+        
+        if (vals.size > 0) {
+            MutableSpan<typename MatrixT::ValueType> mutable_vals(
+                const_cast<typename MatrixT::ValueType*>(vals.ptr), vals.size);
+            expm1_inplace(mutable_vals);
+        }
+    });
 }
 
 } // namespace scl::kernel

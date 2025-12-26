@@ -193,7 +193,7 @@ void downsample_counts(
     Index target_count,
     uint64_t random_seed = 42
 ) {
-    const Index R = matrix.rows;
+    const Index R = scl::rows(matrix);
     
     SCL_CHECK_ARG(target_count > 0, "Downsample: target_count must be > 0");
 
@@ -269,7 +269,7 @@ void downsample_counts_per_cell(
     Span<const Index> target_counts,
     uint64_t random_seed = 42
 ) {
-    const Index R = matrix.rows;
+    const Index R = scl::rows(matrix);
     
     SCL_CHECK_DIM(target_counts.size == static_cast<Size>(R), 
                   "Downsample: target_counts size mismatch");
@@ -348,7 +348,7 @@ void binomial_resample(
     double keep_prob,
     uint64_t random_seed = 42
 ) {
-    const Size nnz = static_cast<Size>(matrix.nnz);
+    const Size nnz = static_cast<Size>(scl::nnz(matrix));
     
     SCL_CHECK_ARG(keep_prob >= 0.0 && keep_prob <= 1.0, 
                   "Binomial resample: keep_prob must be in [0, 1]");
@@ -404,7 +404,7 @@ void poisson_resample(
     double lambda,
     uint64_t random_seed = 42
 ) {
-    const Size nnz = static_cast<Size>(matrix.nnz);
+    const Size nnz = static_cast<Size>(scl::nnz(matrix));
     
     SCL_CHECK_ARG(lambda > 0.0, "Poisson resample: lambda must be > 0");
 
@@ -471,7 +471,7 @@ Size subsample_cells(
     uint64_t random_seed,
     MutableSpan<Index> out_selected_indices
 ) {
-    const Size N = static_cast<Size>(matrix.rows);
+    const Size N = static_cast<Size>(scl::rows(matrix));
     
     SCL_CHECK_ARG(n_samples <= N, "Subsample: n_samples exceeds n_cells");
     SCL_CHECK_DIM(out_selected_indices.size >= n_samples, 
@@ -518,7 +518,7 @@ void bootstrap_cells(
     uint64_t random_seed,
     MutableSpan<Index> out_indices
 ) {
-    const Size N = static_cast<Size>(matrix.rows);
+    const Size N = static_cast<Size>(scl::rows(matrix));
     
     SCL_CHECK_DIM(out_indices.size >= n_bootstrap, 
                   "Bootstrap: Output buffer too small");

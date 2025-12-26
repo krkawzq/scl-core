@@ -2,6 +2,7 @@
 
 #include "scl/io/mmap.hpp"
 #include "scl/core/matrix.hpp"
+#include "scl/core/sparse.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/threading/parallel_for.hpp"
 
@@ -21,13 +22,13 @@
 ///
 /// 1. Composable: Built on top of generic MappedArray from mmap.hpp
 /// 2. Pure Data Structures: No file organization assumptions
-/// 3. CSRLike Interface: Seamless integration with SCL kernels
+/// 3. SparseLike Interface: Seamless integration with SCL kernels
 /// 4. Flexible Initialization: Support any file layout
 ///
 /// Core Components:
 ///
-/// - MountMatrix: CSR matrix view over three MappedArrays
-/// - VirtualMountMatrix: Zero-copy row slicing with indirection
+/// - MappedCustomSparse: CSR matrix view over three MappedArrays
+/// - MappedVirtualSparse: Zero-copy row slicing with indirection
 /// - OwnedCSR: Heap-allocated CSR matrix (materialization target)
 ///
 /// Performance:
@@ -44,8 +45,8 @@ namespace scl::io {
 // Forward Declarations
 // =============================================================================
 
-template <typename T> class MountMatrix;
-template <typename T> class VirtualMountMatrix;
+template <typename T> class MappedCustomSparse;
+template <typename T> class MappedVirtualSparse;
 template <typename T> struct OwnedCSR;
 
 namespace detail {
@@ -63,8 +64,6 @@ enum class CopyPolicy {
 /// @brief Generic memory copy with policy selection.
 template <typename T, CopyPolicy Policy = CopyPolicy::Fast>
 inline void memory_copy(const T* src, T* dst, Size count) {
-    constexpr Size L3_THRESHOLD = 8 * 1024 * 1024 / sizeof(T);
-    
     if constexpr (Policy == CopyPolicy::Safe) {
         std::memmove(dst, src, count * sizeof(T));
     } else if constexpr (Policy == CopyPolicy::Fast) {
@@ -100,7 +99,7 @@ inline void parallel_memory_copy(const T* src, T* dst, Size count) {
 } // namespace detail
 
 // =============================================================================
-// MountMatrix: Pure CSR Matrix View
+// MappedCustomSparse: Pure CSR Matrix View
 // =============================================================================
 
 /// @brief CSR matrix view over three independent MappedArrays.
@@ -108,11 +107,12 @@ inline void parallel_memory_copy(const T* src, T* dst, Size count) {
 /// Makes ZERO assumptions about file organization - user provides three arrays.
 /// This is a pure data structure that happens to work with memory-mapped data.
 ///
-/// Satisfies CSRLike concept for seamless kernel integration.
+/// Satisfies SparseLike<true> concept for seamless kernel integration.
+/// Implements concept-based interface (not inheritance-based).
 ///
 /// @tparam T Value type (typically float or double)
 template <typename T>
-class MountMatrix {
+class MappedCustomSparse {
 public:
     using ValueType = T;
     using Tag = TagCSR;
@@ -138,7 +138,7 @@ public:
     /// @param num_rows Number of rows
     /// @param num_cols Number of columns
     /// @param num_nnz Number of non-zero elements
-    MountMatrix(
+    MappedCustomSparse(
         MappedArray<T>&& data,
         MappedArray<Index>&& indices,
         MappedArray<Index>&& indptr,
@@ -160,13 +160,13 @@ public:
         }
     }
 
-    MountMatrix(MountMatrix&&) noexcept = default;
-    MountMatrix& operator=(MountMatrix&&) noexcept = default;
-    MountMatrix(const MountMatrix&) = delete;
-    MountMatrix& operator=(const MountMatrix&) = delete;
+    MappedCustomSparse(MappedCustomSparse&&) noexcept = default;
+    MappedCustomSparse& operator=(MappedCustomSparse&&) noexcept = default;
+    MappedCustomSparse(const MappedCustomSparse&) = delete;
+    MappedCustomSparse& operator=(const MappedCustomSparse&) = delete;
 
     // -------------------------------------------------------------------------
-    // CSRLike Interface
+    // SparseLike Interface (CSR: IsCSR = true)
     // -------------------------------------------------------------------------
 
     SCL_NODISCARD SCL_FORCE_INLINE Index row_length(Index i) const {
@@ -236,17 +236,20 @@ public:
 };
 
 // =============================================================================
-// VirtualMountMatrix: Zero-Copy Row Slicing
+// MappedVirtualSparse: Zero-Copy Row Slicing
 // =============================================================================
 
-/// @brief Virtual CSR matrix with indirection over memory-mapped data.
+/// @brief Virtual sparse matrix with indirection over memory-mapped data.
 ///
 /// Enables zero-copy row slicing through indirection array.
 /// Minimal memory overhead: O(selected_rows) for row_map.
 ///
+/// Satisfies SparseLike<true> concept for seamless kernel integration.
+/// Implements concept-based interface (not inheritance-based).
+///
 /// @tparam T Value type
 template <typename T>
-class VirtualMountMatrix {
+class MappedVirtualSparse {
 public:
     using ValueType = T;
     using Tag = TagCSR;
@@ -265,7 +268,7 @@ private:
     std::vector<Index> _owned_row_map;
 
 public:
-    VirtualMountMatrix(
+    MappedVirtualSparse(
         const MappedArray<T>& src_data,
         const MappedArray<Index>& src_indices,
         const MappedArray<Index>& src_indptr,
@@ -288,8 +291,8 @@ public:
         SCL_CHECK_ARG(cols >= 0, "Invalid column count");
     }
 
-    VirtualMountMatrix(const MountMatrix<T>& source, Span<const Index> row_map)
-        : VirtualMountMatrix(
+    MappedVirtualSparse(const MappedCustomSparse<T>& source, Span<const Index> row_map)
+        : MappedVirtualSparse(
             source.mapped_data(),
             source.mapped_indices(),
             source.mapped_indptr(),
@@ -300,14 +303,26 @@ public:
         )
     {}
 
-    VirtualMountMatrix(VirtualMountMatrix&&) noexcept = default;
-    VirtualMountMatrix& operator=(VirtualMountMatrix&&) noexcept = default;
-    VirtualMountMatrix(const VirtualMountMatrix&) = delete;
-    VirtualMountMatrix& operator=(const VirtualMountMatrix&) = delete;
+    MappedVirtualSparse(MappedVirtualSparse&&) noexcept = default;
+    MappedVirtualSparse& operator=(MappedVirtualSparse&&) noexcept = default;
+    MappedVirtualSparse(const MappedVirtualSparse&) = delete;
+    MappedVirtualSparse& operator=(const MappedVirtualSparse&) = delete;
 
     // -------------------------------------------------------------------------
-    // CSRLike Interface
+    // SparseLike Interface (CSR: IsCSR = true)
     // -------------------------------------------------------------------------
+
+    /// @brief Get total number of non-zero elements.
+    ///
+    /// Computes nnz by summing row lengths (O(rows) computation).
+    /// For performance-critical code, consider caching this value.
+    SCL_NODISCARD Index nnz() const {
+        Index total = 0;
+        for (Index i = 0; i < rows; ++i) {
+            total += row_length(i);
+        }
+        return total;
+    }
 
     SCL_NODISCARD SCL_FORCE_INLINE Index row_length(Index i) const {
 #if !defined(NDEBUG)
@@ -426,7 +441,7 @@ struct OwnedCSR {
 // =============================================================================
 
 template <typename T>
-OwnedCSR<T> MountMatrix<T>::materialize() const {
+OwnedCSR<T> MappedCustomSparse<T>::materialize() const {
     std::vector<T> data_copy(nnz);
     std::vector<Index> indices_copy(nnz);
     std::vector<Index> indptr_copy(rows + 1);
@@ -447,12 +462,12 @@ OwnedCSR<T> MountMatrix<T>::materialize() const {
 }
 
 template <typename T>
-OwnedCSR<T> MountMatrix<T>::materialize_async() const {
+OwnedCSR<T> MappedCustomSparse<T>::materialize_async() const {
     return std::async(std::launch::async, [this]() { return materialize(); }).get();
 }
 
 template <typename T>
-OwnedCSR<T> MountMatrix<T>::copy_rows(Span<const Index> row_selection) const {
+OwnedCSR<T> MappedCustomSparse<T>::copy_rows(Span<const Index> row_selection) const {
     Index total_nnz = 0;
     for (Size i = 0; i < row_selection.size; ++i) {
         total_nnz += row_length(row_selection[i]);
@@ -482,7 +497,7 @@ OwnedCSR<T> MountMatrix<T>::copy_rows(Span<const Index> row_selection) const {
 }
 
 template <typename T>
-OwnedCSR<T> VirtualMountMatrix<T>::materialize() const {
+OwnedCSR<T> MountedVirtualSparse<T>::materialize() const {
     // Phase 1: Parallel row length computation
     std::vector<Index> row_sizes(rows);
     
@@ -535,13 +550,25 @@ OwnedCSR<T> VirtualMountMatrix<T>::materialize() const {
 // Type Aliases
 // =============================================================================
 
+// =============================================================================
+// Concept Verification (Compile-Time Checks)
+// =============================================================================
+
+// Verify that MountMatrix and MountedVirtualSparse satisfy SparseLike concept
+static_assert(SparseLike<MountMatrix<Real>, true>, "MountMatrix must satisfy SparseLike<true> concept");
+static_assert(SparseLike<MountedVirtualSparse<Real>, true>, "MountedVirtualSparse must satisfy SparseLike<true> concept");
+
+// =============================================================================
+// Type Aliases
+// =============================================================================
+
 using MountMatrixF32 = MountMatrix<float>;
 using MountMatrixF64 = MountMatrix<double>;
 using MountMatrixReal = MountMatrix<Real>;
 
-using VirtualMountMatrixF32 = VirtualMountMatrix<float>;
-using VirtualMountMatrixF64 = VirtualMountMatrix<double>;
-using VirtualMountMatrixReal = VirtualMountMatrix<Real>;
+using MountedVirtualSparseF32 = MountedVirtualSparse<float>;
+using MountedVirtualSparseF64 = MountedVirtualSparse<double>;
+using MountedVirtualSparseReal = MountedVirtualSparse<Real>;
 
 using OwnedCSRF32 = OwnedCSR<float>;
 using OwnedCSRF64 = OwnedCSR<double>;

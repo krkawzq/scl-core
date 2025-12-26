@@ -55,21 +55,22 @@ struct RowStats {
 /// @brief Compute Mean and 1/Std for each column in a CSC-like matrix.
 ///
 /// Complexity: O(nnz)
-template <CSCLike MatrixT>
+template <typename MatrixT>
+    requires SparseLike<MatrixT, false>
 SCL_FORCE_INLINE ColStats<typename MatrixT::ValueType> compute_col_stats(const MatrixT& matrix) {
     using T = typename MatrixT::ValueType;
-    const Index C = matrix.cols;
-    const Size R = static_cast<Size>(matrix.rows);
+    const Index C = scl::cols(matrix);
+    const Size R = static_cast<Size>(scl::rows(matrix));
     const T inv_n = static_cast<T>(1.0) / static_cast<T>(R);
 
     ColStats<T> stats;
     stats.means.resize(C);
     stats.inv_stds.resize(C);
 
-    scl::threading::parallel_for(0, C, [&](size_t j) {
+    scl::threading::parallel_for(0, static_cast<size_t>(C), [&](size_t j) {
         Index col_idx = static_cast<Index>(j);
-        auto vals = matrix.col_values(col_idx);
-        Index len = matrix.col_length(col_idx);
+        auto vals = scl::primary_values(matrix, col_idx);
+        Index len = scl::primary_length(matrix, col_idx);
         
         namespace s = scl::simd;
         const s::Tag d;
@@ -123,21 +124,22 @@ SCL_FORCE_INLINE ColStats<typename MatrixT::ValueType> compute_col_stats(const M
 /// @brief Compute Mean and 1/Std for each row in a CSR-like matrix.
 ///
 /// Complexity: O(nnz)
-template <CSRLike MatrixT>
+template <typename MatrixT>
+    requires SparseLike<MatrixT, true>
 SCL_FORCE_INLINE RowStats<typename MatrixT::ValueType> compute_row_stats(const MatrixT& matrix) {
     using T = typename MatrixT::ValueType;
-    const Index R = matrix.rows;
-    const Size C = static_cast<Size>(matrix.cols);
+    const Index R = scl::rows(matrix);
+    const Size C = static_cast<Size>(scl::cols(matrix));
     const T inv_n = static_cast<T>(1.0) / static_cast<T>(C);
 
     RowStats<T> stats;
     stats.means.resize(R);
     stats.inv_stds.resize(R);
 
-    scl::threading::parallel_for(0, R, [&](size_t i) {
+    scl::threading::parallel_for(0, static_cast<size_t>(R), [&](size_t i) {
         Index row_idx = static_cast<Index>(i);
-        auto vals = matrix.row_values(row_idx);
-        Index len = matrix.row_length(row_idx);
+        auto vals = scl::primary_values(matrix, row_idx);
+        Index len = scl::primary_length(matrix, row_idx);
         
         namespace s = scl::simd;
         const s::Tag d;
@@ -192,17 +194,28 @@ SCL_FORCE_INLINE RowStats<typename MatrixT::ValueType> compute_row_stats(const M
 // Public API
 // =============================================================================
 
-/// @brief Compute Pearson Correlation Matrix from Sparse Input (Generic CSC-like matrices).
+// =============================================================================
+// Layer 1: Virtual Interface (ISparse-based, Generic but Slower)
+// =============================================================================
+//
+// Note: These ISparse-based overloads are provided for backward compatibility
+// and for use with virtual base classes. For optimal performance, use the
+// concept-based overloads in Layer 2 which work with any SparseLike type.
+//
+
+/// @brief Compute Pearson Correlation Matrix (Virtual Interface, CSC).
 ///
-/// @tparam MatrixT Any CSC-like matrix type
-/// @param matrix  Input sparse matrix (cells x genes).
-/// @param output  Output dense correlation matrix (genes x genes).
-///                Must be pre-allocated (size = cols * cols).
-template <CSCLike MatrixT>
-void pearson(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
-    using T = typename MatrixT::ValueType;
-    const Index C = matrix.cols;
-    const Size N_cells = static_cast<Size>(matrix.rows);
+/// Generic implementation using ISparse base class.
+/// Works with any sparse matrix type but may have virtual call overhead.
+/// For better performance, use the concept-based overloads.
+///
+/// @param matrix CSC sparse matrix (via ISparse interface)
+/// @param output Output dense correlation matrix (genes x genes).
+///               Must be pre-allocated (size = cols * cols).
+template <typename T>
+void pearson(const ICSC<T>& matrix, MutableSpan<T> output) {
+    const Index C = matrix.cols();
+    const Size N_cells = static_cast<Size>(matrix.rows());
     SCL_CHECK_DIM(output.size == static_cast<Size>(C * C), "Pearson: Output size mismatch");
 
     // 1. Precompute Statistics (Mean, Std)
@@ -284,19 +297,19 @@ void pearson(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> out
     });
 }
 
-/// @brief Compute Pearson Correlation Matrix from Sparse Input (Generic CSR-like matrices).
+/// @brief Compute Pearson Correlation Matrix (Virtual Interface, CSR).
 ///
+/// Generic implementation using ISparse base class.
 /// Computes row-row correlation (sample similarity).
+/// For better performance, use the concept-based overloads.
 ///
-/// @tparam MatrixT Any CSR-like matrix type
-/// @param matrix  Input sparse matrix (cells x genes).
-/// @param output  Output dense correlation matrix (cells x cells).
-///                Must be pre-allocated (size = rows * rows).
-template <CSRLike MatrixT>
-void pearson(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
-    using T = typename MatrixT::ValueType;
-    const Index R = matrix.rows;
-    const Size N_features = static_cast<Size>(matrix.cols);
+/// @param matrix CSR sparse matrix (via ISparse interface)
+/// @param output Output dense correlation matrix (cells x cells).
+///               Must be pre-allocated (size = rows * rows).
+template <typename T>
+void pearson(const ICSR<T>& matrix, MutableSpan<T> output) {
+    const Index R = matrix.rows();
+    const Size N_features = static_cast<Size>(matrix.cols());
     SCL_CHECK_DIM(output.size == static_cast<Size>(R * R), "Pearson: Output size mismatch");
 
     // 1. Precompute Statistics (Mean, Std)
@@ -311,6 +324,193 @@ void pearson(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> out
 
     scl::threading::parallel_for(0, R, [&](size_t i) {
         T* row_ptr = output.ptr + (i * R);
+        T mu_i = stats.means[i];
+        T inv_sig_i = stats.inv_stds[i];
+
+        namespace s = scl::simd;
+        const s::Tag d;
+        const size_t lanes = s::lanes();
+
+        // Broadcast constants for row i
+        const auto v_inv_n = s::Set(d, inv_n);
+        const auto v_mu_i = s::Set(d, mu_i);
+        const auto v_inv_sig_i = s::Set(d, inv_sig_i);
+        const auto v_one = s::Set(d, static_cast<T>(1.0));
+        const auto v_neg_one = s::Set(d, static_cast<T>(-1.0));
+
+        size_t j = 0;
+        
+        // Vectorized loop over rows j
+        for (; j + lanes <= static_cast<size_t>(R); j += lanes) {
+            // Load G_ij
+            auto v_g = s::Load(d, row_ptr + j);
+            
+            // Load stats for j
+            auto v_mu_j = s::Load(d, stats.means.data() + j);
+            auto v_inv_sig_j = s::Load(d, stats.inv_stds.data() + j);
+
+            // Formula: (G * inv_n - mu_i * mu_j) * (inv_sig_i * inv_sig_j)
+            auto v_cov = s::Sub(s::Mul(v_g, v_inv_n), s::Mul(v_mu_i, v_mu_j));
+            auto v_norm = s::Mul(v_inv_sig_i, v_inv_sig_j);
+            auto v_corr = s::Mul(v_cov, v_norm);
+
+            // Clip to [-1, 1] for numerical stability
+            v_corr = s::Min(v_corr, v_one);
+            v_corr = s::Max(v_corr, v_neg_one);
+            
+            s::Store(v_corr, d, row_ptr + j);
+        }
+
+        // Scalar Tail
+        for (; j < static_cast<size_t>(R); ++j) {
+            T g_val = row_ptr[j];
+            T mu_j = stats.means[j];
+            T inv_sig_j = stats.inv_stds[j];
+
+            T cov = (g_val * inv_n) - (mu_i * mu_j);
+            T corr = cov * (inv_sig_i * inv_sig_j);
+
+            // Clip
+            if (corr > 1.0) corr = 1.0;
+            if (corr < -1.0) corr = -1.0;
+            
+            // Fix for constant rows
+            if (inv_sig_i == 0.0 || inv_sig_j == 0.0) corr = 0.0;
+
+            row_ptr[j] = corr;
+        }
+    });
+}
+
+// =============================================================================
+// Layer 2: Concept-Based (SparseLike, Optimized for Custom/Virtual/Mount)
+// =============================================================================
+
+/// @brief Compute Pearson Correlation Matrix (Concept-based, Optimized, CSC).
+///
+/// High-performance implementation for CSC-like matrices.
+/// Uses unified accessors for zero-overhead abstraction.
+///
+/// @tparam MatrixT Any CSC-like matrix type (CustomSparse, VirtualSparse, or MountMatrix)
+/// @param matrix Input sparse matrix (cells x genes).
+/// @param output Output dense correlation matrix (genes x genes).
+///               Must be pre-allocated (size = cols * cols).
+template <typename MatrixT>
+    requires SparseLike<MatrixT, false>
+void pearson(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
+    const Index C = scl::cols(matrix);
+    const Size N_cells = static_cast<Size>(scl::rows(matrix));
+    SCL_CHECK_DIM(output.size == static_cast<Size>(C * C), "Pearson: Output size mismatch");
+
+    // 1. Precompute Statistics (Mean, Std)
+    // Runs in O(nnz), purely bandwidth bound
+    auto stats = detail::compute_col_stats(matrix);
+
+    // 2. Compute Gram Matrix (G = X^T * X)
+    // The heavy lifting: sparse matrix multiplication
+    scl::kernel::gram::gram(matrix, output);
+
+    // 3. Finalize: Transform Gram to Correlation
+    // corr_ij = (G_ij / N - mu_i * mu_j) * (1/sigma_i * 1/sigma_j)
+    //
+    // Optimization: This is a dense matrix operation.
+    // We parallelize over rows of the result matrix.
+    const T inv_n = static_cast<T>(1.0) / static_cast<T>(N_cells);
+
+    scl::threading::parallel_for(0, static_cast<size_t>(C), [&](size_t i) {
+        T* row_ptr = output.ptr + (i * static_cast<size_t>(C));
+        T mu_i = stats.means[i];
+        T inv_sig_i = stats.inv_stds[i];
+
+        namespace s = scl::simd;
+        const s::Tag d;
+        const size_t lanes = s::lanes();
+
+        // Broadcast constants for row i
+        const auto v_inv_n = s::Set(d, inv_n);
+        const auto v_mu_i = s::Set(d, mu_i);
+        const auto v_inv_sig_i = s::Set(d, inv_sig_i);
+        const auto v_one = s::Set(d, static_cast<T>(1.0));
+        const auto v_neg_one = s::Set(d, static_cast<T>(-1.0));
+
+        size_t j = 0;
+        
+        // Vectorized loop over columns j
+        for (; j + lanes <= static_cast<size_t>(C); j += lanes) {
+            // Load G_ij
+            auto v_g = s::Load(d, row_ptr + j);
+            
+            // Load stats for j
+            auto v_mu_j = s::Load(d, stats.means.data() + j);
+            auto v_inv_sig_j = s::Load(d, stats.inv_stds.data() + j);
+
+            // Formula: (G * inv_n - mu_i * mu_j) * (inv_sig_i * inv_sig_j)
+            auto v_cov = s::Sub(s::Mul(v_g, v_inv_n), s::Mul(v_mu_i, v_mu_j));
+            auto v_norm = s::Mul(v_inv_sig_i, v_inv_sig_j);
+            auto v_corr = s::Mul(v_cov, v_norm);
+
+            // Clip to [-1, 1] for numerical stability
+            v_corr = s::Min(v_corr, v_one);
+            v_corr = s::Max(v_corr, v_neg_one);
+
+            // Handle std=0 case (NaN protection)
+            // If inv_sig is 0, result becomes 0 (or NaN if 0*Inf, but we check var<=0)
+            // Implicitly handled if 0.0 is used.
+            
+            s::Store(v_corr, d, row_ptr + j);
+        }
+
+        // Scalar Tail
+        for (; j < static_cast<size_t>(C); ++j) {
+            T g_val = row_ptr[j];
+            T mu_j = stats.means[j];
+            T inv_sig_j = stats.inv_stds[j];
+
+            T cov = (g_val * inv_n) - (mu_i * mu_j);
+            T corr = cov * (inv_sig_i * inv_sig_j);
+
+            // Clip
+            if (corr > 1.0) corr = 1.0;
+            if (corr < -1.0) corr = -1.0;
+            
+            // Fix for constant genes
+            if (inv_sig_i == 0.0 || inv_sig_j == 0.0) corr = 0.0;
+
+            row_ptr[j] = corr;
+        }
+    });
+}
+
+/// @brief Compute Pearson Correlation Matrix (Concept-based, Optimized, CSR).
+///
+/// High-performance implementation for CSR-like matrices.
+/// Computes row-row correlation (sample similarity).
+///
+/// @tparam MatrixT Any CSR-like matrix type (CustomSparse, VirtualSparse, or MountMatrix)
+/// @param matrix Input sparse matrix (cells x genes).
+/// @param output Output dense correlation matrix (cells x cells).
+///               Must be pre-allocated (size = rows * rows).
+template <typename MatrixT>
+    requires SparseLike<MatrixT, true>
+void pearson(const MatrixT& matrix, MutableSpan<typename MatrixT::ValueType> output) {
+    using T = typename MatrixT::ValueType;
+    const Index R = scl::rows(matrix);
+    const Size N_features = static_cast<Size>(scl::cols(matrix));
+    SCL_CHECK_DIM(output.size == static_cast<Size>(R * R), "Pearson: Output size mismatch");
+
+    // 1. Precompute Statistics (Mean, Std)
+    auto stats = detail::compute_row_stats(matrix);
+
+    // 2. Compute Gram Matrix (G = A * A^T)
+    scl::kernel::gram::gram(matrix, output);
+
+    // 3. Finalize: Transform Gram to Correlation
+    // corr_ij = (G_ij / N - mu_i * mu_j) * (1/sigma_i * 1/sigma_j)
+    const T inv_n = static_cast<T>(1.0) / static_cast<T>(N_features);
+
+    scl::threading::parallel_for(0, static_cast<size_t>(R), [&](size_t i) {
+        T* row_ptr = output.ptr + (i * static_cast<size_t>(R));
         T mu_i = stats.means[i];
         T inv_sig_i = stats.inv_stds[i];
 

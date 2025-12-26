@@ -203,16 +203,79 @@ SCL_FORCE_INLINE void sums_masked_impl(
     }
 }
 
+/// @brief Base implementation using ISparse interface for scaling.
+template <typename T, bool IsCSR>
+SCL_FORCE_INLINE void scale_base_impl(
+    ISparse<T, IsCSR>& matrix,
+    Span<const Real> scales
+) {
+    const Index primary_size = IsCSR ? matrix.rows() : matrix.cols();
+    SCL_CHECK_DIM(scales.size == static_cast<Size>(primary_size), "Scales dim mismatch");
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(primary_size), [&](size_t i) {
+        Index idx = static_cast<Index>(i);
+        Real s = scales[i];
+        if (s == 1.0) return;
+        
+        auto vals = IsCSR ? matrix.row_values(idx) : matrix.col_values(idx);
+        
+        namespace simd = scl::simd;
+        const simd::Tag d;
+        const size_t lanes = simd::lanes();
+        const auto v_scale = simd::Set(d, s);
+        
+        size_t k = 0;
+        for (; k + lanes <= vals.size; k += lanes) {
+            auto v = simd::Load(d, const_cast<T*>(vals.ptr) + k);
+            v = simd::Mul(v, v_scale);
+            simd::Store(v, d, const_cast<T*>(vals.ptr) + k);
+        }
+        
+        for (; k < vals.size; ++k) {
+            const_cast<T*>(vals.ptr)[k] *= s;
+        }
+    });
+}
+
 } // namespace detail
 
 // =============================================================================
-// 1. Row/Column Scaling (In-Place)
+// Public Base Interface (ISparse/ICSR/ICSC)
 // =============================================================================
 
-/// @brief Scale each row by a specific factor (Generic CSR-like matrices).
+/// @brief Scale each row by a specific factor (ICSR base interface).
+///
+/// Works with any matrix type that inherits from ICSR.
+///
+/// @param matrix ICSR matrix (modified in-place)
+/// @param scales Array of scale factors (one per row)
+template <typename T>
+SCL_FORCE_INLINE void scale_rows(ICSR<T>& matrix, Span<const Real> scales) {
+    detail::scale_base_impl<T, true>(matrix, scales);
+}
+
+/// @brief Scale each column by a specific factor (ICSC base interface).
+///
+/// Works with any matrix type that inherits from ICSC.
+///
+/// @param matrix ICSC matrix (modified in-place)
+/// @param scales Array of scale factors (one per column)
+template <typename T>
+SCL_FORCE_INLINE void scale_cols(ICSC<T>& matrix, Span<const Real> scales) {
+    detail::scale_base_impl<T, false>(matrix, scales);
+}
+
+// =============================================================================
+// Efficient Implementations (CustomSparseLike & VirtualSparseLike)
+// =============================================================================
+
+/// @brief Scale each row by a specific factor (CustomSparseLike & VirtualSparseLike).
 ///
 /// Operation: matrix[i, :] *= scales[i]
 /// Used for Library Size Normalization (CPM/TPM) where scale = target_sum / current_sum.
+///
+/// This overload works with both CustomSparseLike and VirtualSparseLike matrices.
+/// Uses optimized SIMD path for contiguous storage (Custom) or row-by-row processing (Virtual).
 ///
 /// @tparam MatrixT Any CSR-like matrix type
 /// @param matrix CSR-like Matrix (modified in-place).
@@ -225,7 +288,7 @@ SCL_FORCE_INLINE void scale_rows(
     detail::scale_impl(matrix, scales);
 }
 
-/// @brief Scale each column by a specific factor (Generic CSC-like matrices).
+/// @brief Scale each column by a specific factor (CustomSparseLike & VirtualSparseLike).
 ///
 /// Operation: matrix[:, j] *= scales[j]
 /// Used for feature normalization where scale = target_sum / current_sum.
@@ -245,10 +308,98 @@ SCL_FORCE_INLINE void scale_cols(
 // 2. Highly Expressed Feature Detection
 // =============================================================================
 
-/// @brief Identify genes that consume a large fraction of counts in any cell (Generic CSR-like matrices).
+/// @brief Identify genes that consume a large fraction of counts in any cell (ICSR base interface).
+///
+/// Works with any matrix type that inherits from ICSR.
+///
+/// @param matrix ICSR matrix
+/// @param row_sums Pre-computed row sums (total counts per cell)
+/// @param max_fraction Threshold (e.g., 0.05 for 5%)
+/// @param out_mask Output boolean mask (Byte array) of size n_cols
+template <typename T>
+SCL_FORCE_INLINE void detect_highly_expressed_genes(
+    const ICSR<T>& matrix,
+    Span<const Real> row_sums,
+    Real max_fraction,
+    MutableSpan<Byte> out_mask
+) {
+    SCL_CHECK_DIM(row_sums.size == static_cast<Size>(matrix.rows()), "Row sums mismatch");
+    SCL_CHECK_DIM(out_mask.size == static_cast<Size>(matrix.cols()), "Output mask mismatch");
+    
+    scl::memory::zero(out_mask);
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(matrix.rows()), [&](size_t i) {
+        Real total = row_sums[i];
+        if (total <= 0) return;
+        
+        Real threshold = total * max_fraction;
+        Index row_idx = static_cast<Index>(i);
+        
+        auto indices = matrix.row_indices(row_idx);
+        auto values = matrix.row_values(row_idx);
+        
+        for (size_t k = 0; k < values.size; ++k) {
+            if (values[k] > threshold) {
+                Index gene_idx = indices[k];
+#ifdef _MSC_VER
+                out_mask[gene_idx] = 1;
+#else
+                __atomic_store_n(&out_mask[gene_idx], 1, __ATOMIC_RELAXED);
+#endif
+            }
+        }
+    });
+}
+
+/// @brief Identify cells that consume a large fraction of counts for any gene (ICSC base interface).
+///
+/// Works with any matrix type that inherits from ICSC.
+///
+/// @param matrix ICSC matrix
+/// @param col_sums Pre-computed column sums (total counts per gene)
+/// @param max_fraction Threshold (e.g., 0.05 for 5%)
+/// @param out_mask Output boolean mask (Byte array) of size n_rows
+template <typename T>
+SCL_FORCE_INLINE void detect_highly_expressed_cells(
+    const ICSC<T>& matrix,
+    Span<const Real> col_sums,
+    Real max_fraction,
+    MutableSpan<Byte> out_mask
+) {
+    SCL_CHECK_DIM(col_sums.size == static_cast<Size>(matrix.cols()), "Col sums mismatch");
+    SCL_CHECK_DIM(out_mask.size == static_cast<Size>(matrix.rows()), "Output mask mismatch");
+    
+    scl::memory::zero(out_mask);
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(matrix.cols()), [&](size_t j) {
+        Real total = col_sums[j];
+        if (total <= 0) return;
+        
+        Real threshold = total * max_fraction;
+        Index col_idx = static_cast<Index>(j);
+        
+        auto indices = matrix.col_indices(col_idx);
+        auto values = matrix.col_values(col_idx);
+        
+        for (size_t k = 0; k < values.size; ++k) {
+            if (values[k] > threshold) {
+                Index cell_idx = indices[k];
+#ifdef _MSC_VER
+                out_mask[cell_idx] = 1;
+#else
+                __atomic_store_n(&out_mask[cell_idx], 1, __ATOMIC_RELAXED);
+#endif
+            }
+        }
+    });
+}
+
+/// @brief Identify genes that consume a large fraction of counts in any cell (CustomSparseLike & VirtualSparseLike).
 ///
 /// Used to exclude genes like Hemoglobin or Mitochondria from normalization factors.
 /// A gene is flagged if: `expression[cell, gene] > max_fraction * total_counts[cell]`.
+///
+/// This overload works with both CustomSparseLike and VirtualSparseLike matrices.
 ///
 /// @tparam MatrixT Any CSR-like matrix type
 /// @param matrix CSR-like Matrix.
@@ -267,7 +418,7 @@ SCL_FORCE_INLINE void detect_highly_expressed_genes(
     detail::detect_highly_expressed_impl(matrix, row_sums, max_fraction, out_mask);
 }
 
-/// @brief Identify cells that consume a large fraction of counts for any gene (Generic CSC-like matrices).
+/// @brief Identify cells that consume a large fraction of counts for any gene (CustomSparseLike & VirtualSparseLike).
 ///
 /// Used to detect outlier cells with unusually high expression.
 /// A cell is flagged if: `expression[cell, gene] > max_fraction * total_counts[gene]`.
@@ -292,7 +443,71 @@ SCL_FORCE_INLINE void detect_highly_expressed_cells(
 // 3. Masked Row/Column Sums
 // =============================================================================
 
-/// @brief Compute row sums excluding specific genes (Generic CSR-like matrices).
+/// @brief Compute row sums excluding specific genes (ICSR base interface).
+///
+/// Works with any matrix type that inherits from ICSR.
+///
+/// @param matrix ICSR matrix
+/// @param gene_mask Byte mask (size n_cols). If gene_mask[j] != 0, ignore gene j
+/// @param out_sums Output row sums
+template <typename T>
+SCL_FORCE_INLINE void row_sums_masked(
+    const ICSR<T>& matrix,
+    Span<const Byte> gene_mask,
+    MutableSpan<Real> out_sums
+) {
+    SCL_CHECK_DIM(gene_mask.size == static_cast<Size>(matrix.cols()), "Gene mask mismatch");
+    SCL_CHECK_DIM(out_sums.size == static_cast<Size>(matrix.rows()), "Output sums mismatch");
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(matrix.rows()), [&](size_t i) {
+        Index row_idx = static_cast<Index>(i);
+        auto indices = matrix.row_indices(row_idx);
+        auto values = matrix.row_values(row_idx);
+        
+        Real sum = 0;
+        for (size_t k = 0; k < values.size; ++k) {
+            Index gene_idx = indices[k];
+            if (gene_mask[gene_idx] == 0) {
+                sum += values[k];
+            }
+        }
+        out_sums[i] = sum;
+    });
+}
+
+/// @brief Compute column sums excluding specific cells (ICSC base interface).
+///
+/// Works with any matrix type that inherits from ICSC.
+///
+/// @param matrix ICSC matrix
+/// @param cell_mask Byte mask (size n_rows). If cell_mask[i] != 0, ignore cell i
+/// @param out_sums Output column sums
+template <typename T>
+SCL_FORCE_INLINE void col_sums_masked(
+    const ICSC<T>& matrix,
+    Span<const Byte> cell_mask,
+    MutableSpan<Real> out_sums
+) {
+    SCL_CHECK_DIM(cell_mask.size == static_cast<Size>(matrix.rows()), "Cell mask mismatch");
+    SCL_CHECK_DIM(out_sums.size == static_cast<Size>(matrix.cols()), "Output sums mismatch");
+    
+    scl::threading::parallel_for(0, static_cast<size_t>(matrix.cols()), [&](size_t j) {
+        Index col_idx = static_cast<Index>(j);
+        auto indices = matrix.col_indices(col_idx);
+        auto values = matrix.col_values(col_idx);
+        
+        Real sum = 0;
+        for (size_t k = 0; k < values.size; ++k) {
+            Index cell_idx = indices[k];
+            if (cell_mask[cell_idx] == 0) {
+                sum += values[k];
+            }
+        }
+        out_sums[j] = sum;
+    });
+}
+
+/// @brief Compute row sums excluding specific genes (CustomSparseLike & VirtualSparseLike).
 ///
 /// @tparam MatrixT Any CSR-like matrix type
 /// @param matrix CSR-like Matrix.
@@ -307,7 +522,7 @@ SCL_FORCE_INLINE void row_sums_masked(
     detail::sums_masked_impl(matrix, gene_mask, out_sums);
 }
 
-/// @brief Compute column sums excluding specific cells (Generic CSC-like matrices).
+/// @brief Compute column sums excluding specific cells (CustomSparseLike & VirtualSparseLike).
 ///
 /// @tparam MatrixT Any CSC-like matrix type
 /// @param matrix CSC-like Matrix.

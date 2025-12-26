@@ -2,6 +2,7 @@
 
 #include "scl/core/type.hpp"
 #include "scl/core/matrix.hpp"
+#include "scl/core/sparse.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
@@ -50,18 +51,28 @@
 /// - Throughput: ~1000 genes/sec (10K cells, k=6 graph connectivity)
 /// - Memory: O(n_cells) thread-local buffer
 /// - Speedup vs Python: 10-50x
+///
+/// Interface Architecture:
+///
+/// 1. Base Interface (ISparse): Generic algorithm for any sparse matrix
+/// 2. CustomSparseLike: Optimized for contiguous storage (direct data access)
+/// 3. VirtualSparseLike: Optimized for indirection pattern (pointer arrays)
 // =============================================================================
 
 namespace scl::kernel::spatial {
 
 namespace detail {
 
-/// @brief Compute sum of all weights in sparse graph.
+// =============================================================================
+// Weight Sum Computation (Multiple Implementations)
+// =============================================================================
+
+/// @brief Compute sum of all weights (CustomSparseLike optimized).
 ///
-/// W_sum = sum over all edges of w_ij
+/// Uses direct data pointer access for maximum performance.
 template <typename T>
-SCL_FORCE_INLINE T weight_sum(const CSRMatrix<T>& graph) {
-    const Size nnz = static_cast<Size>(graph.nnz);
+SCL_FORCE_INLINE T weight_sum_custom(const CustomCSRLike auto& graph) {
+    const Size nnz = static_cast<Size>(scl::nnz(graph));
     
     namespace s = scl::simd;
     const s::Tag d;
@@ -82,6 +93,58 @@ SCL_FORCE_INLINE T weight_sum(const CSRMatrix<T>& graph) {
     }
     
     return sum;
+}
+
+/// @brief Compute sum of all weights (VirtualSparseLike).
+///
+/// Iterates over all rows and accumulates weights.
+template <typename T>
+SCL_FORCE_INLINE T weight_sum_virtual(const VirtualCSRLike auto& graph) {
+    const Index n_rows = scl::rows(graph);
+    T sum = static_cast<T>(0.0);
+    
+    for (Index i = 0; i < n_rows; ++i) {
+        auto weights = graph.row_values(i);
+        for (Size k = 0; k < weights.size; ++k) {
+            sum += weights[k];
+        }
+    }
+    
+    return sum;
+}
+
+/// @brief Compute sum of all weights (ISparse base interface).
+///
+/// Generic implementation using virtual interface.
+template <typename T>
+SCL_FORCE_INLINE T weight_sum_base(const ISparse<T, true>& graph) {
+    const Index n_rows = graph.rows();
+    T sum = static_cast<T>(0.0);
+    
+    for (Index i = 0; i < n_rows; ++i) {
+        auto weights = graph.row_values(i);
+        for (Size k = 0; k < weights.size; ++k) {
+            sum += weights[k];
+        }
+    }
+    
+    return sum;
+}
+
+/// @brief Unified weight sum dispatcher.
+template <typename GraphT>
+SCL_FORCE_INLINE auto weight_sum(const GraphT& graph) {
+    using T = typename GraphT::ValueType;
+    
+    if constexpr (CustomCSRLike<GraphT>) {
+        return weight_sum_custom<T>(graph);
+    } else if constexpr (VirtualCSRLike<GraphT>) {
+        return weight_sum_virtual<T>(graph);
+    } else if constexpr (CSRLike<GraphT>) {
+        return weight_sum_base<T>(graph);
+    } else {
+        static_assert(CSRLike<GraphT>, "Graph must be CSRLike");
+    }
 }
 
 /// @brief Materialize centered dense vector: z = x - mean.
@@ -173,29 +236,30 @@ SCL_FORCE_INLINE T sum_squared(const T* SCL_RESTRICT z, Size n) {
     return sum;
 }
 
-/// @brief Compute spatial covariance: sum_ij w_ij * z_i * z_j.
-///
-/// Traverses graph edges and accumulates products.
+// =============================================================================
+// Spatial Covariance Computation
+// =============================================================================
+
+/// @brief Compute spatial covariance (CustomSparseLike optimized).
 template <typename T>
-SCL_FORCE_INLINE T spatial_covariance(
-    const CSRMatrix<T>& graph,
+SCL_FORCE_INLINE T spatial_covariance_custom(
+    const CustomCSRLike auto& graph,
     const T* SCL_RESTRICT z,
-    Size n_cells
+    [[maybe_unused]] Size n_cells
 ) {
 #if !defined(NDEBUG)
     SCL_ASSERT(z != nullptr, "Spatial: Null pointer in spatial_covariance");
-    SCL_ASSERT(static_cast<Size>(graph.rows) == n_cells, "Spatial: Graph size mismatch");
+    SCL_ASSERT(static_cast<Size>(scl::rows(graph)) == n_cells, "Spatial: Graph size mismatch");
 #endif
     
     T sum = static_cast<T>(0.0);
+    const Index n_rows = scl::rows(graph);
     
-    for (Index i = 0; i < static_cast<Index>(n_cells); ++i) {
+    for (Index i = 0; i < n_rows; ++i) {
         const T zi = z[i];
-        
         auto neighbors = graph.row_indices(i);
         auto weights = graph.row_values(i);
         
-        // Accumulate weighted products
         for (Size k = 0; k < neighbors.size; ++k) {
             Index j = neighbors[k];
             T zj = z[j];
@@ -206,29 +270,110 @@ SCL_FORCE_INLINE T spatial_covariance(
     return sum;
 }
 
-/// @brief Compute spatial variance: sum_ij w_ij * (z_i - z_j)^2.
-///
-/// Used for Geary's C numerator.
+/// @brief Compute spatial covariance (VirtualSparseLike).
 template <typename T>
-SCL_FORCE_INLINE T spatial_variance(
-    const CSRMatrix<T>& graph,
+SCL_FORCE_INLINE T spatial_covariance_virtual(
+    const VirtualCSRLike auto& graph,
     const T* SCL_RESTRICT z,
-    Size n_cells
+    [[maybe_unused]] Size n_cells
 ) {
 #if !defined(NDEBUG)
-    SCL_ASSERT(z != nullptr, "Spatial: Null pointer in spatial_variance");
-    SCL_ASSERT(static_cast<Size>(graph.rows) == n_cells, "Spatial: Graph size mismatch");
+    SCL_ASSERT(z != nullptr, "Spatial: Null pointer in spatial_covariance");
+    SCL_ASSERT(static_cast<Size>(scl::rows(graph)) == n_cells, "Spatial: Graph size mismatch");
 #endif
     
     T sum = static_cast<T>(0.0);
+    const Index n_rows = scl::rows(graph);
     
-    for (Index i = 0; i < static_cast<Index>(n_cells); ++i) {
+    for (Index i = 0; i < n_rows; ++i) {
         const T zi = z[i];
-        
         auto neighbors = graph.row_indices(i);
         auto weights = graph.row_values(i);
         
-        // Accumulate weighted squared differences
+        for (Size k = 0; k < neighbors.size; ++k) {
+            Index j = neighbors[k];
+            T zj = z[j];
+            sum += weights[k] * zi * zj;
+        }
+    }
+    
+    return sum;
+}
+
+/// @brief Compute spatial covariance (ISparse base interface).
+template <typename T>
+SCL_FORCE_INLINE T spatial_covariance_base(
+    const ISparse<T, true>& graph,
+    const T* SCL_RESTRICT z,
+    [[maybe_unused]] Size n_cells
+) {
+#if !defined(NDEBUG)
+    SCL_ASSERT(z != nullptr, "Spatial: Null pointer in spatial_covariance");
+    SCL_ASSERT(static_cast<Size>(graph.rows()) == n_cells, "Spatial: Graph size mismatch");
+#endif
+    
+    T sum = static_cast<T>(0.0);
+    const Index n_rows = graph.rows();
+    
+    for (Index i = 0; i < n_rows; ++i) {
+        const T zi = z[i];
+        auto neighbors = graph.row_indices(i);
+        auto weights = graph.row_values(i);
+        
+        for (Size k = 0; k < neighbors.size; ++k) {
+            Index j = neighbors[k];
+            T zj = z[j];
+            sum += weights[k] * zi * zj;
+        }
+    }
+    
+    return sum;
+}
+
+/// @brief Unified spatial covariance dispatcher.
+template <typename GraphT>
+SCL_FORCE_INLINE auto spatial_covariance(
+    const GraphT& graph,
+    const typename GraphT::ValueType* SCL_RESTRICT z,
+    Size n_cells
+) {
+    using T = typename GraphT::ValueType;
+    
+    if constexpr (CustomCSRLike<GraphT>) {
+        return spatial_covariance_custom<T>(graph, z, n_cells);
+    } else if constexpr (VirtualCSRLike<GraphT>) {
+        return spatial_covariance_virtual<T>(graph, z, n_cells);
+    } else if constexpr (CSRLike<GraphT>) {
+        return spatial_covariance_base<T>(graph, z, n_cells);
+    } else {
+        static_assert(CSRLike<GraphT>, "Graph must be CSRLike");
+    }
+}
+
+// =============================================================================
+// Spatial Variance Computation
+// =============================================================================
+
+/// @brief Compute spatial variance (CustomSparseLike optimized).
+template <typename T>
+SCL_FORCE_INLINE T spatial_variance_custom(
+    const CustomCSRLike auto& graph,
+    const T* SCL_RESTRICT z,
+    [[maybe_unused]] Size n_cells
+) {
+#if !defined(NDEBUG)
+    SCL_ASSERT(z != nullptr, "Spatial: Null pointer in spatial_variance");
+    SCL_ASSERT(static_cast<Size>(scl::rows(graph)) == n_cells, "Spatial: Graph size mismatch");
+#endif
+    
+    T sum = static_cast<T>(0.0);
+    const Index n_rows = scl::rows(graph);
+    
+    for (Index i = 0; i < n_rows; ++i) {
+        const T zi = z[i];
+        auto neighbors = graph.row_indices(i);
+        auto weights = graph.row_values(i);
+        
         for (Size k = 0; k < neighbors.size; ++k) {
             Index j = neighbors[k];
             T diff = zi - z[j];
@@ -239,33 +384,204 @@ SCL_FORCE_INLINE T spatial_variance(
     return sum;
 }
 
+/// @brief Compute spatial variance (VirtualSparseLike).
+template <typename T>
+SCL_FORCE_INLINE T spatial_variance_virtual(
+    const VirtualCSRLike auto& graph,
+    const T* SCL_RESTRICT z,
+    [[maybe_unused]] Size n_cells
+) {
+#if !defined(NDEBUG)
+    SCL_ASSERT(z != nullptr, "Spatial: Null pointer in spatial_variance");
+    SCL_ASSERT(static_cast<Size>(scl::rows(graph)) == n_cells, "Spatial: Graph size mismatch");
+#endif
+    
+    T sum = static_cast<T>(0.0);
+    const Index n_rows = scl::rows(graph);
+    
+    for (Index i = 0; i < n_rows; ++i) {
+        const T zi = z[i];
+        auto neighbors = graph.row_indices(i);
+        auto weights = graph.row_values(i);
+        
+        for (Size k = 0; k < neighbors.size; ++k) {
+            Index j = neighbors[k];
+            T diff = zi - z[j];
+            sum += weights[k] * diff * diff;
+        }
+    }
+    
+    return sum;
+}
+
+/// @brief Compute spatial variance (ISparse base interface).
+template <typename T>
+SCL_FORCE_INLINE T spatial_variance_base(
+    const ISparse<T, true>& graph,
+    const T* SCL_RESTRICT z,
+    [[maybe_unused]] Size n_cells
+) {
+#if !defined(NDEBUG)
+    SCL_ASSERT(z != nullptr, "Spatial: Null pointer in spatial_variance");
+    SCL_ASSERT(static_cast<Size>(graph.rows()) == n_cells, "Spatial: Graph size mismatch");
+#endif
+    
+    T sum = static_cast<T>(0.0);
+    const Index n_rows = graph.rows();
+    
+    for (Index i = 0; i < n_rows; ++i) {
+        const T zi = z[i];
+        auto neighbors = graph.row_indices(i);
+        auto weights = graph.row_values(i);
+        
+        for (Size k = 0; k < neighbors.size; ++k) {
+            Index j = neighbors[k];
+            T diff = zi - z[j];
+            sum += weights[k] * diff * diff;
+        }
+    }
+    
+    return sum;
+}
+
+/// @brief Unified spatial variance dispatcher.
+template <typename GraphT>
+SCL_FORCE_INLINE auto spatial_variance(
+    const GraphT& graph,
+    const typename GraphT::ValueType* SCL_RESTRICT z,
+    Size n_cells
+) {
+    using T = typename GraphT::ValueType;
+    
+    if constexpr (CustomCSRLike<GraphT>) {
+        return spatial_variance_custom<T>(graph, z, n_cells);
+    } else if constexpr (VirtualCSRLike<GraphT>) {
+        return spatial_variance_virtual<T>(graph, z, n_cells);
+    } else if constexpr (CSRLike<GraphT>) {
+        return spatial_variance_base<T>(graph, z, n_cells);
+    } else {
+        static_assert(CSRLike<GraphT>, "Graph must be CSRLike");
+    }
+}
+
 } // namespace detail
 
 // =============================================================================
-// Public API
+// Public API: Moran's I
 // =============================================================================
 
-/// @brief Compute Global Moran's I for all features.
+// =============================================================================
+// Layer 1: Virtual Interface (ISparse-based, Generic but Slower)
+// =============================================================================
+
+/// @brief Compute Global Moran's I (Virtual Interface).
+///
+/// Generic implementation using ISparse base class.
+/// Works with any sparse matrix type but may have virtual call overhead.
 ///
 /// Moran's I measures spatial autocorrelation:
 /// - I > 0: Positive spatial correlation (clustering)
 /// - I = 0: Random spatial pattern
 /// - I < 0: Negative correlation (dispersion)
 ///
-/// @param graph Spatial weights matrix (CSR, cells x cells)
-/// @param features Feature matrix (CSC, cells x genes)
+/// @param graph Spatial weights matrix (CSR, via ISparse interface, cells x cells)
+/// @param features Feature matrix (CSC, via ISparse interface, cells x genes)
 /// @param output Output Moran's I values [size = n_genes]
 template <typename T>
 void morans_i(
-    const CSRMatrix<T>& graph,
-    const CSCMatrix<T>& features,
+    const ISparse<T, true>& graph,
+    const ICSC<T>& features,
     MutableSpan<T> output
 ) {
-    const Index n_cells = features.rows;
-    const Index n_genes = features.cols;
+    const Index n_cells = features.rows();
+    const Index n_genes = features.cols();
     
-    SCL_CHECK_DIM(graph.rows == n_cells, "Moran's I: Graph rows mismatch");
-    SCL_CHECK_DIM(graph.cols == n_cells, "Moran's I: Graph cols mismatch");
+    SCL_CHECK_DIM(graph.rows() == n_cells, "Moran's I: Graph rows mismatch");
+    SCL_CHECK_DIM(graph.cols() == n_cells, "Moran's I: Graph cols mismatch");
+    SCL_CHECK_DIM(output.size == static_cast<Size>(n_genes), 
+                  "Moran's I: Output size mismatch");
+
+    // Precompute graph constants
+    const T W_sum = detail::weight_sum_base<T>(graph);
+    const T N = static_cast<T>(n_cells);
+    const T scale_factor = (W_sum > static_cast<T>(0.0)) ? (N / W_sum) : static_cast<T>(0.0);
+
+    // Chunk-based parallelism for buffer reuse
+    constexpr size_t CHUNK_SIZE = 16;
+    const size_t n_chunks = (static_cast<size_t>(n_genes) + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+    scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
+        // Thread-local dense buffer
+        std::vector<T> z_buffer(n_cells);
+        T* z = z_buffer.data();
+
+        size_t j_start = chunk_idx * CHUNK_SIZE;
+        size_t j_end = std::min(static_cast<size_t>(n_genes), j_start + CHUNK_SIZE);
+
+        for (size_t j = j_start; j < j_end; ++j) {
+            const Index col_idx = static_cast<Index>(j);
+            
+            auto col_indices = features.primary_indices(col_idx);
+            auto col_values = features.primary_values(col_idx);
+
+            // Compute mean
+            T sum_x = static_cast<T>(0.0);
+            for (Size k = 0; k < col_values.size; ++k) {
+                sum_x += col_values[k];
+            }
+            T mean = sum_x / N;
+
+            // Materialize centered vector
+            detail::materialize_centered<T>(col_indices, col_values, mean, z, n_cells);
+
+            // Compute denominator: variance
+            T sum_sq = detail::sum_squared(z, n_cells);
+
+            if (sum_sq <= std::numeric_limits<T>::epsilon()) {
+                output[col_idx] = std::numeric_limits<T>::quiet_NaN();
+                continue;
+            }
+
+            // Compute numerator: spatial covariance
+            T numerator = detail::spatial_covariance_base<T>(graph, z, n_cells);
+
+            // Final result
+            output[col_idx] = scale_factor * (numerator / sum_sq);
+        }
+    });
+}
+
+// =============================================================================
+// Layer 2: Concept-Based (CSRLike/CSCLike, Optimized for Custom/Virtual)
+// =============================================================================
+
+/// @brief Compute Global Moran's I (Concept-based, Optimized).
+///
+/// High-performance implementation for CSRLike/CSCLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
+///
+/// Moran's I measures spatial autocorrelation:
+/// - I > 0: Positive spatial correlation (clustering)
+/// - I = 0: Random spatial pattern
+/// - I < 0: Negative correlation (dispersion)
+///
+/// @tparam GraphT Any CSR-like matrix type (CustomSparse or VirtualSparse)
+/// @tparam FeatureT Any CSC-like matrix type (CustomSparse or VirtualSparse)
+/// @param graph Spatial weights matrix (CSR, cells x cells)
+/// @param features Feature matrix (CSC, cells x genes)
+/// @param output Output Moran's I values [size = n_genes]
+template <CSRLike GraphT, CSCLike FeatureT>
+void morans_i(
+    const GraphT& graph,
+    const FeatureT& features,
+    MutableSpan<typename FeatureT::ValueType> output
+) {
+    using T = typename FeatureT::ValueType;
+    const Index n_cells = scl::rows(features);
+    const Index n_genes = scl::cols(features);
+    
+    SCL_CHECK_DIM(scl::rows(graph) == n_cells, "Moran's I: Graph rows mismatch");
+    SCL_CHECK_DIM(scl::cols(graph) == n_cells, "Moran's I: Graph cols mismatch");
     SCL_CHECK_DIM(output.size == static_cast<Size>(n_genes), 
                   "Moran's I: Output size mismatch");
 
@@ -319,27 +635,109 @@ void morans_i(
     });
 }
 
-/// @brief Compute Global Geary's C for all features.
+/// @brief Compute Global Geary's C (Virtual Interface).
+///
+/// Generic implementation using ISparse base class.
+/// Works with any sparse matrix type but may have virtual call overhead.
 ///
 /// Geary's C measures spatial autocorrelation:
 /// - C < 1: Positive correlation (similar neighbors)
 /// - C = 1: Random pattern
 /// - C > 1: Negative correlation (dissimilar neighbors)
 ///
-/// @param graph Spatial weights matrix (CSR, cells x cells)
-/// @param features Feature matrix (CSC, cells x genes)
+/// @param graph Spatial weights matrix (CSR, via ISparse interface, cells x cells)
+/// @param features Feature matrix (CSC, via ISparse interface, cells x genes)
 /// @param output Output Geary's C values [size = n_genes]
 template <typename T>
 void gearys_c(
-    const CSRMatrix<T>& graph,
-    const CSCMatrix<T>& features,
+    const ISparse<T, true>& graph,
+    const ICSC<T>& features,
     MutableSpan<T> output
 ) {
-    const Index n_cells = features.rows;
-    const Index n_genes = features.cols;
+    const Index n_cells = features.rows();
+    const Index n_genes = features.cols();
     
-    SCL_CHECK_DIM(graph.rows == n_cells, "Geary's C: Graph rows mismatch");
-    SCL_CHECK_DIM(graph.cols == n_cells, "Geary's C: Graph cols mismatch");
+    SCL_CHECK_DIM(graph.rows() == n_cells, "Geary's C: Graph rows mismatch");
+    SCL_CHECK_DIM(graph.cols() == n_cells, "Geary's C: Graph cols mismatch");
+    SCL_CHECK_DIM(output.size == static_cast<Size>(n_genes), 
+                  "Geary's C: Output size mismatch");
+
+    const T W_sum = detail::weight_sum_base<T>(graph);
+    const T N = static_cast<T>(n_cells);
+    const T scale_factor = (W_sum > static_cast<T>(0.0)) ? 
+                           ((N - static_cast<T>(1.0)) / (static_cast<T>(2.0) * W_sum)) : 
+                           static_cast<T>(0.0);
+
+    constexpr size_t CHUNK_SIZE = 16;
+    const size_t n_chunks = (static_cast<size_t>(n_genes) + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+    scl::threading::parallel_for(0, n_chunks, [&](size_t chunk_idx) {
+        std::vector<T> z_buffer(n_cells);
+        T* z = z_buffer.data();
+
+        size_t j_start = chunk_idx * CHUNK_SIZE;
+        size_t j_end = std::min(static_cast<size_t>(n_genes), j_start + CHUNK_SIZE);
+
+        for (size_t j = j_start; j < j_end; ++j) {
+            const Index col_idx = static_cast<Index>(j);
+            
+            auto col_indices = features.primary_indices(col_idx);
+            auto col_values = features.primary_values(col_idx);
+
+            // Compute mean
+            T sum_x = static_cast<T>(0.0);
+            for (Size k = 0; k < col_values.size; ++k) {
+                sum_x += col_values[k];
+            }
+            T mean = sum_x / N;
+
+            // Materialize centered vector
+            detail::materialize_centered<T>(col_indices, col_values, mean, z, n_cells);
+
+            // Compute denominator: variance
+            T sum_sq = detail::sum_squared(z, n_cells);
+
+            if (sum_sq <= std::numeric_limits<T>::epsilon()) {
+                output[col_idx] = std::numeric_limits<T>::quiet_NaN();
+                continue;
+            }
+
+            // Compute numerator: spatial variance
+            T numerator = detail::spatial_variance_base<T>(graph, z, n_cells);
+
+            // Final result
+            output[col_idx] = scale_factor * (numerator / sum_sq);
+        }
+    });
+}
+
+/// @brief Compute Global Geary's C (Concept-based, Optimized).
+///
+/// High-performance implementation for CSRLike/CSCLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
+///
+/// Geary's C measures spatial autocorrelation:
+/// - C < 1: Positive correlation (similar neighbors)
+/// - C = 1: Random pattern
+/// - C > 1: Negative correlation (dissimilar neighbors)
+///
+/// @tparam GraphT Any CSR-like matrix type (CustomSparse or VirtualSparse)
+/// @tparam FeatureT Any CSC-like matrix type (CustomSparse or VirtualSparse)
+/// @param graph Spatial weights matrix (CSR, cells x cells)
+/// @param features Feature matrix (CSC, cells x genes)
+/// @param output Output Geary's C values [size = n_genes]
+template <CSRLike GraphT, CSCLike FeatureT>
+void gearys_c(
+    const GraphT& graph,
+    const FeatureT& features,
+    MutableSpan<typename FeatureT::ValueType> output
+) {
+    using T = typename FeatureT::ValueType;
+    const Index n_cells = scl::rows(features);
+    const Index n_genes = scl::cols(features);
+    
+    SCL_CHECK_DIM(scl::rows(graph) == n_cells, "Geary's C: Graph rows mismatch");
+    SCL_CHECK_DIM(scl::cols(graph) == n_cells, "Geary's C: Graph cols mismatch");
     SCL_CHECK_DIM(output.size == static_cast<Size>(n_genes), 
                   "Geary's C: Output size mismatch");
 
@@ -392,7 +790,7 @@ void gearys_c(
     });
 }
 
-/// @brief Compute Local Moran's I for all cells and features.
+/// @brief Compute Local Moran's I (Generic CSRLike/CSCLike).
 ///
 /// Local version measures contribution of each cell to global statistic.
 ///
@@ -401,17 +799,18 @@ void gearys_c(
 /// @param graph Spatial weights matrix (CSR)
 /// @param features Feature matrix (CSC)
 /// @param output Output local I values [size = n_cells x n_genes], row-major
-template <typename T>
+template <CSRLike GraphT, CSCLike FeatureT>
 void local_morans_i(
-    const CSRMatrix<T>& graph,
-    const CSCMatrix<T>& features,
-    MutableSpan<T> output
+    const GraphT& graph,
+    const FeatureT& features,
+    MutableSpan<typename FeatureT::ValueType> output
 ) {
-    const Index n_cells = features.rows;
-    const Index n_genes = features.cols;
+    using T = typename FeatureT::ValueType;
+    const Index n_cells = scl::rows(features);
+    const Index n_genes = scl::cols(features);
     const Size N = static_cast<Size>(n_cells);
     
-    SCL_CHECK_DIM(graph.rows == n_cells, "Local Moran's I: Graph rows mismatch");
+    SCL_CHECK_DIM(scl::rows(graph) == n_cells, "Local Moran's I: Graph rows mismatch");
     SCL_CHECK_DIM(output.size == N * static_cast<Size>(n_genes), 
                   "Local Moran's I: Output size mismatch");
 

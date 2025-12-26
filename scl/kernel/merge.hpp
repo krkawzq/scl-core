@@ -2,6 +2,7 @@
 
 #include "scl/core/type.hpp"
 #include "scl/core/matrix.hpp"
+#include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/threading/parallel_for.hpp"
@@ -110,22 +111,22 @@ VirtualCSR<T> vstack_virtual(
     // -------------------------------------------------------------------------
     
     const auto* first = inputs[0];
-    const Index common_cols = first->cols;
-    const Index src_rows = first->src_rows;
+    const Index common_cols = scl::cols(*first);
+    const Index src_rows = first->src_rows;  // VirtualCSR specific member
     
     // Validate: All must share same source and columns
     Index total_rows = 0;
     for (Size i = 0; i < inputs.size; ++i) {
         const auto* mat = inputs[i];
         
-        SCL_CHECK_DIM(mat->cols == common_cols, 
+        SCL_CHECK_DIM(scl::cols(*mat) == common_cols, 
                       "VStack: Column dimension mismatch across inputs");
         SCL_CHECK_ARG(mat->src_data == first->src_data, 
                       "VStack: All inputs must share the same physical source matrix");
         SCL_CHECK_ARG(mat->src_rows == src_rows,
                       "VStack: Source dimension mismatch");
         
-        total_rows += mat->rows;
+        total_rows += scl::rows(*mat);
     }
     
     SCL_CHECK_DIM(out_row_map.size == static_cast<Size>(total_rows),
@@ -143,13 +144,14 @@ VirtualCSR<T> vstack_virtual(
         
         // Copy this matrix's row_map to output
         // Each input's row_map is already relative to the shared source
+        const Index mat_rows = scl::rows(*mat);
         std::copy(
             mat->row_map,
-            mat->row_map + mat->rows,
+            mat->row_map + mat_rows,
             out_row_map.ptr + write_pos
         );
         
-        write_pos += mat->rows;
+        write_pos += mat_rows;
     }
 
     // -------------------------------------------------------------------------
@@ -207,21 +209,21 @@ VirtualCSC<T> hstack_virtual(
     // -------------------------------------------------------------------------
     
     const auto* first = inputs[0];
-    const Index common_rows = first->rows;
-    const Index src_cols = first->src_cols;
+    const Index common_rows = scl::rows(*first);
+    const Index src_cols = first->src_cols;  // VirtualCSC specific member
     
     Index total_cols = 0;
     for (Size i = 0; i < inputs.size; ++i) {
         const auto* mat = inputs[i];
         
-        SCL_CHECK_DIM(mat->rows == common_rows,
+        SCL_CHECK_DIM(scl::rows(*mat) == common_rows,
                       "HStack: Row dimension mismatch across inputs");
         SCL_CHECK_ARG(mat->src_data == first->src_data,
                       "HStack: All inputs must share the same physical source matrix");
         SCL_CHECK_ARG(mat->src_cols == src_cols,
                       "HStack: Source dimension mismatch");
         
-        total_cols += mat->cols;
+        total_cols += scl::cols(*mat);
     }
     
     SCL_CHECK_DIM(out_col_map.size == static_cast<Size>(total_cols),
@@ -237,13 +239,14 @@ VirtualCSC<T> hstack_virtual(
         const auto* mat = inputs[i];
         
         // Copy this matrix's col_map to output
+        const Index mat_cols = scl::cols(*mat);
         std::copy(
             mat->col_map,
-            mat->col_map + mat->cols,
+            mat->col_map + mat_cols,
             out_col_map.ptr + write_pos
         );
         
-        write_pos += mat->cols;
+        write_pos += mat_cols;
     }
 
     // -------------------------------------------------------------------------
@@ -312,7 +315,7 @@ void vstack_physical(
     // Step 1: Validate & Calculate Offsets
     // -------------------------------------------------------------------------
     
-    const Index common_cols = inputs[0]->cols;
+    const Index common_cols = scl::cols(*inputs[0]);
     
     std::vector<Index> row_offsets(inputs.size + 1, 0);
     std::vector<Size> nnz_offsets(inputs.size + 1, 0);
@@ -322,18 +325,20 @@ void vstack_physical(
     
     for (Size i = 0; i < inputs.size; ++i) {
         const auto* mat = inputs[i];
+        const Index mat_rows = scl::rows(*mat);
+        const Index mat_cols = scl::cols(*mat);
         
-        SCL_CHECK_DIM(mat->cols == common_cols,
+        SCL_CHECK_DIM(mat_cols == common_cols,
                       "VStack Physical: Column dimension mismatch");
         
         row_offsets[i] = total_rows;
         nnz_offsets[i] = total_nnz;
         
-        total_rows += mat->rows;
+        total_rows += mat_rows;
         
         // Calculate true NNZ (respecting explicit lengths)
         Size mat_nnz = 0;
-        for (Index r = 0; r < mat->rows; ++r) {
+        for (Index r = 0; r < mat_rows; ++r) {
             mat_nnz += static_cast<Size>(mat->row_length(r));
         }
         total_nnz += mat_nnz;
@@ -343,8 +348,8 @@ void vstack_physical(
     nnz_offsets[inputs.size] = total_nnz;
     
     // Validate destination capacity
-    SCL_CHECK_ARG(dst.rows >= total_rows, "VStack Physical: Destination rows insufficient");
-    SCL_CHECK_ARG(dst.cols >= common_cols, "VStack Physical: Destination cols insufficient");
+    SCL_CHECK_ARG(scl::rows(dst) >= total_rows, "VStack Physical: Destination rows insufficient");
+    SCL_CHECK_ARG(scl::cols(dst) >= common_cols, "VStack Physical: Destination cols insufficient");
     SCL_CHECK_ARG(dst.data != nullptr && dst.indices != nullptr && dst.indptr != nullptr,
                   "VStack Physical: Destination arrays not allocated");
 
@@ -381,8 +386,9 @@ void vstack_physical(
     for (Size b = 0; b < inputs.size; ++b) {
         const auto* mat = inputs[b];
         const Index row_base = row_offsets[b];
+        const Index mat_rows = scl::rows(*mat);
         
-        scl::threading::parallel_for(0, static_cast<size_t>(mat->rows), [&](size_t r) {
+        scl::threading::parallel_for(0, static_cast<size_t>(mat_rows), [&](size_t r) {
             Index row_idx = static_cast<Index>(r);
             Index len = mat->row_length(row_idx);
             
@@ -458,9 +464,11 @@ VirtualCSR<T> align_and_merge(
     for (Size i = 0; i < sources.size; ++i) {
         auto* mat = sources[i];
         
-        SCL_CHECK_DIM(alignment_maps[i].size == static_cast<Size>(mat->cols),
+        const Index mat_rows = scl::rows(*mat);
+        const Index mat_cols = scl::cols(*mat);
+        SCL_CHECK_DIM(alignment_maps[i].size == static_cast<Size>(mat_cols),
                       "Align & Merge: Alignment map size must match source cols");
-        SCL_CHECK_DIM(out_lengths[i].size == static_cast<Size>(mat->rows),
+        SCL_CHECK_DIM(out_lengths[i].size == static_cast<Size>(mat_rows),
                       "Align & Merge: Length buffer size must match source rows");
         
         scl::kernel::reorder::align_cols(
@@ -481,12 +489,13 @@ VirtualCSR<T> align_and_merge(
     Index total_rows = 0;
     for (Size i = 0; i < sources.size; ++i) {
         const auto* mat = sources[i];
+        const Index mat_rows = scl::rows(*mat);
         
-        SCL_CHECK_DIM(out_virtual_maps[i].size == static_cast<Size>(mat->rows),
+        SCL_CHECK_DIM(out_virtual_maps[i].size == static_cast<Size>(mat_rows),
                       "Align & Merge: Virtual map buffer size must match source rows");
         
         // Create identity map for this source
-        identity_map(mat->rows, out_virtual_maps[i]);
+        identity_map(mat_rows, out_virtual_maps[i]);
         
         // Create virtual view
         VirtualCSR<T> view;
@@ -495,12 +504,12 @@ VirtualCSR<T> align_and_merge(
         view.src_indptr = mat->indptr;
         view.src_row_lengths = mat->row_lengths;
         view.row_map = out_virtual_maps[i].ptr;
-        view.rows = mat->rows;
-        view.cols = mat->cols;
-        view.src_rows = mat->rows;
+        view.rows = mat_rows;
+        view.cols = scl::cols(*mat);
+        view.src_rows = mat_rows;
         
         virtual_views.push_back(view);
-        total_rows += mat->rows;
+        total_rows += mat_rows;
     }
 
     // -------------------------------------------------------------------------

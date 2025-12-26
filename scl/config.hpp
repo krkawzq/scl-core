@@ -31,6 +31,11 @@
 /// - `1`: float64
 /// - `2`: float16
 ///
+/// Index precision is controlled via `SCL_INDEX_PRECISION`:
+/// - `0`: int16 (memory-constrained, max 32K)
+/// - `1`: int32 (standard, max 2B)
+/// - `2`: int64 (default, max 9E18, NumPy-compatible)
+///
 /// =============================================================================
 
 // =============================================================================
@@ -218,6 +223,58 @@
 #else
     #error "SCL Configuration Error: Invalid SCL_PRECISION value. " \
            "Must be 0 (f32), 1 (f64), or 2 (f16)."
+#endif
+
+/// @}
+
+// =============================================================================
+// SECTION 6: Index Precision Control
+// =============================================================================
+
+/// @defgroup IndexPrecision Index Precision Control
+/// @{
+///
+/// Integer index type precision selection. Controls the Index type used
+/// throughout SCL for array indexing, dimensions, and sparse matrix indices.
+///
+/// Trade-offs:
+/// - int16: Max 32K elements, minimal memory, fast cache
+/// - int32: Max 2B elements, standard, good balance
+/// - int64: Max 9E18 elements, NumPy-compatible, future-proof
+///
+/// @note Default is int64 (NumPy-compatible) if not defined.
+///
+
+#ifndef SCL_INDEX_PRECISION
+    /// @brief Default index precision: int64 (NumPy-compatible)
+    #define SCL_INDEX_PRECISION 2
+#endif
+
+#if SCL_INDEX_PRECISION == 0
+    /// @brief Use 16-bit signed integers for indexing
+    ///
+    /// Use case: Memory-constrained environments, small datasets (<32K elements)
+    /// Max size: 32,767 (2^15 - 1)
+    /// Memory: 2 bytes per index
+    #define SCL_USE_INT16
+#elif SCL_INDEX_PRECISION == 1
+    /// @brief Use 32-bit signed integers for indexing
+    ///
+    /// Use case: Standard workloads, good memory/range balance
+    /// Max size: 2,147,483,647 (2^31 - 1)
+    /// Memory: 4 bytes per index
+    #define SCL_USE_INT32
+#elif SCL_INDEX_PRECISION == 2
+    /// @brief Use 64-bit signed integers for indexing (default)
+    ///
+    /// Use case: Large-scale single-cell data, NumPy compatibility
+    /// Max size: 9,223,372,036,854,775,807 (2^63 - 1)
+    /// Memory: 8 bytes per index
+    /// Compatibility: NumPy default, scipy.sparse compatible
+    #define SCL_USE_INT64
+#else
+    #error "SCL Configuration Error: Invalid SCL_INDEX_PRECISION value. " \
+           "Must be 0 (int16), 1 (int32), or 2 (int64)."
 #endif
 
 /// @}

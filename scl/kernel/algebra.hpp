@@ -141,7 +141,67 @@ SCL_FORCE_INLINE T sparse_dot_dense(
 // Public API
 // =============================================================================
 
-/// @brief Sparse Matrix-Vector Multiplication (Generic CSR-like matrices).
+// =============================================================================
+// Layer 1: Virtual Interface (ISparse-based, Generic but Slower)
+// =============================================================================
+
+/// @brief Sparse Matrix-Vector Multiplication (Virtual Interface).
+///
+/// Generic implementation using ISparse base class.
+/// Works with any sparse matrix type but may have virtual call overhead.
+///
+/// Computes: y = alpha * A * x + beta * y
+///
+/// @param A CSR sparse matrix (via ISparse interface)
+/// @param x Input vector [size = n]
+/// @param y Output vector [size = m], modified in-place
+/// @param alpha Scalar multiplier for A*x (default 1.0)
+/// @param beta Scalar multiplier for y (default 0.0)
+template <typename T>
+void spmv(
+    const ICSR<T>& A,
+    Span<const T> x,
+    MutableSpan<T> y,
+    T alpha = static_cast<T>(1.0),
+    T beta = static_cast<T>(0.0)
+) {
+    const Index M = A.rows();
+    const Index N = A.cols();
+    
+    SCL_CHECK_DIM(x.size == static_cast<Size>(N), "SpMV: x dimension mismatch");
+    SCL_CHECK_DIM(y.size == static_cast<Size>(M), "SpMV: y dimension mismatch");
+
+    // Handle beta scaling
+    if (beta != static_cast<T>(1.0)) {
+        detail::scale_vector(y, beta);
+    }
+
+    // Compute A*x and accumulate: y += alpha * (A*x)
+    scl::threading::parallel_for(0, static_cast<size_t>(M), [&](size_t i) {
+        const Index row_idx = static_cast<Index>(i);
+        
+        // Access via virtual interface
+        auto row_vals = A.primary_values(row_idx);
+        auto row_inds = A.primary_indices(row_idx);
+        
+        if (row_vals.size == 0) return;
+
+        // Compute dot product
+        T dot = detail::sparse_dot_dense(row_inds.ptr, row_vals.ptr, row_vals.size, x.ptr);
+
+        // Update output
+        y[row_idx] += alpha * dot;
+    });
+}
+
+// =============================================================================
+// Layer 2: Concept-Based (CSRLike, Optimized for Custom/Virtual)
+// =============================================================================
+
+/// @brief Sparse Matrix-Vector Multiplication (Concept-based, Optimized).
+///
+/// High-performance implementation for CSRLike matrices.
+/// Uses unified accessors for zero-overhead abstraction.
 ///
 /// Computes: y = alpha * A * x + beta * y
 ///
@@ -152,7 +212,7 @@ SCL_FORCE_INLINE T sparse_dot_dense(
 ///
 /// Parallelism: Row-parallel (each thread computes subset of y elements).
 ///
-/// @tparam MatrixT Any CSR-like matrix type
+/// @tparam MatrixT Any CSR-like matrix type (CustomSparse or VirtualSparse)
 /// @param A CSR-like matrix (m x n)
 /// @param x Input vector [size = n]
 /// @param y Output vector [size = m], modified in-place
@@ -167,8 +227,8 @@ void spmv(
     typename MatrixT::ValueType beta = static_cast<typename MatrixT::ValueType>(0.0)
 ) {
     using T = typename MatrixT::ValueType;
-    const Index M = A.rows;
-    const Index N = A.cols;
+    const Index M = scl::rows(A);
+    const Index N = scl::cols(A);
     
     SCL_CHECK_DIM(x.size == static_cast<Size>(N), "SpMV: x dimension mismatch");
     SCL_CHECK_DIM(y.size == static_cast<Size>(M), "SpMV: y dimension mismatch");
@@ -182,9 +242,9 @@ void spmv(
     scl::threading::parallel_for(0, static_cast<size_t>(M), [&](size_t i) {
         const Index row_idx = static_cast<Index>(i);
         
-        // Access CSR row data via unified interface
-        auto row_vals = A.row_values(row_idx);
-        auto row_inds = A.row_indices(row_idx);
+        // Use unified accessor (works for both Custom and Virtual)
+        auto row_vals = scl::primary_values(A, row_idx);
+        auto row_inds = scl::primary_indices(A, row_idx);
         
         if (row_vals.size == 0) return;  // Empty row contributes nothing
 
@@ -196,29 +256,27 @@ void spmv(
     });
 }
 
-/// @brief Transposed Sparse Matrix-Vector Multiplication (Generic CSC-like matrices).
+/// @brief Transposed Sparse Matrix-Vector Multiplication (Virtual Interface).
+///
+/// Generic implementation using ISparse base class for CSC matrices.
 ///
 /// Computes: y = alpha * A^T * x + beta * y
 ///
-/// Optimized for CSC: Each column of A (row of A^T) is processed independently.
-///
-/// @tparam MatrixT Any CSC-like matrix type
-/// @param A CSC-like matrix (m x n)
+/// @param A CSC sparse matrix (via ISparse interface)
 /// @param x Input vector [size = m]
 /// @param y Output vector [size = n], modified in-place
 /// @param alpha Scalar multiplier for A^T*x (default 1.0)
 /// @param beta Scalar multiplier for y (default 0.0)
-template <CSCLike MatrixT>
+template <typename T>
 void spmv_trans(
-    const MatrixT& A,
-    Span<const typename MatrixT::ValueType> x,
-    MutableSpan<typename MatrixT::ValueType> y,
-    typename MatrixT::ValueType alpha = static_cast<typename MatrixT::ValueType>(1.0),
-    typename MatrixT::ValueType beta = static_cast<typename MatrixT::ValueType>(0.0)
+    const ICSC<T>& A,
+    Span<const T> x,
+    MutableSpan<T> y,
+    T alpha = static_cast<T>(1.0),
+    T beta = static_cast<T>(0.0)
 ) {
-    using T = typename MatrixT::ValueType;
-    const Index M = A.rows;
-    const Index N = A.cols;
+    const Index M = A.rows();
+    const Index N = A.cols();
     
     SCL_CHECK_DIM(x.size == static_cast<Size>(M), "SpMV Trans: x dimension mismatch");
     SCL_CHECK_DIM(y.size == static_cast<Size>(N), "SpMV Trans: y dimension mismatch");
@@ -233,9 +291,9 @@ void spmv_trans(
     scl::threading::parallel_for(0, static_cast<size_t>(N), [&](size_t j) {
         const Index col_idx = static_cast<Index>(j);
         
-        // Access CSC column data via unified interface
-        auto col_vals = A.col_values(col_idx);
-        auto col_inds = A.col_indices(col_idx);
+        // Access via virtual interface
+        auto col_vals = A.primary_values(col_idx);
+        auto col_inds = A.primary_indices(col_idx);
         
         if (col_vals.size == 0) return;
 
@@ -247,29 +305,88 @@ void spmv_trans(
     });
 }
 
+/// @brief Transposed Sparse Matrix-Vector Multiplication (Concept-based, Optimized).
+///
+/// High-performance implementation for CSCLike matrices.
+///
+/// Computes: y = alpha * A^T * x + beta * y
+///
+/// Optimized for CSC: Each column of A (row of A^T) is processed independently.
+///
+/// @tparam MatrixT Any CSC-like matrix type (CustomSparse or VirtualSparse)
+/// @param A CSC-like matrix (m x n)
+/// @param x Input vector [size = m]
+/// @param y Output vector [size = n], modified in-place
+/// @param alpha Scalar multiplier for A^T*x (default 1.0)
+/// @param beta Scalar multiplier for y (default 0.0)
+template <CSCLike MatrixT>
+void spmv_trans(
+    const MatrixT& A,
+    Span<const typename MatrixT::ValueType> x,
+    MutableSpan<typename MatrixT::ValueType> y,
+    typename MatrixT::ValueType alpha = static_cast<typename MatrixT::ValueType>(1.0),
+    typename MatrixT::ValueType beta = static_cast<typename MatrixT::ValueType>(0.0)
+) {
+    using T = typename MatrixT::ValueType;
+    const Index M = scl::rows(A);
+    const Index N = scl::cols(A);
+    
+    SCL_CHECK_DIM(x.size == static_cast<Size>(M), "SpMV Trans: x dimension mismatch");
+    SCL_CHECK_DIM(y.size == static_cast<Size>(N), "SpMV Trans: y dimension mismatch");
+
+    // Handle beta scaling
+    if (beta != static_cast<T>(1.0)) {
+        detail::scale_vector(y, beta);
+    }
+
+    // Compute A^T * x
+    // For CSC, each column j of A corresponds to row j of A^T
+    scl::threading::parallel_for(0, static_cast<size_t>(N), [&](size_t j) {
+        const Index col_idx = static_cast<Index>(j);
+        
+        // Use unified accessor (works for both Custom and Virtual)
+        auto col_vals = scl::primary_values(A, col_idx);
+        auto col_inds = scl::primary_indices(A, col_idx);
+        
+        if (col_vals.size == 0) return;
+
+        // Compute dot product
+        T dot = detail::sparse_dot_dense(col_inds.ptr, col_vals.ptr, col_vals.size, x.ptr);
+
+        // Update output
+        y[col_idx] += alpha * dot;
+    });
+}
+
+// =============================================================================
+// Layer 3: Specialized (SpMM for Multiple Vectors)
+// =============================================================================
+
 /// @brief Sparse Matrix-Matrix Multiplication (SpMM): Y = alpha * A * X + beta * Y.
 ///
 /// Computes multiple SpMV operations in parallel for dense matrix X.
 ///
 /// Use Case: Block Krylov methods, multi-vector power iteration.
 ///
+/// @tparam MatrixT Any CSR-like matrix type
 /// @param A CSR matrix (m x n)
 /// @param X Input dense matrix (n x k), column-major
 /// @param Y Output dense matrix (m x k), column-major, modified in-place
-/// @param k Number of vectors
+/// @param n_vectors Number of vectors (k)
 /// @param alpha Scalar multiplier
 /// @param beta Scalar multiplier
-template <typename T>
+template <CSRLike MatrixT>
 void spmm(
-    const CSRMatrix<T>& A,
-    const T* X,
-    T* Y,
+    const MatrixT& A,
+    const typename MatrixT::ValueType* X,
+    typename MatrixT::ValueType* Y,
     Size n_vectors,
-    T alpha = static_cast<T>(1.0),
-    T beta = static_cast<T>(0.0)
+    typename MatrixT::ValueType alpha = static_cast<typename MatrixT::ValueType>(1.0),
+    typename MatrixT::ValueType beta = static_cast<typename MatrixT::ValueType>(0.0)
 ) {
-    const Index M = A.rows;
-    const Index N = A.cols;
+    using T = typename MatrixT::ValueType;
+    const Index M = scl::rows(A);
+    const Index N = scl::cols(A);
 
     // Process each column of X independently
     scl::threading::parallel_for(0, n_vectors, [&](size_t vec_idx) {
