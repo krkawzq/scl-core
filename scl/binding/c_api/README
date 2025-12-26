@@ -1,0 +1,122 @@
+// =============================================================================
+/// @file CMakeLists.txt entry for c_api module
+/// @brief Add all C-ABI source files to the build
+///
+/// Usage in CMakeLists.txt:
+///
+/// set(SCL_C_API_SOURCES
+///     scl/binding/c_api/version_info.cpp
+///     scl/binding/c_api/sparse.cpp
+///     scl/binding/c_api/qc_normalize.cpp
+///     scl/binding/c_api/feature.cpp
+///     scl/binding/c_api/stats_tests.cpp
+///     scl/binding/c_api/transforms.cpp
+///     scl/binding/c_api/gram_correlation.cpp
+///     scl/binding/c_api/group_scale.cpp
+///     scl/binding/c_api/advanced.cpp
+///     scl/binding/c_api/hvg_reorder.cpp
+///     scl/binding/c_api/memory.cpp
+/// )
+///
+/// target_sources(your_target PRIVATE ${SCL_C_API_SOURCES})
+/// target_include_directories(your_target PUBLIC scl/binding/c_api)
+// =============================================================================
+
+# C-ABI Module Architecture
+#
+# This directory contains the C-ABI interface for SCL, split across multiple
+# files for maintainability and logical organization.
+#
+# File Organization:
+#
+# error.hpp, error.cpp
+#     Error handling infrastructure and retrieval functions
+#     - Thread-local error message buffer
+#     - SCL_C_API_WRAPPER macro for exception handling
+#     - scl_get_last_error(), scl_clear_error()
+#
+# version_info.cpp
+#     Version and type information exports
+#     - scl_version()
+#     - scl_precision_type(), scl_precision_name()
+#     - scl_index_type(), scl_index_name()
+#
+# sparse.cpp
+#     Sparse matrix statistics functions (sparse.hpp)
+#     - primary_sums, primary_means, primary_variances
+#     - primary_nnz_counts
+#     - Supports both CSR and CSC formats
+#
+# qc_normalize.cpp
+#     Quality control and normalization (qc.hpp, normalize.hpp)
+#     - compute_basic_qc
+#     - scale_primary
+#     - Supports both CSR and CSC formats
+#
+# feature.cpp
+#     Feature-level statistics (feature.hpp)
+#     - standard_moments, clipped_moments
+#     - detection_rate
+#     - dispersion computation
+#     - CSC-specific functions
+#
+# stats_tests.cpp
+#     Statistical tests (mwu.hpp, ttest.hpp)
+#     - mwu_test (Mann-Whitney U test)
+#     - ttest (Student's and Welch's t-tests)
+#     - CSC-specific functions
+#
+# transforms.cpp
+#     Log transformations (log1p.hpp)
+#     - log1p_inplace, log2p1_inplace, expm1_inplace
+#     - Works on arrays and CSR matrices
+#
+# gram_correlation.cpp
+#     Gram matrix and Pearson correlation (gram.hpp, correlation.hpp)
+#     - gram computation (CSR and CSC)
+#     - Pearson correlation statistics (CSR and CSC)
+#     - Workspace helpers for correlation
+#
+# group_scale.cpp
+#     Group statistics and standardization (group.hpp, scale.hpp)
+#     - group_stats (compute per-group statistics)
+#     - count_group_sizes
+#     - standardize (CSC-specific)
+#
+# advanced.cpp
+#     Advanced operations (softmax.hpp, mmd.hpp, spatial.hpp, algebra.hpp)
+#     - softmax_inplace (CSR)
+#     - mmd_rbf (Maximum Mean Discrepancy)
+#     - morans_i (spatial autocorrelation)
+#     - spmv, spmv_trans (sparse matrix-vector multiplication)
+#
+# hvg_reorder.cpp
+#     HVG selection and reordering (hvg.hpp, reorder.hpp, resample.hpp)
+#     - hvg_by_dispersion, hvg_by_variance
+#     - align_secondary (reordering)
+#     - downsample_counts (resampling)
+#
+# memory.cpp
+#     Memory management and utilities
+#     - malloc, calloc, malloc_aligned
+#     - free, free_aligned, memzero, memcpy
+#     - is_valid_value
+#     - sizeof_real, sizeof_index, alignment
+#     - Workspace size calculation helpers
+#
+# scl_c_api.h
+#     Complete C header with all function declarations and type definitions
+#     - Can be included by Python ctypes or other FFI systems
+#     - Provides complete C interface specification
+#
+# Dependencies:
+#
+# All modules depend on:
+#     - error.hpp: For exception handling and SCL_C_API_WRAPPER macro
+#     - scl/kernel/core.hpp: For kernel function implementations
+#     - Other SCL headers as needed (version.hpp, lifetime.hpp, etc.)
+#
+# Build Integration:
+#
+# When building, include all .cpp files in scl/binding/c_api/ in your target,
+# and ensure the header path is in the include directories.

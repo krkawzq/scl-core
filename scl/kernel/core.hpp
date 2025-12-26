@@ -49,6 +49,8 @@
 #include "scl/kernel/resample_fast_impl.hpp"
 #include "scl/kernel/scale.hpp"
 #include "scl/kernel/scale_fast_impl.hpp"
+#include "scl/kernel/slice.hpp"
+#include "scl/kernel/slice_fast_impl.hpp"
 #include "scl/kernel/softmax.hpp"
 #include "scl/kernel/softmax_fast_impl.hpp"
 #include "scl/kernel/sparse.hpp"

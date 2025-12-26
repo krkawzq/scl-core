@@ -6,6 +6,10 @@
 #include "scl/core/error.hpp"
 #include "scl/threading/parallel_for.hpp"
 
+// Mapped backend support
+#include "scl/kernel/mapped_common.hpp"
+#include "scl/kernel/group_mapped_impl.hpp"
+
 // =============================================================================
 /// @file group_fast_impl.hpp
 /// @brief Extreme Performance Group Aggregation
@@ -218,8 +222,11 @@ SCL_FORCE_INLINE void group_stats_fast(
     int ddof,
     bool include_zeros
 ) {
-    if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
-        group_stats_custom_fast(matrix, group_ids, n_groups, group_sizes, 
+    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR>) {
+        scl::kernel::group::mapped::group_stats_mapped_dispatch<MatrixT, IsCSR>(
+            matrix, group_ids, n_groups, group_sizes, out_means, out_vars, ddof, include_zeros);
+    } else if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
+        group_stats_custom_fast(matrix, group_ids, n_groups, group_sizes,
                                out_means, out_vars, ddof, include_zeros);
     } else if constexpr (VirtualSparseLike<MatrixT, IsCSR>) {
         group_stats_virtual_fast(matrix, group_ids, n_groups, group_sizes,

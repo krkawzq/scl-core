@@ -6,6 +6,10 @@
 #include "scl/core/sparse.hpp"
 #include "scl/threading/parallel_for.hpp"
 
+// Mapped backend support
+#include "scl/kernel/mapped_common.hpp"
+#include "scl/kernel/sparse_mapped_impl.hpp"
+
 // =============================================================================
 /// @file sparse_fast_impl.hpp
 /// @brief Extreme Performance Sparse Statistics
@@ -288,7 +292,9 @@ SCL_FORCE_INLINE void primary_sums_fast(
     const MatrixT& matrix,
     Array<typename MatrixT::ValueType> output
 ) {
-    if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
+    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR>) {
+        scl::kernel::sparse::mapped::primary_sums_mapped_dispatch<MatrixT, IsCSR>(matrix, output);
+    } else if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
         primary_sums_custom_fast(matrix, output);
     } else if constexpr (VirtualSparseLike<MatrixT, IsCSR>) {
         primary_sums_virtual_fast(matrix, output);
@@ -303,7 +309,9 @@ SCL_FORCE_INLINE void primary_variances_fast(
     Array<typename MatrixT::ValueType> output,
     int ddof
 ) {
-    if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
+    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR>) {
+        scl::kernel::sparse::mapped::primary_variances_mapped_dispatch<MatrixT, IsCSR>(matrix, output, ddof);
+    } else if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
         primary_variances_custom_fast(matrix, output, ddof);
     } else if constexpr (VirtualSparseLike<MatrixT, IsCSR>) {
         primary_variances_virtual_fast(matrix, output, ddof);

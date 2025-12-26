@@ -6,6 +6,10 @@
 #include "scl/core/error.hpp"
 #include "scl/threading/parallel_for.hpp"
 
+// Mapped backend support
+#include "scl/kernel/mapped_common.hpp"
+#include "scl/kernel/feature_mapped_impl.hpp"
+
 // =============================================================================
 /// @file feature_fast_impl.hpp
 /// @brief Extreme Performance Feature Statistics
@@ -199,7 +203,9 @@ SCL_FORCE_INLINE void standard_moments_fast(
     Array<Real> out_vars,
     int ddof
 ) {
-    if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
+    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR>) {
+        scl::kernel::feature::mapped::standard_moments_mapped_dispatch<MatrixT, IsCSR>(matrix, out_means, out_vars, ddof);
+    } else if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
         standard_moments_custom_fast(matrix, out_means, out_vars, ddof);
     } else if constexpr (VirtualSparseLike<MatrixT, IsCSR>) {
         standard_moments_virtual_fast(matrix, out_means, out_vars, ddof);

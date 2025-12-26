@@ -6,6 +6,10 @@
 #include "scl/core/error.hpp"
 #include "scl/threading/parallel_for.hpp"
 
+// Mapped backend support
+#include "scl/kernel/mapped_common.hpp"
+#include "scl/kernel/gram_mapped_impl.hpp"
+
 // =============================================================================
 /// @file gram_fast_impl.hpp
 /// @brief Extreme Performance Gram Matrix
@@ -224,7 +228,9 @@ SCL_FORCE_INLINE void gram_fast(
     const MatrixT& matrix,
     Array<typename MatrixT::ValueType> output
 ) {
-    if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
+    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR>) {
+        scl::kernel::gram::mapped::gram_mapped_dispatch<MatrixT, IsCSR>(matrix, output);
+    } else if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
         gram_custom_fast(matrix, output);
     } else if constexpr (VirtualSparseLike<MatrixT, IsCSR>) {
         gram_virtual_fast(matrix, output);

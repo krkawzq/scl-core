@@ -8,6 +8,10 @@
 
 #include <cmath>
 
+// Mapped backend support
+#include "scl/kernel/mapped_common.hpp"
+#include "scl/kernel/correlation_mapped_impl.hpp"
+
 // =============================================================================
 /// @file correlation_fast_impl.hpp
 /// @brief Extreme Performance Correlation
@@ -198,7 +202,9 @@ SCL_FORCE_INLINE void compute_stats_fast(
     Array<Real> out_means,
     Array<Real> out_inv_stds
 ) {
-    if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
+    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR>) {
+        scl::kernel::correlation::mapped::compute_stats_mapped_dispatch<MatrixT, IsCSR>(matrix, out_means, out_inv_stds);
+    } else if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
         compute_stats_custom_fast(matrix, out_means, out_inv_stds);
     } else if constexpr (VirtualSparseLike<MatrixT, IsCSR>) {
         compute_stats_virtual_fast(matrix, out_means, out_inv_stds);

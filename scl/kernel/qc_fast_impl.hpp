@@ -6,6 +6,10 @@
 #include "scl/core/sparse.hpp"
 #include "scl/threading/parallel_for.hpp"
 
+// Mapped backend support
+#include "scl/kernel/mapped_common.hpp"
+#include "scl/kernel/qc_mapped_impl.hpp"
+
 // =============================================================================
 /// @file qc_fast_impl.hpp
 /// @brief Extreme Performance QC Metrics
@@ -169,7 +173,9 @@ SCL_FORCE_INLINE void compute_basic_qc_fast(
     Array<Index> out_n_genes,
     Array<Real> out_total_counts
 ) {
-    if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
+    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR>) {
+        scl::kernel::qc::mapped::compute_basic_qc_mapped_dispatch<MatrixT, IsCSR>(matrix, out_n_genes, out_total_counts);
+    } else if constexpr (CustomSparseLike<MatrixT, IsCSR>) {
         compute_basic_qc_custom_fast(matrix, out_n_genes, out_total_counts);
     } else if constexpr (VirtualSparseLike<MatrixT, IsCSR>) {
         compute_basic_qc_virtual_fast(matrix, out_n_genes, out_total_counts);
