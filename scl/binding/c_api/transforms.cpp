@@ -30,14 +30,14 @@ int scl_log1p_inplace_csr(
     const scl::Index* indices,
     const scl::Index* indptr,
     scl::Index rows,
-    scl::Index /*cols*/
+    scl::Index cols
 ) {
     SCL_C_API_WRAPPER(
         scl::CustomCSR matrix(
             data,
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            rows, 0
+            rows, cols
         );
         scl::kernel::log1p_inplace(matrix);
     )

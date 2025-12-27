@@ -54,11 +54,13 @@ def log1p(mat: "SclCSR", inplace: bool = False) -> "SclCSR":
         from scl._kernel import transform as kernel_transform
         from scl._kernel.lib_loader import LibraryNotFoundError
         
-        data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = csr.get_c_pointers()
+        data_ptr = csr.data.get_pointer()
+        indices_ptr = csr.indices.get_pointer()
+        indptr_ptr = csr.indptr.get_pointer()
         
         kernel_transform.log1p_inplace_csr(
-            data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
-            rows, cols, nnz
+            data_ptr, indices_ptr, indptr_ptr,
+            csr.shape[0], csr.shape[1]
         )
         
         return csr
@@ -148,11 +150,13 @@ def softmax(mat: "SclCSR", axis: int = 1, inplace: bool = False) -> "SclCSR":
             from scl._kernel import transform as kernel_transform
             from scl._kernel.lib_loader import LibraryNotFoundError
             
-            data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = csr.get_c_pointers()
+            data_ptr = csr.data.get_pointer()
+            indices_ptr = csr.indices.get_pointer()
+            indptr_ptr = csr.indptr.get_pointer()
             
             kernel_transform.softmax_inplace_csr(
-                data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
-                rows, cols, nnz
+                data_ptr, indices_ptr, indptr_ptr,
+                csr.shape[0], csr.shape[1]
             )
             
             return csr

@@ -196,23 +196,23 @@ scl::io::OwnedSparse<T, IsCSR> log1p_mapped(
 
     // Allocate owned storage
     scl::io::OwnedSparse<T, IsCSR> owned(
-        matrix.rows(), matrix.cols(), nnz);
+        matrix.rows, matrix.cols, nnz);
 
     // Copy structure (indptr, indices)
-    std::copy(matrix.indptr.begin(), matrix.indptr.end(), owned.indptr.begin());
-    std::copy(matrix.indices.begin(), matrix.indices.end(), owned.indices.begin());
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
 
     // Prefetch hint
     kernel::mapped::hint_prefetch(matrix);
 
     // Fused copy + transform for data
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Index len = end - start;
 
         if (len > 0) {
-            const T* src = matrix.data.data() + start;
+            const T* src = matrix.data() + start;
             T* dst = owned.data.data() + start;
             detail::copy_log1p_simd(src, dst, len);
         }
@@ -231,20 +231,20 @@ scl::io::OwnedSparse<T, IsCSR> log2p1_mapped(
     const Index nnz = matrix.nnz();
 
     scl::io::OwnedSparse<T, IsCSR> owned(
-        matrix.rows(), matrix.cols(), nnz);
+        matrix.rows, matrix.cols, nnz);
 
-    std::copy(matrix.indptr.begin(), matrix.indptr.end(), owned.indptr.begin());
-    std::copy(matrix.indices.begin(), matrix.indices.end(), owned.indices.begin());
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
 
     kernel::mapped::hint_prefetch(matrix);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Index len = end - start;
 
         if (len > 0) {
-            const T* src = matrix.data.data() + start;
+            const T* src = matrix.data() + start;
             T* dst = owned.data.data() + start;
             detail::copy_log2p1_simd(src, dst, len);
         }
@@ -263,20 +263,20 @@ scl::io::OwnedSparse<T, IsCSR> expm1_mapped(
     const Index nnz = matrix.nnz();
 
     scl::io::OwnedSparse<T, IsCSR> owned(
-        matrix.rows(), matrix.cols(), nnz);
+        matrix.rows, matrix.cols, nnz);
 
-    std::copy(matrix.indptr.begin(), matrix.indptr.end(), owned.indptr.begin());
-    std::copy(matrix.indices.begin(), matrix.indices.end(), owned.indices.begin());
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
 
     kernel::mapped::hint_prefetch(matrix);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Index len = end - start;
 
         if (len > 0) {
-            const T* src = matrix.data.data() + start;
+            const T* src = matrix.data() + start;
             T* dst = owned.data.data() + start;
             detail::copy_expm1_simd(src, dst, len);
         }

@@ -23,7 +23,7 @@ int scl_gram_csc(
     const scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     scl::Real* output
 ) {
@@ -32,7 +32,7 @@ int scl_gram_csc(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            0, cols
+            rows, cols
         );
         scl::Size output_size = static_cast<scl::Size>(cols) * static_cast<scl::Size>(cols);
         scl::kernel::gram::gram(matrix, scl::Array<scl::Real>(output, output_size));
@@ -44,7 +44,7 @@ int scl_gram_csr(
     const scl::Index* indices,
     const scl::Index* indptr,
     scl::Index rows,
-    scl::Index /*cols*/,
+    scl::Index cols,
     scl::Real* output
 ) {
     SCL_C_API_WRAPPER(
@@ -52,7 +52,7 @@ int scl_gram_csr(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            rows, 0
+            rows, cols
         );
         scl::Size output_size = static_cast<scl::Size>(rows) * static_cast<scl::Size>(rows);
         scl::kernel::gram::gram(matrix, scl::Array<scl::Real>(output, output_size));
@@ -67,7 +67,7 @@ int scl_pearson_csc(
     const scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     scl::Real* output,
     scl::Real* workspace_means,
@@ -78,7 +78,7 @@ int scl_pearson_csc(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            0, cols
+            rows, cols
         );
         scl::kernel::correlation::compute_stats(
             matrix,
@@ -95,7 +95,7 @@ int scl_pearson_csr(
     const scl::Index* indices,
     const scl::Index* indptr,
     scl::Index rows,
-    scl::Index /*cols*/,
+    scl::Index cols,
     scl::Real* output,
     scl::Real* workspace_means,
     scl::Real* workspace_inv_stds
@@ -105,7 +105,7 @@ int scl_pearson_csr(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            rows, 0
+            rows, cols
         );
         scl::kernel::correlation::compute_stats(
             matrix,

@@ -23,7 +23,7 @@ int scl_primary_sums_csr(
     const scl::Index* indices,
     const scl::Index* indptr,
     scl::Index rows,
-    scl::Index /*cols*/,
+    scl::Index cols,
     scl::Real* output
 ) {
     SCL_C_API_WRAPPER(
@@ -31,7 +31,7 @@ int scl_primary_sums_csr(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            rows, 0
+            rows, cols
         );
         scl::kernel::sparse::primary_sums(
             matrix,
@@ -44,7 +44,7 @@ int scl_primary_sums_csc(
     const scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     scl::Real* output
 ) {
@@ -53,7 +53,7 @@ int scl_primary_sums_csc(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            0, cols
+            rows, cols
         );
         scl::kernel::sparse::primary_sums(
             matrix,
@@ -67,7 +67,7 @@ int scl_primary_means_csr(
     const scl::Index* indices,
     const scl::Index* indptr,
     scl::Index rows,
-    scl::Index /*cols*/,
+    scl::Index cols,
     scl::Real* output
 ) {
     SCL_C_API_WRAPPER(
@@ -75,7 +75,7 @@ int scl_primary_means_csr(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            rows, 0
+            rows, cols
         );
         scl::kernel::sparse::primary_means(
             matrix,
@@ -88,7 +88,7 @@ int scl_primary_means_csc(
     const scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     scl::Real* output
 ) {
@@ -97,7 +97,7 @@ int scl_primary_means_csc(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            0, cols
+            rows, cols
         );
         scl::kernel::sparse::primary_means(
             matrix,
@@ -111,7 +111,7 @@ int scl_primary_variances_csr(
     const scl::Index* indices,
     const scl::Index* indptr,
     scl::Index rows,
-    scl::Index /*cols*/,
+    scl::Index cols,
     int ddof,
     scl::Real* output
 ) {
@@ -120,7 +120,7 @@ int scl_primary_variances_csr(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            rows, 0
+            rows, cols
         );
         scl::kernel::sparse::primary_variances(
             matrix,
@@ -134,7 +134,7 @@ int scl_primary_variances_csc(
     const scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     int ddof,
     scl::Real* output
@@ -144,7 +144,7 @@ int scl_primary_variances_csc(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            0, cols
+            rows, cols
         );
         scl::kernel::sparse::primary_variances(
             matrix,

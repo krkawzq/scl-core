@@ -176,8 +176,8 @@ void compute_basic_qc_mapped(
     kernel::mapped::hint_prefetch(matrix);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
 
         out_n_genes[p] = static_cast<Index>(len);
@@ -187,7 +187,7 @@ void compute_basic_qc_mapped(
             return;
         }
 
-        const T* SCL_RESTRICT vals = matrix.data + start;
+        const T* SCL_RESTRICT vals = matrix.data() + start;
         out_total_counts[p] = detail::simd_sum_4way(vals, len);
     });
 }
@@ -209,8 +209,8 @@ void compute_subset_pct_mapped(
     const uint8_t* SCL_RESTRICT mask = subset_mask.ptr;
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
 
         if (len == 0) {
@@ -218,8 +218,8 @@ void compute_subset_pct_mapped(
             return;
         }
 
-        const T* SCL_RESTRICT vals = matrix.data + start;
-        const Index* SCL_RESTRICT inds = matrix.indices + start;
+        const T* SCL_RESTRICT vals = matrix.data() + start;
+        const Index* SCL_RESTRICT inds = matrix.indices() + start;
 
         Real total, subset;
         detail::fused_total_subset_sum(vals, inds, mask, len, total, subset);
@@ -249,8 +249,8 @@ void compute_fused_qc_mapped(
     const uint8_t* SCL_RESTRICT mask = subset_mask.ptr;
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
 
         out_n_genes[p] = static_cast<Index>(len);
@@ -261,8 +261,8 @@ void compute_fused_qc_mapped(
             return;
         }
 
-        const T* SCL_RESTRICT vals = matrix.data + start;
-        const Index* SCL_RESTRICT inds = matrix.indices + start;
+        const T* SCL_RESTRICT vals = matrix.data() + start;
+        const Index* SCL_RESTRICT inds = matrix.indices() + start;
 
         Real total, subset;
         detail::fused_total_subset_sum(vals, inds, mask, len, total, subset);
@@ -291,8 +291,8 @@ void compute_extended_qc_mapped(
     kernel::mapped::hint_prefetch(matrix);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
 
         out_n_genes[p] = static_cast<Index>(len);
@@ -303,7 +303,7 @@ void compute_extended_qc_mapped(
             return;
         }
 
-        const T* SCL_RESTRICT vals = matrix.data + start;
+        const T* SCL_RESTRICT vals = matrix.data() + start;
 
         Real total = detail::simd_sum_4way(vals, len);
         out_total_counts[p] = total;

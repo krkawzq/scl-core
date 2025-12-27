@@ -224,27 +224,27 @@ scl::io::OwnedSparse<T, IsCSR> downsample_mapped(
 ) {
     const Index n_primary = scl::primary_size(matrix);
     const Index nnz = matrix.nnz();
-    
+
     // Allocate owned storage
-    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows(), matrix.cols(), nnz);
-    
+    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows, matrix.cols, nnz);
+
     // Copy structure
-    std::copy(matrix.indptr.begin(), matrix.indptr.end(), owned.indptr.begin());
-    std::copy(matrix.indices.begin(), matrix.indices.end(), owned.indices.begin());
-    
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
+
     kernel::mapped::hint_prefetch(matrix);
-    
+
     // Fused copy + sample
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
         detail::FastRNG rng(seed + p * 0x9e3779b97f4a7c15ULL);
-        
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
-        
+
         if (len == 0) return;
-        
-        const T* src = matrix.data.data() + start;
+
+        const T* src = matrix.data() + start;
         T* dst = owned.data.data() + start;
         
         // Compute sum
@@ -290,26 +290,26 @@ scl::io::OwnedSparse<T, IsCSR> downsample_variable_mapped(
 ) {
     const Index n_primary = scl::primary_size(matrix);
     const Index nnz = matrix.nnz();
-    
+
     SCL_CHECK_DIM(target_counts.len >= static_cast<Size>(n_primary), "Target counts size mismatch");
-    
-    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows(), matrix.cols(), nnz);
-    
-    std::copy(matrix.indptr.begin(), matrix.indptr.end(), owned.indptr.begin());
-    std::copy(matrix.indices.begin(), matrix.indices.end(), owned.indices.begin());
-    
+
+    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows, matrix.cols, nnz);
+
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
+
     kernel::mapped::hint_prefetch(matrix);
-    
+
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
         detail::FastRNG rng(seed + p * 0x9e3779b97f4a7c15ULL);
-        
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
-        
+
         if (len == 0) return;
-        
-        const T* src = matrix.data.data() + start;
+
+        const T* src = matrix.data() + start;
         T* dst = owned.data.data() + start;
         
         Real current_sum = detail::sum_4way(src, len);
@@ -353,30 +353,30 @@ scl::io::OwnedSparse<T, IsCSR> binomial_resample_mapped(
 ) {
     const Index n_primary = scl::primary_size(matrix);
     const Index nnz = matrix.nnz();
-    
-    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows(), matrix.cols(), nnz);
-    
-    std::copy(matrix.indptr.begin(), matrix.indptr.end(), owned.indptr.begin());
-    std::copy(matrix.indices.begin(), matrix.indices.end(), owned.indices.begin());
-    
+
+    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows, matrix.cols, nnz);
+
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
+
     kernel::mapped::hint_prefetch(matrix);
-    
+
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t row) {
         detail::FastRNG rng(seed + row * 0x9e3779b97f4a7c15ULL);
-        
-        Index start = matrix.indptr[row];
-        Index end = matrix.indptr[row + 1];
+
+        Index start = matrix.indptr()[row];
+        Index end = matrix.indptr()[row + 1];
         Size len = static_cast<Size>(end - start);
-        
-        const T* src = matrix.data.data() + start;
+
+        const T* src = matrix.data() + start;
         T* dst = owned.data.data() + start;
-        
+
         for (Size k = 0; k < len; ++k) {
             Index count = static_cast<Index>(src[k]);
             dst[k] = (count > 0) ? static_cast<T>(detail::FastBinomial::sample(rng, count, p)) : T(0);
         }
     });
-    
+
     return owned;
 }
 
@@ -390,30 +390,30 @@ scl::io::OwnedSparse<T, IsCSR> poisson_resample_mapped(
 ) {
     const Index n_primary = scl::primary_size(matrix);
     const Index nnz = matrix.nnz();
-    
-    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows(), matrix.cols(), nnz);
-    
-    std::copy(matrix.indptr.begin(), matrix.indptr.end(), owned.indptr.begin());
-    std::copy(matrix.indices.begin(), matrix.indices.end(), owned.indices.begin());
-    
+
+    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows, matrix.cols, nnz);
+
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
+
     kernel::mapped::hint_prefetch(matrix);
-    
+
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t row) {
         detail::FastRNG rng(seed + row * 0x9e3779b97f4a7c15ULL);
-        
-        Index start = matrix.indptr[row];
-        Index end = matrix.indptr[row + 1];
+
+        Index start = matrix.indptr()[row];
+        Index end = matrix.indptr()[row + 1];
         Size len = static_cast<Size>(end - start);
-        
-        const T* src = matrix.data.data() + start;
+
+        const T* src = matrix.data() + start;
         T* dst = owned.data.data() + start;
-        
+
         for (Size k = 0; k < len; ++k) {
             Real count = static_cast<Real>(src[k]);
             dst[k] = (count > Real(0)) ? static_cast<T>(detail::FastPoisson::sample(rng, count * lambda)) : T(0);
         }
     });
-    
+
     return owned;
 }
 

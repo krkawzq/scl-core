@@ -59,6 +59,9 @@ from . import resample
 from . import memory
 from . import utils
 from . import mmap
+from . import io
+from . import sorting
+from . import core
 
 __all__ = [
     'lib_loader',
@@ -81,6 +84,9 @@ __all__ = [
     'memory',
     'utils',
     'mmap',
+    'io',
+    'sorting',
+    'core',
 ]
 
 __version__ = '0.1.0'

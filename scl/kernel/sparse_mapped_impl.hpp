@@ -157,8 +157,8 @@ void primary_sums_mapped(
     ::scl::kernel::mapped::hint_prefetch(matrix);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
 
         if (len == 0) {
@@ -166,7 +166,7 @@ void primary_sums_mapped(
             return;
         }
 
-        output[p] = detail::simd_sum_4way(matrix.data + start, len);
+        output[p] = detail::simd_sum_4way(matrix.data() + start, len);
     });
 }
 
@@ -185,8 +185,8 @@ void primary_means_mapped(
     scl::kernel::mapped::hint_prefetch(matrix);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
 
         if (len == 0) {
@@ -194,7 +194,7 @@ void primary_means_mapped(
             return;
         }
 
-        output[p] = detail::simd_sum_4way(matrix.data + start, len) * inv_n;
+        output[p] = detail::simd_sum_4way(matrix.data() + start, len) * inv_n;
     });
 }
 
@@ -215,14 +215,14 @@ void primary_variances_mapped(
     scl::kernel::mapped::hint_prefetch(matrix);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
 
         T sum = T(0), sumsq = T(0);
 
         if (len > 0) {
-            detail::simd_sum_sumsq_fused(matrix.data + start, len, sum, sumsq);
+            detail::simd_sum_sumsq_fused(matrix.data() + start, len, sum, sumsq);
         }
 
         output[p] = detail::compute_variance(sum, sumsq, N, denom);
@@ -242,7 +242,7 @@ void primary_nnz_mapped(
 
     // Can compute directly from indptr (no data access)
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        output[p] = matrix.indptr[p + 1] - matrix.indptr[p];
+        output[p] = matrix.indptr()[p + 1] - matrix.indptr()[p];
     });
 }
 

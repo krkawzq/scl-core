@@ -289,14 +289,14 @@ scl::io::OwnedSparse<T, IsCSR> softmax_mapped_custom(
             std::move(out_data),
             std::move(out_indices),
             std::move(out_indptr),
-            primary_dim, matrix.cols()
+            primary_dim, matrix.cols
         );
     } else {
         return scl::io::OwnedSparse<T, IsCSR>(
             std::move(out_data),
             std::move(out_indices),
             std::move(out_indptr),
-            matrix.rows(), primary_dim
+            matrix.rows, primary_dim
         );
     }
 }
@@ -338,14 +338,14 @@ scl::io::OwnedSparse<T, IsCSR> log_softmax_mapped_custom(
             std::move(out_data),
             std::move(out_indices),
             std::move(out_indptr),
-            primary_dim, matrix.cols()
+            primary_dim, matrix.cols
         );
     } else {
         return scl::io::OwnedSparse<T, IsCSR>(
             std::move(out_data),
             std::move(out_indices),
             std::move(out_indptr),
-            matrix.rows(), primary_dim
+            matrix.rows, primary_dim
         );
     }
 }
@@ -394,8 +394,8 @@ scl::io::OwnedSparse<T, IsCSR> softmax_mapped_virtual(
         detail::fused_softmax(src_vals.ptr, dst_vals, len, max_val);
     });
 
-    Index out_rows = IsCSR ? primary_dim : matrix.rows();
-    Index out_cols = IsCSR ? matrix.cols() : primary_dim;
+    Index out_rows = IsCSR ? primary_dim : matrix.rows;
+    Index out_cols = IsCSR ? matrix.cols : primary_dim;
 
     return scl::io::OwnedSparse<T, IsCSR>(
         std::move(out_data),
@@ -442,8 +442,8 @@ scl::io::OwnedSparse<T, IsCSR> log_softmax_mapped_virtual(
         detail::fused_log_softmax(src_vals.ptr, dst_vals, len, max_val);
     });
 
-    Index out_rows = IsCSR ? primary_dim : matrix.rows();
-    Index out_cols = IsCSR ? matrix.cols() : primary_dim;
+    Index out_rows = IsCSR ? primary_dim : matrix.rows;
+    Index out_cols = IsCSR ? matrix.cols : primary_dim;
 
     return scl::io::OwnedSparse<T, IsCSR>(
         std::move(out_data),

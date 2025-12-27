@@ -25,9 +25,9 @@ using Handle = int64_t;
 
 /// @brief Type names for registered objects
 constexpr const char* TYPE_MAPPED_CSR = "MappedCSR";
-constexpr const char* TYPE_MAPPED_CSC = "MappedCSC";
+[[maybe_unused]] constexpr const char* TYPE_MAPPED_CSC = "MappedCSC";
 constexpr const char* TYPE_VIRTUAL_CSR = "VirtualCSR";
-constexpr const char* TYPE_VIRTUAL_CSC = "VirtualCSC";
+[[maybe_unused]] constexpr const char* TYPE_VIRTUAL_CSC = "VirtualCSC";
 
 class Registry {
     std::mutex mutex_;

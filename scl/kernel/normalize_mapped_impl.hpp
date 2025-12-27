@@ -259,24 +259,24 @@ scl::io::OwnedSparse<T, IsCSR> scale_rows_mapped(
     SCL_CHECK_DIM(scales.len >= static_cast<Size>(n_primary), "Scales dim mismatch");
 
     // Allocate owned storage
-    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows(), matrix.cols(), nnz);
+    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows, matrix.cols, nnz);
 
     // Copy structure
-    std::copy(matrix.indptr.begin(), matrix.indptr.end(), owned.indptr.begin());
-    std::copy(matrix.indices.begin(), matrix.indices.end(), owned.indices.begin());
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
 
     kernel::mapped::hint_prefetch(matrix);
 
     // Fused copy + scale
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
 
         if (len == 0) return;
 
         T scale = scales[p];
-        const T* src = matrix.data.data() + start;
+        const T* src = matrix.data() + start;
         T* dst = owned.data.data() + start;
 
         if (scale == T(1)) {

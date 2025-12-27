@@ -237,11 +237,13 @@ def _normalize_csr_rows(mat: "SclCSR", norm: str, inplace: bool) -> "SclCSR":
             
             # Step 1: Compute row sums using kernel
             row_sums = Array(m, dtype='float64')
-            data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = mat.get_c_pointers()
+            data_ptr = mat.data.get_pointer()
+            indices_ptr = mat.indices.get_pointer()
+            indptr_ptr = mat.indptr.get_pointer()
             
             kernel_sparse.primary_sums_csr(
-                data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
-                rows, cols, nnz,
+                data_ptr, indices_ptr, indptr_ptr,
+                mat.shape[0], mat.shape[1],
                 row_sums.get_pointer()
             )
             
@@ -253,11 +255,13 @@ def _normalize_csr_rows(mat: "SclCSR", norm: str, inplace: bool) -> "SclCSR":
             # Step 3: Apply scaling using kernel
             if not inplace:
                 result_mat = mat.copy()
-                data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz = result_mat.get_c_pointers()
+                data_ptr = result_mat.data.get_pointer()
+                indices_ptr = result_mat.indices.get_pointer()
+                indptr_ptr = result_mat.indptr.get_pointer()
             
             kernel_normalize.scale_primary_csr(
-                data_ptr, indices_ptr, indptr_ptr, lengths_ptr,
-                rows, cols, nnz,
+                data_ptr, indices_ptr, indptr_ptr,
+                mat.shape[0], mat.shape[1],
                 scales.get_pointer()
             )
             
@@ -277,15 +281,15 @@ def _normalize_csr_rows_fallback(mat: "SclCSR", norm: str, inplace: bool) -> "Sc
     m = mat.shape[0]
 
     if inplace:
-        new_data = mat._data
+        new_data = mat.data
     else:
         new_data = Array(mat.nnz, dtype='float64')
         for k in range(mat.nnz):
-            new_data[k] = mat._data[k]
+            new_data[k] = mat.data[k]
 
     for i in range(m):
-        start = mat._indptr[i]
-        end = mat._indptr[i + 1]
+        start = mat.indptr[i]
+        end = mat.indptr[i + 1]
 
         if start == end:
             continue
@@ -312,7 +316,7 @@ def _normalize_csr_rows_fallback(mat: "SclCSR", norm: str, inplace: bool) -> "Sc
         return mat
     else:
         return SclCSR.from_arrays(
-            new_data, mat._indices.copy(), mat._indptr.copy(), mat.shape
+            new_data, mat.indices.copy(), mat.indptr.copy(), mat.shape
         )
 
 
@@ -371,15 +375,15 @@ def _normalize_csc_cols_fallback(mat: "SclCSC", norm: str, inplace: bool) -> "Sc
     n = mat.shape[1]
 
     if inplace:
-        new_data = mat._data
+        new_data = mat.data
     else:
         new_data = Array(mat.nnz, dtype='float64')
         for k in range(mat.nnz):
-            new_data[k] = mat._data[k]
+            new_data[k] = mat.data[k]
 
     for j in range(n):
-        start = mat._indptr[j]
-        end = mat._indptr[j + 1]
+        start = mat.indptr[j]
+        end = mat.indptr[j + 1]
 
         if start == end:
             continue
@@ -406,7 +410,7 @@ def _normalize_csc_cols_fallback(mat: "SclCSC", norm: str, inplace: bool) -> "Sc
         return mat
     else:
         return SclCSC.from_arrays(
-            new_data, mat._indices.copy(), mat._indptr.copy(), mat.shape
+            new_data, mat.indices.copy(), mat.indptr.copy(), mat.shape
         )
 
 
@@ -613,19 +617,19 @@ def _standardize_scl(mat: "SclCSR", axis: int, zero_center: bool,
     m, n = mat.shape
 
     if inplace:
-        new_data = mat._data
+        new_data = mat.data
     else:
         new_data = Array(mat.nnz, dtype='float64')
         for k in range(mat.nnz):
-            new_data[k] = mat._data[k]
+            new_data[k] = mat.data[k]
 
     if axis == 0:
         # Column-wise standardization
         csc = mat.to_csc()
 
         for j in range(n):
-            start = csc._indptr[j]
-            end = csc._indptr[j + 1]
+            start = csc.indptr[j]
+            end = csc.indptr[j + 1]
 
             if start == end:
                 continue
@@ -633,14 +637,14 @@ def _standardize_scl(mat: "SclCSR", axis: int, zero_center: bool,
             nnz = end - start
             col_sum = 0.0
             for k in range(start, end):
-                col_sum += csc._data[k]
+                col_sum += csc.data[k]
 
             mean = col_sum / m
 
             if unit_variance:
                 sq_sum = 0.0
                 for k in range(start, end):
-                    sq_sum += csc._data[k] ** 2
+                    sq_sum += csc.data[k] ** 2
 
                 var = sq_sum / m - mean ** 2
                 std = math.sqrt(var) if var > 0 else 1.0
@@ -651,9 +655,9 @@ def _standardize_scl(mat: "SclCSR", axis: int, zero_center: bool,
             # For simplicity, we work on CSC and convert back
             for k in range(start, end):
                 if zero_center:
-                    csc._data[k] = (csc._data[k] - mean) / std
+                    csc.data[k] = (csc.data[k] - mean) / std
                 elif unit_variance:
-                    csc._data[k] = csc._data[k] / std
+                    csc.data[k] = csc.data[k] / std
 
         # Convert back to CSR
         return csc.to_csr()
@@ -661,8 +665,8 @@ def _standardize_scl(mat: "SclCSR", axis: int, zero_center: bool,
     else:
         # Row-wise standardization (efficient for CSR)
         for i in range(m):
-            start = mat._indptr[i]
-            end = mat._indptr[i + 1]
+            start = mat.indptr[i]
+            end = mat.indptr[i + 1]
 
             if start == end:
                 continue
@@ -694,7 +698,7 @@ def _standardize_scl(mat: "SclCSR", axis: int, zero_center: bool,
             return mat
         else:
             return SclCSR.from_arrays(
-                new_data, mat._indices.copy(), mat._indptr.copy(), mat.shape
+                new_data, mat.indices.copy(), mat.indptr.copy(), mat.shape
             )
 
 

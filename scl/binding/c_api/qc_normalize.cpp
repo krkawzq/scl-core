@@ -25,7 +25,7 @@ int scl_compute_basic_qc_csr(
     const scl::Index* indices,
     const scl::Index* indptr,
     scl::Index rows,
-    scl::Index /*cols*/,
+    scl::Index cols,
     scl::Index* out_n_genes,
     scl::Real* out_total_counts
 ) {
@@ -34,7 +34,7 @@ int scl_compute_basic_qc_csr(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            rows, 0
+            rows, cols
         );
         scl::kernel::qc::compute_basic_qc(
             matrix,
@@ -48,7 +48,7 @@ int scl_compute_basic_qc_csc(
     const scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     scl::Index* out_n_cells,
     scl::Real* out_total_counts
@@ -58,7 +58,7 @@ int scl_compute_basic_qc_csc(
             const_cast<scl::Real*>(data),
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            0, cols
+            rows, cols
         );
         scl::kernel::qc::compute_basic_qc(
             matrix,
@@ -77,7 +77,7 @@ int scl_scale_primary_csr(
     const scl::Index* indices,
     const scl::Index* indptr,
     scl::Index rows,
-    scl::Index /*cols*/,
+    scl::Index cols,
     const scl::Real* scales
 ) {
     SCL_C_API_WRAPPER(
@@ -85,7 +85,7 @@ int scl_scale_primary_csr(
             data,
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            rows, 0
+            rows, cols
         );
         scl::kernel::normalize::scale_primary(
             matrix,
@@ -98,7 +98,7 @@ int scl_scale_primary_csc(
     scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     const scl::Real* scales
 ) {
@@ -107,7 +107,7 @@ int scl_scale_primary_csc(
             data,
             const_cast<scl::Index*>(indices),
             const_cast<scl::Index*>(indptr),
-            0, cols
+            rows, cols
         );
         scl::kernel::normalize::scale_primary(
             matrix,

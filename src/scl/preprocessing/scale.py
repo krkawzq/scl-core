@@ -226,19 +226,19 @@ def _scale_scl(mat, row_factors, col_factors, inplace: bool, is_csc: bool):
 
     # Prepare output
     if inplace:
-        new_data = mat._data
+        new_data = mat.data
     else:
         new_data = Array(mat.nnz, dtype='float64')
         for k in range(mat.nnz):
-            new_data[k] = mat._data[k]
+            new_data[k] = mat.data[k]
 
     if is_csc:
         # CSC format: use kernel for column scaling (primary axis)
         if cf is not None and rf is None:
             # Pure column scaling - use kernel
             data_ptr = new_data.get_pointer()
-            indices_ptr = mat._indices.get_pointer()
-            indptr_ptr = mat._indptr.get_pointer()
+            indices_ptr = mat.indices.get_pointer()
+            indptr_ptr = mat.indptr.get_pointer()
             scales_ptr = cf.get_pointer()
 
             kernel_normalize.scale_primary_csc(
@@ -248,13 +248,13 @@ def _scale_scl(mat, row_factors, col_factors, inplace: bool, is_csc: bool):
         else:
             # Mixed scaling - use Python loop
             for j in range(n):
-                start = mat._indptr[j]
-                end = mat._indptr[j + 1]
+                start = mat.indptr[j]
+                end = mat.indptr[j + 1]
 
                 col_factor = cf[j] if cf is not None else 1.0
 
                 for k in range(start, end):
-                    i = mat._indices[k]
+                    i = mat.indices[k]
                     row_factor = rf[i] if rf is not None else 1.0
                     new_data[k] *= row_factor * col_factor
 
@@ -262,15 +262,15 @@ def _scale_scl(mat, row_factors, col_factors, inplace: bool, is_csc: bool):
             return mat
         else:
             return SclCSC.from_arrays(
-                new_data, mat._indices.copy(), mat._indptr.copy(), mat.shape
+                new_data, mat.indices.copy(), mat.indptr.copy(), mat.shape
             )
     else:
         # CSR format: use kernel for row scaling (primary axis)
         if rf is not None and cf is None:
             # Pure row scaling - use kernel
             data_ptr = new_data.get_pointer()
-            indices_ptr = mat._indices.get_pointer()
-            indptr_ptr = mat._indptr.get_pointer()
+            indices_ptr = mat.indices.get_pointer()
+            indptr_ptr = mat.indptr.get_pointer()
             scales_ptr = rf.get_pointer()
 
             kernel_normalize.scale_primary_csr(
@@ -280,13 +280,13 @@ def _scale_scl(mat, row_factors, col_factors, inplace: bool, is_csc: bool):
         else:
             # Mixed scaling - use Python loop
             for i in range(m):
-                start = mat._indptr[i]
-                end = mat._indptr[i + 1]
+                start = mat.indptr[i]
+                end = mat.indptr[i + 1]
 
                 row_factor = rf[i] if rf is not None else 1.0
 
                 for k in range(start, end):
-                    j = mat._indices[k]
+                    j = mat.indices[k]
                     col_factor = cf[j] if cf is not None else 1.0
                     new_data[k] *= row_factor * col_factor
 
@@ -294,7 +294,7 @@ def _scale_scl(mat, row_factors, col_factors, inplace: bool, is_csc: bool):
             return mat
         else:
             return SclCSR.from_arrays(
-                new_data, mat._indices.copy(), mat._indptr.copy(), mat.shape
+                new_data, mat.indices.copy(), mat.indptr.copy(), mat.shape
             )
 
 

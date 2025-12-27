@@ -113,8 +113,8 @@ void compute_group_stats_mapped(
     kernel::mapped::hint_prefetch(matrix);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        Index start = matrix.indptr[p];
-        Index end = matrix.indptr[p + 1];
+        Index start = matrix.indptr()[p];
+        Index end = matrix.indptr()[p + 1];
         Size len = static_cast<Size>(end - start);
 
         if (len == 0) return;
@@ -123,8 +123,8 @@ void compute_group_stats_mapped(
         Real* var_ptr = out_vars.ptr + (p * n_groups);
         Size* count_ptr = out_counts.ptr + (p * n_groups);
 
-        const T* SCL_RESTRICT vals = matrix.data.data() + start;
-        const Index* SCL_RESTRICT inds = matrix.indices.data() + start;
+        const T* SCL_RESTRICT vals = matrix.data() + start;
+        const Index* SCL_RESTRICT inds = matrix.indices() + start;
 
         // 4-way unrolled accumulation
         Size k = 0;

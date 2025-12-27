@@ -78,7 +78,7 @@ int scl_standardize_csc(
     scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     const scl::Real* means,
     const scl::Real* stds,

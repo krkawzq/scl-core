@@ -21,7 +21,7 @@ int scl_standard_moments_csc(
     const scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     scl::Real* out_means,
     scl::Real* out_vars,
@@ -47,7 +47,7 @@ int scl_clipped_moments_csc(
     const scl::Real* data,
     const scl::Index* indices,
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     const scl::Real* clip_vals,
     scl::Real* out_means,
@@ -71,7 +71,7 @@ int scl_clipped_moments_csc(
 
 int scl_detection_rate_csc(
     const scl::Index* indptr,
-    scl::Index /*rows*/,
+    scl::Index rows,
     scl::Index cols,
     scl::Real* out_rates
 ) {

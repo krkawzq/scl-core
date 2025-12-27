@@ -374,3 +374,116 @@ class TestUtilityFunctions:
         assert zero.dtype == mat.dtype
         assert zero.nnz == 0
 
+
+# =============================================================================
+# Preprocessing Operations Tests
+# =============================================================================
+
+class TestPreprocessingOperations:
+    """Test preprocessing operations."""
+    
+    def test_normalize_l1(self, requires_scl):
+        """Test L1 normalization."""
+        import scl.preprocessing as pp
+        
+        mat = SclCSR.from_dense([[1, 2, 3], [4, 5, 6]])
+        normalized = pp.normalize(mat, norm='l1', axis=1)
+        
+        # Each row should sum to 1
+        row_sums = normalized.sum(axis=1)
+        assert row_sums[0] == pytest.approx(1.0)
+        assert row_sums[1] == pytest.approx(1.0)
+    
+    def test_normalize_l2(self, requires_scl):
+        """Test L2 normalization."""
+        import scl.preprocessing as pp
+        
+        mat = SclCSR.from_dense([[3, 4], [5, 12]])
+        normalized = pp.normalize(mat, norm='l2', axis=1)
+        
+        # Each row should have unit norm
+        row0 = normalized[0, :].to_dense()
+        row1 = normalized[1, :].to_dense()
+        
+        norm0 = np.sqrt(row0[0]**2 + row0[1]**2)
+        norm1 = np.sqrt(row1[0]**2 + row1[1]**2)
+        
+        assert norm0 == pytest.approx(1.0)
+        assert norm1 == pytest.approx(1.0)
+    
+    def test_log1p_transform(self, requires_scl):
+        """Test log1p transformation."""
+        import scl.preprocessing as pp
+        
+        mat = SclCSR.from_dense([[1, 2], [3, 4]])
+        transformed = pp.log1p(mat)
+        
+        # log1p should reduce values
+        assert transformed.sum() < mat.sum()
+        # Shape preserved
+        assert transformed.shape == mat.shape
+    
+    def test_scale_operation(self, requires_scl):
+        """Test scale operation."""
+        import scl.preprocessing as pp
+        
+        mat = SclCSR.from_dense([[1, 2], [3, 4]])
+        
+        # Scale rows by [2, 0.5]
+        row_factors = Array.from_list([2.0, 0.5], dtype='float64')
+        scaled = pp.scale(mat, row_factors=row_factors)
+        
+        # Row 0 doubled, row 1 halved
+        assert scaled[0, 0] == pytest.approx(2.0)
+        assert scaled[1, 0] == pytest.approx(1.5)
+
+
+# =============================================================================
+# Statistical Tests
+# =============================================================================
+
+class TestStatisticalTests:
+    """Test statistical test operations."""
+    
+    def test_mwu_test_basic(self, requires_scl):
+        """Test Mann-Whitney U test."""
+        import scl.statistics as stats
+        
+        # Create test matrix with two groups
+        mat = SclCSC.from_dense([
+            [1, 2, 3],  # Group 0
+            [1, 2, 3],  # Group 0
+            [4, 5, 6],  # Group 1
+            [4, 5, 6]   # Group 1
+        ])
+        
+        groups = Array.from_list([0, 0, 1, 1], dtype='int32')
+        
+        u_stats, p_values, log2_fc = stats.mwu_test(mat, groups)
+        
+        assert len(u_stats) == 3
+        assert len(p_values) == 3
+        assert len(log2_fc) == 3
+        # All genes should show difference between groups
+        assert all(p < 0.5 for p in p_values)
+    
+    def test_ttest_basic(self, requires_scl):
+        """Test T-test."""
+        import scl.statistics as stats
+        
+        # Create test matrix
+        mat = SclCSC.from_dense([
+            [1, 2],  # Group 0
+            [1, 2],  # Group 0
+            [5, 6],  # Group 1
+            [5, 6]   # Group 1
+        ])
+        
+        groups = Array.from_list([0, 0, 1, 1], dtype='int32')
+        
+        t_stats, p_values, log2_fc = stats.ttest(mat, groups)
+        
+        assert len(t_stats) == 2
+        assert len(p_values) == 2
+        assert len(log2_fc) == 2
+
