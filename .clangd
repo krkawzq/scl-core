@@ -1,0 +1,53 @@
+# clangd configuration for scl-core
+# Documentation: https://clangd.llvm.org/config
+
+# Ignore everything outside scl/ directory
+If:
+  PathMatch: 
+    - (?!scl/).*
+
+Diagnostics:
+  Suppress: '*'
+
+Index:
+  Background: Skip
+
+---
+
+# Ignore .h files in scl/ (documentation-only, not for compilation)
+If:
+  PathMatch: scl/.*\.h$
+
+Diagnostics:
+  Suppress: '*'
+  UnusedIncludes: None
+
+Index:
+  Background: Skip
+
+---
+
+# Main configuration for scl/**/*.hpp and scl/**/*.cpp files
+If:
+  PathMatch: scl/.*\.(hpp|cpp)$
+
+CompileFlags:
+  Add:
+    - "-std=c++20"
+    - "-Wall"
+    - "-Wextra"
+    - "-Wpedantic"
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - modernize-*
+      - performance-*
+      - readability-*
+    Remove:
+      - modernize-use-trailing-return-type
+      - readability-identifier-length
+
+Index:
+  Background: Build
+

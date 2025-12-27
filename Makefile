@@ -1,4 +1,4 @@
-.PHONY: help build compile compile-cpp compile-cython clean test test-fast test-imports test-types test-download test-download-no-network test-verbose test-coverage test-quick test-models format lint all tree cloc
+.PHONY: help build compile compile-cpp compile-cython clean test test-fast test-imports test-types test-download test-download-no-network test-verbose test-coverage test-quick test-models format lint all tree cloc makedoc docs-dev docs-build docs-preview docs-clean
 
 # Config
 
@@ -39,6 +39,13 @@ help:
 	@echo "  test-models             Test model registry"
 	@echo "  cloc           Count lines of code"
 	@echo "  tree           Show git-tracked files tree (filtered)"
+	@echo ""
+	@echo "Documentation:"
+	@echo "  makedoc        Start documentation dev server"
+	@echo "  docs-dev       Start documentation dev server (alias)"
+	@echo "  docs-build     Build documentation for production"
+	@echo "  docs-preview   Preview built documentation"
+	@echo "  docs-clean     Clean documentation build artifacts"
 
 all: clean build format lint test
 
@@ -194,7 +201,7 @@ benchmark: compile
 # Clean
 # =============================================================================
 
-clean: clean-build clean-pyc clean-compiled
+clean: clean-build clean-pyc clean-compiled docs-clean
 
 clean-build:
 	@rm -rf build/ dist/ *.egg-info .eggs/
@@ -233,3 +240,33 @@ info:
 	@echo "Python:  $$($(PYTHON) --version 2>&1)"
 	@echo "CMake:   $$(cmake --version 2>&1 | head -n1)"
 	@echo "Git:     $$(git --version 2>&1)"
+
+# =============================================================================
+# Documentation
+# =============================================================================
+
+makedoc: docs-dev
+
+docs-dev:
+	@echo "Starting documentation development server..."
+	@command -v npm >/dev/null 2>&1 || { echo "Error: npm not found. Please install Node.js"; exit 1; }
+	@[ -d node_modules ] || npm install
+	@npm run docs:dev
+
+docs-build:
+	@echo "Building documentation for production..."
+	@command -v npm >/dev/null 2>&1 || { echo "Error: npm not found. Please install Node.js"; exit 1; }
+	@[ -d node_modules ] || npm install
+	@npm run docs:build
+	@echo "✓ Documentation built in docs/.vitepress/dist/"
+
+docs-preview:
+	@echo "Previewing documentation..."
+	@command -v npm >/dev/null 2>&1 || { echo "Error: npm not found. Please install Node.js"; exit 1; }
+	@[ -d docs/.vitepress/dist ] || { echo "Error: Build documentation first with 'make docs-build'"; exit 1; }
+	@npm run docs:preview
+
+docs-clean:
+	@echo "Cleaning documentation build artifacts..."
+	@rm -rf docs/.vitepress/dist docs/.vitepress/cache
+	@echo "✓ Documentation artifacts cleaned"

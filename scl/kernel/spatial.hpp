@@ -2,186 +2,61 @@
 
 #include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
+#include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
+#include "scl/core/vectorize.hpp"
+#include "scl/core/memory.hpp"
 #include "scl/threading/parallel_for.hpp"
-
-// Include optimized backends
-#include "scl/kernel/spatial_fast_impl.hpp"
-#include "scl/kernel/spatial_mapped_impl.hpp"
+#include "scl/threading/workspace.hpp"
+#include "scl/threading/scheduler.hpp"
 
 #include <cmath>
-#include <vector>
 
 // =============================================================================
-/// @file spatial.hpp
-/// @brief Spatial Autocorrelation Statistics
-///
-/// ## Operations
-///
-/// - morans_i: Moran's I spatial autocorrelation statistic
-/// - compute_spatial_lag: Spatial lag values (weighted sum of neighbors)
-///
-/// ## Formula
-///
-/// Moran's I = (N/W) * sum_ij(w_ij * (x_i - mean) * (x_j - mean)) / sum_i((x_i - mean)^2)
-///
-/// Where:
-/// - N = number of cells
-/// - W = sum of all weights
-/// - w_ij = spatial weight between cells i and j
-/// - x_i = feature value for cell i
-///
-/// ## Performance Optimizations
-///
-/// 1. SIMD Weight Sum
-///    - 4-way unrolled accumulation
-///    - Direct array access when possible
-///
-/// 2. Optimized Centered Value Materialization
-///    - SIMD fill with -mean
-///    - Sparse scatter for non-zeros
-///
-/// 3. Vectorized Variance
-///    - SIMD squared sum with FMA
-///
-/// 4. Prefetch for Graph Traversal
-///    - Random access to z[] vector optimized
-///
-/// ## Performance
-///
-/// - O(nnz_graph + nnz_feature) per feature
-/// - ~5-10 GB/s per core
+// FILE: scl/kernel/spatial.hpp
+// BRIEF: Spatial statistics with SIMD optimization
 // =============================================================================
 
 namespace scl::kernel::spatial {
 
-// =============================================================================
-// SECTION 1: SIMD Helpers
-// =============================================================================
+namespace config {
+    constexpr Size PREFETCH_DISTANCE = 8;
+}
 
 namespace detail {
 
-/// @brief SIMD sum
+// Compute sum(w_j * z_j) for neighbors - z_i factored out
 template <typename T>
-SCL_FORCE_INLINE T simd_sum_array(const T* SCL_RESTRICT data, Size len) {
-    namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
-
-    auto v_sum0 = s::Zero(d);
-    auto v_sum1 = s::Zero(d);
-    auto v_sum2 = s::Zero(d);
-    auto v_sum3 = s::Zero(d);
-
-    Size i = 0;
-    for (; i + 4 * lanes <= len; i += 4 * lanes) {
-        v_sum0 = s::Add(v_sum0, s::Load(d, data + i + 0 * lanes));
-        v_sum1 = s::Add(v_sum1, s::Load(d, data + i + 1 * lanes));
-        v_sum2 = s::Add(v_sum2, s::Load(d, data + i + 2 * lanes));
-        v_sum3 = s::Add(v_sum3, s::Load(d, data + i + 3 * lanes));
-    }
-
-    auto v_sum = s::Add(s::Add(v_sum0, v_sum1), s::Add(v_sum2, v_sum3));
-
-    for (; i + lanes <= len; i += lanes) {
-        v_sum = s::Add(v_sum, s::Load(d, data + i));
-    }
-
-    T sum = s::GetLane(s::SumOfLanes(d, v_sum));
-
-    for (; i < len; ++i) {
-        sum += data[i];
-    }
-
-    return sum;
-}
-
-/// @brief SIMD fill
-template <typename T>
-SCL_FORCE_INLINE void simd_fill(T* SCL_RESTRICT data, Size len, T val) {
-    namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
-
-    auto v_val = s::Set(d, val);
-
-    Size i = 0;
-    for (; i + 4 * lanes <= len; i += 4 * lanes) {
-        s::Store(v_val, d, data + i + 0 * lanes);
-        s::Store(v_val, d, data + i + 1 * lanes);
-        s::Store(v_val, d, data + i + 2 * lanes);
-        s::Store(v_val, d, data + i + 3 * lanes);
-    }
-
-    for (; i + lanes <= len; i += lanes) {
-        s::Store(v_val, d, data + i);
-    }
-
-    for (; i < len; ++i) {
-        data[i] = val;
-    }
-}
-
-/// @brief SIMD squared sum
-template <typename T>
-SCL_FORCE_INLINE T simd_squared_sum(const T* SCL_RESTRICT data, Size len) {
-    namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
-
-    auto v_sum0 = s::Zero(d);
-    auto v_sum1 = s::Zero(d);
-
-    Size i = 0;
-    for (; i + 2 * lanes <= len; i += 2 * lanes) {
-        auto v0 = s::Load(d, data + i + 0 * lanes);
-        auto v1 = s::Load(d, data + i + 1 * lanes);
-        v_sum0 = s::MulAdd(v0, v0, v_sum0);
-        v_sum1 = s::MulAdd(v1, v1, v_sum1);
-    }
-
-    auto v_sum = s::Add(v_sum0, v_sum1);
-
-    for (; i + lanes <= len; i += lanes) {
-        auto v = s::Load(d, data + i);
-        v_sum = s::MulAdd(v, v, v_sum);
-    }
-
-    T sum = s::GetLane(s::SumOfLanes(d, v_sum));
-
-    for (; i < len; ++i) {
-        sum += data[i] * data[i];
-    }
-
-    return sum;
-}
-
-/// @brief Compute weighted product with prefetch
-template <typename T>
-SCL_FORCE_INLINE T compute_weighted_product(
+SCL_FORCE_INLINE T compute_weighted_neighbor_sum(
     const T* SCL_RESTRICT weights,
     const Index* SCL_RESTRICT indices,
     Size len,
-    T z_i,
     const T* SCL_RESTRICT z
 ) {
-    constexpr Size PREFETCH_DIST = 8;
     T sum = T(0);
 
     Size k = 0;
     for (; k + 4 <= len; k += 4) {
-        if (k + PREFETCH_DIST < len) {
-            SCL_PREFETCH_READ(&z[indices[k + PREFETCH_DIST]], 0);
+        if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len)) {
+            SCL_PREFETCH_READ(&z[indices[k + config::PREFETCH_DISTANCE]], 0);
         }
 
-        sum += weights[k + 0] * z_i * z[indices[k + 0]];
-        sum += weights[k + 1] * z_i * z[indices[k + 1]];
-        sum += weights[k + 2] * z_i * z[indices[k + 2]];
-        sum += weights[k + 3] * z_i * z[indices[k + 3]];
+        T w0 = weights[k + 0];
+        T w1 = weights[k + 1];
+        T w2 = weights[k + 2];
+        T w3 = weights[k + 3];
+
+        T zj0 = z[indices[k + 0]];
+        T zj1 = z[indices[k + 1]];
+        T zj2 = z[indices[k + 2]];
+        T zj3 = z[indices[k + 3]];
+
+        // Factored: z_i multiplied once outside
+        sum += w0 * zj0 + w1 * zj1 + w2 * zj2 + w3 * zj3;
     }
 
     for (; k < len; ++k) {
-        sum += weights[k] * z_i * z[indices[k]];
+        sum += weights[k] * z[indices[k]];
     }
 
     return sum;
@@ -190,201 +65,124 @@ SCL_FORCE_INLINE T compute_weighted_product(
 } // namespace detail
 
 // =============================================================================
-// SECTION 2: Moran's I (Generic Implementation)
+// Transform Functions
 // =============================================================================
 
-/// @brief Compute Moran's I statistic (unified for all sparse types)
-///
-/// Dispatches to optimized backend based on matrix types.
-///
-/// @tparam GraphT Graph sparse matrix type (cells x cells)
-/// @tparam FeatureT Feature sparse matrix type (features x cells or cells x features)
-/// @param graph Spatial weight matrix (cells x cells), typically CSR
-/// @param features Feature matrix, typically CSC (genes x cells)
-/// @param output Output Moran's I values [size = n_features], PRE-ALLOCATED
-template <typename GraphT, typename FeatureT>
-    requires AnySparse<GraphT> && AnySparse<FeatureT>
-void morans_i(
-    const GraphT& graph,
-    const FeatureT& features,
-    Array<Real> output
+template <typename T, bool GraphCSR>
+void weight_sum(
+    const Sparse<T, GraphCSR>& graph,
+    T& out_sum
 ) {
-    using T = typename GraphT::ValueType;
-    constexpr bool GraphCSR = std::is_same_v<typename GraphT::Tag, TagCSR>;
-    constexpr bool FeatCSR = std::is_same_v<typename FeatureT::Tag, TagCSR>;
+    const Index primary_dim = graph.primary_dim();
+    const Index total_nnz = graph.nnz();
 
-    const Index n_cells = scl::primary_size(graph);
-    const Index n_features = scl::primary_size(features);
-
-    SCL_CHECK_DIM(scl::secondary_size(graph) == n_cells, "Graph must be square");
-    SCL_CHECK_DIM(scl::secondary_size(features) == n_cells, "Features dim mismatch");
-    SCL_CHECK_DIM(output.len == static_cast<Size>(n_features), "Output size mismatch");
-
-    // Dispatch to optimized backends
-    if constexpr (CustomSparseLike<GraphT, GraphCSR> && CustomSparseLike<FeatureT, FeatCSR>) {
-        fast::morans_i_custom(graph, features, output);
+    if (total_nnz == 0) {
+        out_sum = T(0);
         return;
     }
 
-    // Generic fallback
-    // Compute weight sum
-    Real W_sum = Real(0);
-    for (Index i = 0; i < n_cells; ++i) {
-        auto vals = scl::primary_values(graph, i);
-        for (Size k = 0; k < vals.len; ++k) {
-            W_sum += static_cast<Real>(vals[k]);
-        }
-    }
+    // Pre-allocate workspace for partial sums
+    T* workspace = scl::memory::aligned_alloc<T>(static_cast<Size>(primary_dim), SCL_ALIGNMENT);
 
-    if (W_sum <= Real(0)) {
-        detail::simd_fill(output.ptr, output.len, Real(0));
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+        const Index idx = static_cast<Index>(p);
+        const Index len = graph.primary_length(idx);
+        const Size len_sz = static_cast<Size>(len);
+
+        if (len_sz == 0) {
+            workspace[p] = T(0);
+            return;
+        }
+
+        auto values = graph.primary_values(idx);
+        workspace[p] = scl::vectorize::sum(Array<const T>(values.ptr, len_sz));
+    });
+
+    out_sum = scl::vectorize::sum(Array<const T>(workspace, static_cast<Size>(primary_dim)));
+
+    scl::memory::aligned_free(workspace, SCL_ALIGNMENT);
+}
+
+template <typename T, bool GraphCSR, bool FeatCSR>
+void morans_i(
+    const Sparse<T, GraphCSR>& graph,
+    const Sparse<T, FeatCSR>& features,
+    Array<Real> output
+) {
+    const Index n_cells = graph.primary_dim();
+    const Index n_features = features.primary_dim();
+
+    SCL_CHECK_DIM(graph.secondary_dim() == n_cells, "Graph must be square");
+    SCL_CHECK_DIM(features.secondary_dim() == n_cells, "Features dim mismatch");
+    SCL_CHECK_DIM(output.len == static_cast<Size>(n_features), "Output size mismatch");
+
+    T W_sum;
+    weight_sum(graph, W_sum);
+
+    if (W_sum <= T(0)) {
+        scl::memory::fill(output, Real(0));
         return;
     }
 
     const Real N = static_cast<Real>(n_cells);
-    const Real N_over_W = N / W_sum;
+    const Real N_over_W = N / static_cast<Real>(W_sum);
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_features), [&](size_t f) {
-        Index f_idx = static_cast<Index>(f);
+    // Pre-allocate z buffers for all threads
+    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    scl::threading::WorkspacePool<Real> z_pool;
+    z_pool.init(n_threads, static_cast<Size>(n_cells));
 
-        auto feat_vals = scl::primary_values(features, f_idx);
-        auto feat_inds = scl::primary_indices(features, f_idx);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_features), [&](size_t f, size_t thread_rank) {
+        const Index f_idx = static_cast<Index>(f);
+        const Index len = features.primary_length(f_idx);
+        const Size len_sz = static_cast<Size>(len);
 
-        // Compute mean
-        Real sum = Real(0);
-        for (Size k = 0; k < feat_vals.len; ++k) {
-            sum += static_cast<Real>(feat_vals[k]);
-        }
+        auto feat_values = features.primary_values(f_idx);
+        auto feat_indices = features.primary_indices(f_idx);
+
+        Real sum = (len_sz > 0)
+            ? static_cast<Real>(scl::vectorize::sum(Array<const T>(feat_values.ptr, len_sz)))
+            : Real(0);
         Real mean = sum / N;
 
-        // Materialize centered values
-        thread_local std::vector<Real> z;
-        z.resize(static_cast<size_t>(n_cells));
+        Real* SCL_RESTRICT z = z_pool.get(thread_rank);
 
-        detail::simd_fill(z.data(), static_cast<Size>(n_cells), -mean);
+        scl::memory::fill(Array<Real>(z, static_cast<Size>(n_cells)), -mean);
 
-        for (Size k = 0; k < feat_vals.len; ++k) {
-            z[feat_inds[k]] = static_cast<Real>(feat_vals[k]) - mean;
+        for (Size k = 0; k < len_sz; ++k) {
+            z[feat_indices[k]] = static_cast<Real>(feat_values[k]) - mean;
         }
 
-        // Compute variance
-        Real denom = detail::simd_squared_sum(z.data(), static_cast<Size>(n_cells));
+        Real denom = scl::vectorize::sum_squared(Array<const Real>(z, static_cast<Size>(n_cells)));
 
         if (denom <= Real(0)) {
             output[f] = Real(0);
             return;
         }
 
-        // Compute numerator
         Real numer = Real(0);
 
         for (Index i = 0; i < n_cells; ++i) {
-            auto graph_vals = scl::primary_values(graph, i);
-            auto graph_inds = scl::primary_indices(graph, i);
-            Size g_len = graph_vals.len;
+            const Index g_len = graph.primary_length(i);
+            const Size g_len_sz = static_cast<Size>(g_len);
 
-            if (g_len == 0) continue;
+            if (g_len_sz == 0) continue;
 
-            numer += detail::compute_weighted_product(
-                graph_vals.ptr, graph_inds.ptr, g_len,
-                static_cast<T>(z[i]),
-                reinterpret_cast<const T*>(z.data())
+            auto g_weights = graph.primary_values(i);
+            auto g_indices = graph.primary_indices(i);
+
+            // z_i factored out: numer += z_i * sum(w_ij * z_j)
+            Real z_i = z[i];
+            Real neighbor_sum = detail::compute_weighted_neighbor_sum(
+                g_weights.ptr, g_indices.ptr, g_len_sz,
+                reinterpret_cast<const T*>(z)
             );
+            numer += z_i * neighbor_sum;
         }
 
         output[f] = N_over_W * (numer / denom);
     });
 }
 
-// =============================================================================
-// SECTION 3: Spatial Lag
-// =============================================================================
-
-/// @brief Compute spatial lag values
-///
-/// spatial_lag[i] = sum_j(w[i,j] * x[j])
-///
-/// @tparam GraphT Graph sparse matrix type
-/// @param graph Spatial weight matrix (cells x cells)
-/// @param x Input values [size = n_cells]
-/// @param out_lag Output lag values [size = n_cells], PRE-ALLOCATED
-template <typename GraphT, typename T>
-    requires AnySparse<GraphT>
-void compute_spatial_lag(
-    const GraphT& graph,
-    Array<const T> x,
-    Array<T> out_lag
-) {
-    constexpr bool IsCSR = std::is_same_v<typename GraphT::Tag, TagCSR>;
-    const Index n_cells = scl::primary_size(graph);
-
-    SCL_CHECK_DIM(x.len == static_cast<Size>(n_cells), "Input x size mismatch");
-    SCL_CHECK_DIM(out_lag.len == static_cast<Size>(n_cells), "Output lag size mismatch");
-
-    // Dispatch to mapped backend if applicable
-    if constexpr (kernel::mapped::MappedSparseLike<GraphT, IsCSR>) {
-        mapped::compute_spatial_lag_mapped(graph, x, out_lag);
-        return;
-    }
-
-    // Generic with prefetch optimization
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells), [&](size_t i) {
-        auto vals = scl::primary_values(graph, static_cast<Index>(i));
-        auto inds = scl::primary_indices(graph, static_cast<Index>(i));
-        Size len = vals.len;
-
-        if (len == 0) {
-            out_lag[i] = T(0);
-            return;
-        }
-
-        out_lag[i] = detail::compute_weighted_product(
-            vals.ptr, inds.ptr, len,
-            T(1),  // z_i = 1 for simple weighted sum
-            x.ptr
-        );
-    });
-}
-
-// =============================================================================
-// SECTION 4: Weight Sum
-// =============================================================================
-
-/// @brief Compute total weight sum
-///
-/// @tparam GraphT Graph sparse matrix type
-/// @param graph Spatial weight matrix
-/// @return Total sum of all weights
-template <typename GraphT>
-    requires AnySparse<GraphT>
-typename GraphT::ValueType compute_weight_sum(const GraphT& graph) {
-    using T = typename GraphT::ValueType;
-    constexpr bool IsCSR = std::is_same_v<typename GraphT::Tag, TagCSR>;
-
-    const Index n_cells = scl::primary_size(graph);
-
-    // Dispatch to optimized backends
-    if constexpr (CustomSparseLike<GraphT, IsCSR>) {
-        T sum;
-        fast::weight_sum_custom(graph, sum);
-        return sum;
-    } else if constexpr (kernel::mapped::MappedSparseLike<GraphT, IsCSR>) {
-        if constexpr (kernel::mapped::detail::IsMappedCustomSparse<GraphT>) {
-            T sum;
-            mapped::weight_sum_mapped(graph, sum);
-            return sum;
-        }
-    }
-
-    // Generic fallback
-    T total = T(0);
-    for (Index i = 0; i < n_cells; ++i) {
-        auto vals = scl::primary_values(graph, i);
-        for (Size k = 0; k < vals.len; ++k) {
-            total += vals[k];
-        }
-    }
-    return total;
-}
-
 } // namespace scl::kernel::spatial
+

@@ -4,12 +4,27 @@ This module provides SclCSC, a smart column-oriented sparse matrix
 with automatic backend management, similar to SclCSR but optimized
 for column-wise operations.
 
+Type Hierarchy (CSC):
+    CSCBase (ABC)
+    ├── CustomCSC      - Contiguous arrays (data, indices, indptr)
+    ├── VirtualCSC     - Zero-copy views (internal, from slicing)
+    ├── MappedCustomCSC - Memory-mapped files
+    ├── MappedVirtualCSC - Mapped slices (internal)
+    ├── SclCSC         - Smart: auto backend management (THIS CLASS)
+    └── CallbackCSC    - User-extensible callbacks
+
 Design Philosophy:
     Same as SclCSR - transparent backend management, automatic
     ownership tracking, and smart slicing strategies.
 
+Construction:
+    1. From arrays: SclCSC(data, indices, indptr, shape)
+    2. From CustomCSC: SclCSC.from_custom(custom_csc)
+    3. From scipy: SclCSC.from_scipy(scipy_mat)
+    4. From dense: SclCSC.from_dense([[1, 0, 2]])
+
 Smart Slicing:
-    - Column slice (non-contiguous): Convert to Virtual, immediate slice
+    - Column slice (non-contiguous): Creates VirtualCSC, zero-copy
     - Row slice: Lazy, mark as view with row mask
 
 Example:
@@ -32,6 +47,8 @@ from ._base import CSCBase
 
 if TYPE_CHECKING:
     from ._csr import SclCSR
+    from ._custom import CustomCSC
+    from ._mapped import MappedCustomCSC
 
 __all__ = ['SclCSC', 'CSC']
 
@@ -301,6 +318,77 @@ class SclCSC(CSCBase):
         indptr = from_list(indptr_list, dtype='int64')
         
         return cls(data, indices, indptr, shape=(rows, cols), ownership=Ownership.OWNED)
+    
+    @classmethod
+    def from_custom(cls, custom: 'CustomCSC', copy: bool = False) -> 'SclCSC':
+        """Create SclCSC from CustomCSC.
+        
+        Allows using SclCSC's smart features with an existing CustomCSC.
+        
+        Args:
+            custom: CustomCSC matrix to wrap/copy.
+            copy: If True, copy data; otherwise wrap as borrowed.
+            
+        Returns:
+            SclCSC matrix proxying the CustomCSC.
+        """
+        from ._custom import CustomCSC
+        
+        if not isinstance(custom, CustomCSC):
+            raise TypeError(f"Expected CustomCSC, got {type(custom).__name__}")
+        
+        if copy:
+            return cls(
+                data=custom.data.copy(),
+                indices=custom.indices.copy(),
+                indptr=custom.indptr.copy(),
+                shape=custom.shape,
+                ownership=Ownership.OWNED
+            )
+        else:
+            result = cls(
+                data=custom.data,
+                indices=custom.indices,
+                indptr=custom.indptr,
+                shape=custom.shape,
+                ownership=Ownership.BORROWED
+            )
+            result._storage._source_ref = custom
+            result._ref_chain.add(custom)
+            return result
+    
+    @classmethod
+    def from_mapped(cls, mapped: 'MappedCustomCSC') -> 'SclCSC':
+        """Create SclCSC from MappedCustomCSC.
+        
+        Creates a smart wrapper around memory-mapped data.
+        
+        Args:
+            mapped: MappedCustomCSC to wrap.
+            
+        Returns:
+            SclCSC with MAPPED backend.
+        """
+        from ._mapped import MappedCustomCSC
+        
+        if not isinstance(mapped, MappedCustomCSC):
+            raise TypeError(f"Expected MappedCustomCSC, got {type(mapped).__name__}")
+        
+        storage = MappedStorage(
+            path=str(mapped._data_path.parent),
+            format='bin',
+            group='',
+            shape=mapped.shape,
+            nnz=mapped.nnz,
+            dtype=mapped.dtype
+        )
+        
+        return cls(
+            shape=mapped.shape,
+            backend=Backend.MAPPED,
+            _storage=storage,
+            _ref_chain=RefChain()
+        )
     
     @classmethod
     def from_scipy(cls, mat: Any, copy: bool = False) -> 'SclCSC':

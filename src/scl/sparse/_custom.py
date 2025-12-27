@@ -1,14 +1,22 @@
 """
 Custom Storage Sparse Matrices
 
-Provides direct access to CustomStorage-backed sparse matrices.
-These are lightweight classes that expose the raw CSR/CSC arrays
-without the smart backend management of SclCSR/SclCSC.
+Directly exposes CustomSparse data structures - the foundation of sparse
+matrix storage with contiguous arrays (data, indices, indptr).
+
+C++ Equivalent:
+    scl::CustomSparse<T, IsCSR> from scl/core/sparse.hpp
+
+Memory Layout:
+    - data[nnz]: Non-zero values
+    - indices[nnz]: Secondary dimension indices (col for CSR, row for CSC)
+    - indptr[primary+1]: Cumulative offsets
 
 Use Cases:
-    - Performance-critical code that needs direct array access
-    - Interoperability with external systems
-    - Building blocks for higher-level abstractions
+    - Direct construction from raw arrays
+    - Interoperability with scipy.sparse
+    - Building block for VirtualCSR/CSC (slicing)
+    - High-performance kernels that need direct array access
 
 For most use cases, prefer SclCSR/SclCSC which provide automatic
 backend management and more convenience methods.
@@ -17,24 +25,24 @@ Example:
     >>> from scl.sparse import CustomCSR, Array
     >>> 
     >>> # Create directly from arrays
-    >>> data = Array.from_list([1.0, 2.0, 3.0], dtype='float64')
-    >>> indices = Array.from_list([0, 2, 1], dtype='int64')
-    >>> indptr = Array.from_list([0, 2, 3], dtype='int64')
+    >>> data = Array.from_numpy(np.array([1.0, 2.0, 3.0]))
+    >>> indices = Array.from_numpy(np.array([0, 2, 1], dtype=np.int64))
+    >>> indptr = Array.from_numpy(np.array([0, 2, 3], dtype=np.int64))
     >>> mat = CustomCSR(data, indices, indptr, shape=(2, 3))
     >>> 
     >>> # Access row data directly
     >>> vals, idxs = mat.get_row(0)
-    >>> print(mat.row_sums())  # Uses kernel
+    >>> print(mat.sum(axis=1))
 """
 
-from typing import Tuple, Optional, Union, TYPE_CHECKING
+from typing import Tuple, Optional, Union, TYPE_CHECKING, overload
 import numpy as np
 
 from ._base import CSRBase, CSCBase
 from ._array import Array, zeros
 
 if TYPE_CHECKING:
-    from scipy.sparse import spmatrix
+    from scipy.sparse import spmatrix, csr_matrix, csc_matrix
 
 __all__ = ['CustomCSR', 'CustomCSC']
 
@@ -43,20 +51,22 @@ class CustomCSR(CSRBase):
     """
     Custom-storage CSR sparse matrix.
     
-    A lightweight CSR matrix that directly wraps raw arrays without
-    the smart backend management of SclCSR. This is useful when you
-    need direct control over memory and don't need automatic backend switching.
+    A CSR matrix that directly wraps contiguous arrays without smart 
+    backend management. Maps to C++ CustomSparse<T, true>.
     
     Attributes:
-        data: Non-zero values array
-        indices: Column indices array
-        indptr: Row pointer array
+        data: Non-zero values array (nnz elements)
+        indices: Column indices array (nnz elements)
+        indptr: Row pointer array (rows + 1 elements)
         shape: Matrix dimensions (rows, cols)
-        dtype: Data type string
+        dtype: Data type string ('float32' or 'float64')
     
     Memory Model:
         Data can be OWNED (we allocated it) or BORROWED (external source).
         When borrowed, the original source must outlive this object.
+        
+    C++ Equivalent:
+        scl::CustomSparse<Real, true> aka scl::CustomCSR
     
     Example:
         >>> # From arrays
@@ -69,7 +79,7 @@ class CustomCSR(CSRBase):
         >>> values, indices = mat.get_row(0)
     """
     
-    __slots__ = ('_data', '_indices', '_indptr', '_shape', '_dtype', '_row_lengths')
+    __slots__ = ('_data', '_indices', '_indptr', '_shape', '_dtype', '_source_ref')
     
     def __init__(
         self,
@@ -77,8 +87,8 @@ class CustomCSR(CSRBase):
         indices: Array,
         indptr: Array,
         shape: Tuple[int, int],
-        row_lengths: Optional[Array] = None,
-        dtype: Optional[str] = None
+        dtype: Optional[str] = None,
+        _source_ref: Optional[object] = None
     ):
         """Initialize CustomCSR from arrays.
         
@@ -87,28 +97,19 @@ class CustomCSR(CSRBase):
             indices: Column indices array  
             indptr: Row pointer array (length = rows + 1)
             shape: Matrix dimensions (rows, cols)
-            row_lengths: Optional precomputed row lengths
             dtype: Data type (inferred from data if not provided)
+            _source_ref: Reference to borrowed source (internal use)
         """
         self._data = data
         self._indices = indices
         self._indptr = indptr
         self._shape = tuple(shape)
         self._dtype = dtype or data.dtype
+        self._source_ref = _source_ref  # Keep source alive for borrowed data
         
-        # Compute or store row lengths
-        if row_lengths is not None:
-            self._row_lengths = row_lengths
-        else:
-            self._row_lengths = self._compute_row_lengths()
-    
-    def _compute_row_lengths(self) -> Array:
-        """Compute row lengths from indptr."""
-        rows = self._shape[0]
-        lengths = zeros(rows, dtype='int64')
-        for i in range(rows):
-            lengths[i] = self._indptr[i + 1] - self._indptr[i]
-        return lengths
+        # Validation
+        if len(indptr) != shape[0] + 1:
+            raise ValueError(f"indptr length {len(indptr)} != rows + 1 = {shape[0] + 1}")
     
     # =========================================================================
     # Properties (SparseBase)
@@ -162,7 +163,7 @@ class CustomCSR(CSRBase):
         if length == 0:
             return zeros(0, dtype=self._dtype)
         
-        # Create view into data array
+        # Return view into data array
         return Array.from_numpy(
             self._data.to_numpy()[start:end],
             copy=False
@@ -221,11 +222,61 @@ class CustomCSR(CSRBase):
         else:
             return self.sum(axis=0) / self.rows
     
+    def var(self, axis: Optional[int] = None, ddof: int = 1) -> Union[float, np.ndarray]:
+        """Compute variance along axis."""
+        if axis is None:
+            data = self._data.to_numpy()
+            return float(np.var(data, ddof=ddof))
+        elif axis == 1:
+            # Row variances
+            result = np.zeros(self.rows, dtype=np.float64)
+            data_np = self._data.to_numpy()
+            indptr_np = self._indptr.to_numpy()
+            
+            for i in range(self.rows):
+                start = int(indptr_np[i])
+                end = int(indptr_np[i + 1])
+                row_data = data_np[start:end]
+                
+                # Include zeros in variance calculation
+                n_zeros = self.cols - len(row_data)
+                if len(row_data) + n_zeros > ddof:
+                    mean_val = np.sum(row_data) / self.cols
+                    sq_diff = np.sum((row_data - mean_val) ** 2) + n_zeros * mean_val ** 2
+                    result[i] = sq_diff / (self.cols - ddof)
+            return result
+        else:
+            # Column variances (similar logic)
+            result = np.zeros(self.cols, dtype=np.float64)
+            data_np = self._data.to_numpy()
+            indices_np = self._indices.to_numpy()
+            
+            col_sum = np.zeros(self.cols)
+            col_sq_sum = np.zeros(self.cols)
+            col_count = np.zeros(self.cols, dtype=np.int64)
+            
+            for k in range(self.nnz):
+                j = indices_np[k]
+                v = data_np[k]
+                col_sum[j] += v
+                col_sq_sum[j] += v * v
+                col_count[j] += 1
+            
+            for j in range(self.cols):
+                n = self.rows
+                if n > ddof:
+                    mean_val = col_sum[j] / n
+                    # Include zeros
+                    n_zeros = n - col_count[j]
+                    sq_diff = col_sq_sum[j] - 2 * mean_val * col_sum[j] + n * mean_val ** 2
+                    result[j] = sq_diff / (n - ddof)
+            return result
+    
     # =========================================================================
     # Conversion
     # =========================================================================
     
-    def to_scipy(self) -> 'spmatrix':
+    def to_scipy(self) -> 'csr_matrix':
         """Convert to scipy CSR matrix."""
         import scipy.sparse as sp
         
@@ -244,25 +295,23 @@ class CustomCSR(CSRBase):
             indices=self._indices.copy(),
             indptr=self._indptr.copy(),
             shape=self._shape,
-            row_lengths=self._row_lengths.copy() if self._row_lengths else None,
             dtype=self._dtype
         )
     
     # =========================================================================
-    # C Pointer Access
+    # C Pointer Access (for kernel calls)
     # =========================================================================
     
     def get_c_pointers(self) -> Tuple:
         """Get C-compatible pointers for kernel calls.
         
         Returns:
-            (data_ptr, indices_ptr, indptr_ptr, lengths_ptr, rows, cols, nnz)
+            (data_ptr, indices_ptr, indptr_ptr, rows, cols, nnz)
         """
         return (
             self._data.get_pointer(),
             self._indices.get_pointer(),
             self._indptr.get_pointer(),
-            self._row_lengths.get_pointer() if self._row_lengths else None,
             self.rows,
             self.cols,
             self.nnz
@@ -273,11 +322,11 @@ class CustomCSR(CSRBase):
     # =========================================================================
     
     @classmethod
-    def from_scipy(cls, mat, copy: bool = False) -> 'CustomCSR':
+    def from_scipy(cls, mat: 'spmatrix', copy: bool = False) -> 'CustomCSR':
         """Create from scipy CSR matrix.
         
         Args:
-            mat: scipy.sparse.csr_matrix
+            mat: scipy.sparse.csr_matrix (or convertible)
             copy: If True, copy data; otherwise borrow
             
         Returns:
@@ -294,12 +343,16 @@ class CustomCSR(CSRBase):
             data = Array.from_numpy(mat.data.copy(), copy=False)
             indices = Array.from_numpy(mat.indices.copy().astype(np.int64), copy=False)
             indptr = Array.from_numpy(mat.indptr.copy().astype(np.int64), copy=False)
+            source_ref = None
         else:
+            # Borrow - keep reference to original
             data = Array.from_numpy(mat.data, copy=False)
             indices = Array.from_numpy(mat.indices.astype(np.int64), copy=False)
             indptr = Array.from_numpy(mat.indptr.astype(np.int64), copy=False)
+            source_ref = mat
         
-        return cls(data, indices, indptr, shape=mat.shape, dtype=dtype)
+        return cls(data, indices, indptr, shape=mat.shape, dtype=dtype, 
+                   _source_ref=source_ref)
     
     @classmethod
     def from_dense(cls, dense, dtype: str = 'float64') -> 'CustomCSR':
@@ -312,7 +365,6 @@ class CustomCSR(CSRBase):
         Returns:
             CustomCSR matrix
         """
-        import numpy as np
         dense = np.asarray(dense, dtype=np.float64 if dtype == 'float64' else np.float32)
         
         rows, cols = dense.shape
@@ -332,16 +384,50 @@ class CustomCSR(CSRBase):
         indptr = Array.from_numpy(np.array(indptr_list, dtype=np.int64), copy=False)
         
         return cls(data, indices, indptr, shape=(rows, cols), dtype=dtype)
+    
+    @classmethod  
+    def from_arrays(
+        cls,
+        data: np.ndarray,
+        indices: np.ndarray, 
+        indptr: np.ndarray,
+        shape: Tuple[int, int],
+        copy: bool = True
+    ) -> 'CustomCSR':
+        """Create from numpy arrays.
+        
+        Args:
+            data: Non-zero values (nnz,)
+            indices: Column indices (nnz,)
+            indptr: Row pointers (rows + 1,)
+            shape: Matrix shape (rows, cols)
+            copy: Whether to copy arrays
+            
+        Returns:
+            CustomCSR matrix
+        """
+        dtype = 'float32' if data.dtype == np.float32 else 'float64'
+        
+        return cls(
+            data=Array.from_numpy(data, copy=copy),
+            indices=Array.from_numpy(indices.astype(np.int64), copy=copy),
+            indptr=Array.from_numpy(indptr.astype(np.int64), copy=copy),
+            shape=shape,
+            dtype=dtype
+        )
 
 
 class CustomCSC(CSCBase):
     """
     Custom-storage CSC sparse matrix.
     
-    Column-oriented equivalent of CustomCSR. See CustomCSR for details.
+    Column-oriented equivalent of CustomCSR. Maps to C++ CustomSparse<T, false>.
+    
+    C++ Equivalent:
+        scl::CustomSparse<Real, false> aka scl::CustomCSC
     """
     
-    __slots__ = ('_data', '_indices', '_indptr', '_shape', '_dtype', '_col_lengths')
+    __slots__ = ('_data', '_indices', '_indptr', '_shape', '_dtype', '_source_ref')
     
     def __init__(
         self,
@@ -349,8 +435,8 @@ class CustomCSC(CSCBase):
         indices: Array,
         indptr: Array,
         shape: Tuple[int, int],
-        col_lengths: Optional[Array] = None,
-        dtype: Optional[str] = None
+        dtype: Optional[str] = None,
+        _source_ref: Optional[object] = None
     ):
         """Initialize CustomCSC from arrays."""
         self._data = data
@@ -358,19 +444,10 @@ class CustomCSC(CSCBase):
         self._indptr = indptr
         self._shape = tuple(shape)
         self._dtype = dtype or data.dtype
+        self._source_ref = _source_ref
         
-        if col_lengths is not None:
-            self._col_lengths = col_lengths
-        else:
-            self._col_lengths = self._compute_col_lengths()
-    
-    def _compute_col_lengths(self) -> Array:
-        """Compute column lengths from indptr."""
-        cols = self._shape[1]
-        lengths = zeros(cols, dtype='int64')
-        for j in range(cols):
-            lengths[j] = self._indptr[j + 1] - self._indptr[j]
-        return lengths
+        if len(indptr) != shape[1] + 1:
+            raise ValueError(f"indptr length {len(indptr)} != cols + 1 = {shape[1] + 1}")
     
     # =========================================================================
     # Properties
@@ -473,11 +550,60 @@ class CustomCSC(CSCBase):
         else:
             return self.sum(axis=1) / self.cols
     
+    def var(self, axis: Optional[int] = None, ddof: int = 1) -> Union[float, np.ndarray]:
+        """Compute variance along axis."""
+        # Similar to CustomCSR but swapped axes
+        if axis is None:
+            data = self._data.to_numpy()
+            return float(np.var(data, ddof=ddof))
+        elif axis == 0:
+            # Column variances
+            result = np.zeros(self.cols, dtype=np.float64)
+            data_np = self._data.to_numpy()
+            indptr_np = self._indptr.to_numpy()
+            
+            for j in range(self.cols):
+                start = int(indptr_np[j])
+                end = int(indptr_np[j + 1])
+                col_data = data_np[start:end]
+                
+                n_zeros = self.rows - len(col_data)
+                if len(col_data) + n_zeros > ddof:
+                    mean_val = np.sum(col_data) / self.rows
+                    sq_diff = np.sum((col_data - mean_val) ** 2) + n_zeros * mean_val ** 2
+                    result[j] = sq_diff / (self.rows - ddof)
+            return result
+        else:  # axis == 1
+            # Row variances
+            result = np.zeros(self.rows, dtype=np.float64)
+            data_np = self._data.to_numpy()
+            indices_np = self._indices.to_numpy()
+            
+            row_sum = np.zeros(self.rows)
+            row_sq_sum = np.zeros(self.rows)
+            row_count = np.zeros(self.rows, dtype=np.int64)
+            
+            for k in range(self.nnz):
+                i = indices_np[k]
+                v = data_np[k]
+                row_sum[i] += v
+                row_sq_sum[i] += v * v
+                row_count[i] += 1
+            
+            for i in range(self.rows):
+                n = self.cols
+                if n > ddof:
+                    mean_val = row_sum[i] / n
+                    n_zeros = n - row_count[i]
+                    sq_diff = row_sq_sum[i] - 2 * mean_val * row_sum[i] + n * mean_val ** 2
+                    result[i] = sq_diff / (n - ddof)
+            return result
+    
     # =========================================================================
     # Conversion
     # =========================================================================
     
-    def to_scipy(self) -> 'spmatrix':
+    def to_scipy(self) -> 'csc_matrix':
         """Convert to scipy CSC matrix."""
         import scipy.sparse as sp
         
@@ -496,7 +622,6 @@ class CustomCSC(CSCBase):
             indices=self._indices.copy(),
             indptr=self._indptr.copy(),
             shape=self._shape,
-            col_lengths=self._col_lengths.copy() if self._col_lengths else None,
             dtype=self._dtype
         )
     
@@ -506,14 +631,13 @@ class CustomCSC(CSCBase):
             self._data.get_pointer(),
             self._indices.get_pointer(),
             self._indptr.get_pointer(),
-            self._col_lengths.get_pointer() if self._col_lengths else None,
             self.rows,
             self.cols,
             self.nnz
         )
     
     @classmethod
-    def from_scipy(cls, mat, copy: bool = False) -> 'CustomCSC':
+    def from_scipy(cls, mat: 'spmatrix', copy: bool = False) -> 'CustomCSC':
         """Create from scipy CSC matrix."""
         import scipy.sparse as sp
         
@@ -526,17 +650,19 @@ class CustomCSC(CSCBase):
             data = Array.from_numpy(mat.data.copy(), copy=False)
             indices = Array.from_numpy(mat.indices.copy().astype(np.int64), copy=False)
             indptr = Array.from_numpy(mat.indptr.copy().astype(np.int64), copy=False)
+            source_ref = None
         else:
             data = Array.from_numpy(mat.data, copy=False)
             indices = Array.from_numpy(mat.indices.astype(np.int64), copy=False)
             indptr = Array.from_numpy(mat.indptr.astype(np.int64), copy=False)
+            source_ref = mat
         
-        return cls(data, indices, indptr, shape=mat.shape, dtype=dtype)
+        return cls(data, indices, indptr, shape=mat.shape, dtype=dtype,
+                   _source_ref=source_ref)
     
     @classmethod
     def from_dense(cls, dense, dtype: str = 'float64') -> 'CustomCSC':
         """Create from dense 2D array/list."""
-        import numpy as np
         dense = np.asarray(dense, dtype=np.float64 if dtype == 'float64' else np.float32)
         
         rows, cols = dense.shape
@@ -556,4 +682,23 @@ class CustomCSC(CSCBase):
         indptr = Array.from_numpy(np.array(indptr_list, dtype=np.int64), copy=False)
         
         return cls(data, indices, indptr, shape=(rows, cols), dtype=dtype)
-
+    
+    @classmethod
+    def from_arrays(
+        cls,
+        data: np.ndarray,
+        indices: np.ndarray,
+        indptr: np.ndarray,
+        shape: Tuple[int, int],
+        copy: bool = True
+    ) -> 'CustomCSC':
+        """Create from numpy arrays."""
+        dtype = 'float32' if data.dtype == np.float32 else 'float64'
+        
+        return cls(
+            data=Array.from_numpy(data, copy=copy),
+            indices=Array.from_numpy(indices.astype(np.int64), copy=copy),
+            indptr=Array.from_numpy(indptr.astype(np.int64), copy=copy),
+            shape=shape,
+            dtype=dtype
+        )

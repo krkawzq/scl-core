@@ -5,14 +5,30 @@ This module provides SclCSR, a smart sparse matrix class that:
 - Automatically handles ownership and reference chains
 - Optimizes slicing operations based on access patterns
 - Provides seamless scipy/numpy interoperability
+- Can proxy any CSRBase-compatible matrix type
+
+Type Hierarchy (CSR):
+    CSRBase (ABC)
+    ├── CustomCSR      - Contiguous arrays (data, indices, indptr)
+    ├── VirtualCSR     - Zero-copy views (internal, from slicing)
+    ├── MappedCustomCSR - Memory-mapped files
+    ├── MappedVirtualCSR - Mapped slices (internal)
+    ├── SclCSR         - Smart: auto backend management (THIS CLASS)
+    └── CallbackCSR    - User-extensible callbacks
 
 Design Philosophy:
     Users should not need to worry about memory management or
     backend details. The matrix automatically chooses optimal
     strategies for each operation.
 
+Construction:
+    1. From arrays: SclCSR(data, indices, indptr, shape)
+    2. From CustomCSR: SclCSR.from_custom(custom_csr)
+    3. From scipy: SclCSR.from_scipy(scipy_mat)
+    4. From dense: SclCSR.from_dense([[1, 0, 2]])
+
 Smart Slicing:
-    - Row slice (non-contiguous): Convert to Virtual, immediate slice
+    - Row slice (non-contiguous): Creates VirtualCSR, zero-copy
     - Column slice: Lazy, mark as view with column mask
     - Contiguous row slice: Zero-copy view when possible
 
@@ -21,6 +37,10 @@ Example:
     >>> mat = SclCSR.from_scipy(scipy_mat)      # Borrowed
     >>> mat = SclCSR.from_dense([[1, 0, 2]])    # Owned
     >>> mat = SclCSR.from_h5ad("data.h5ad")     # Mapped
+    >>> 
+    >>> # Proxy from CustomCSR
+    >>> custom = CustomCSR.from_scipy(scipy_mat)
+    >>> mat = SclCSR.from_custom(custom)
     >>> 
     >>> # Smart slicing
     >>> view = mat[0:100, :]      # Virtual backend
@@ -45,6 +65,8 @@ from ._base import CSRBase
 
 if TYPE_CHECKING:
     from ._csc import SclCSC
+    from ._custom import CustomCSR
+    from ._mapped import MappedCustomCSR
 
 __all__ = ['SclCSR', 'CSR']
 
@@ -480,6 +502,88 @@ class SclCSR(CSRBase):
         indptr = from_list(indptr_list, dtype='int64')
         
         return cls(data, indices, indptr, shape=(rows, cols), ownership=Ownership.OWNED)
+    
+    @classmethod
+    def from_custom(cls, custom: 'CustomCSR', copy: bool = False) -> 'SclCSR':
+        """Create SclCSR from CustomCSR.
+        
+        Allows using SclCSR's smart features with an existing CustomCSR.
+        
+        Args:
+            custom: CustomCSR matrix to wrap/copy.
+            copy: If True, copy data; otherwise wrap as borrowed.
+            
+        Returns:
+            SclCSR matrix proxying the CustomCSR.
+            
+        Example:
+            >>> from scl.sparse import CustomCSR, SclCSR
+            >>> custom = CustomCSR.from_scipy(scipy_mat)
+            >>> mat = SclCSR.from_custom(custom)  # Proxy
+        """
+        from ._custom import CustomCSR
+        
+        if not isinstance(custom, CustomCSR):
+            raise TypeError(f"Expected CustomCSR, got {type(custom).__name__}")
+        
+        if copy:
+            return cls(
+                data=custom.data.copy(),
+                indices=custom.indices.copy(),
+                indptr=custom.indptr.copy(),
+                shape=custom.shape,
+                ownership=Ownership.OWNED
+            )
+        else:
+            # Wrap as borrowed
+            result = cls(
+                data=custom.data,
+                indices=custom.indices,
+                indptr=custom.indptr,
+                shape=custom.shape,
+                ownership=Ownership.BORROWED
+            )
+            result._storage._source_ref = custom
+            result._ref_chain.add(custom)
+            return result
+    
+    @classmethod
+    def from_mapped(cls, mapped: 'MappedCustomCSR') -> 'SclCSR':
+        """Create SclCSR from MappedCustomCSR.
+        
+        Creates a smart wrapper around memory-mapped data.
+        
+        Args:
+            mapped: MappedCustomCSR to wrap.
+            
+        Returns:
+            SclCSR with MAPPED backend.
+            
+        Example:
+            >>> from scl.sparse import MappedCustomCSR, SclCSR
+            >>> mapped = MappedCustomCSR("data.bin", "indices.bin", "indptr.bin", shape=(1000, 500))
+            >>> mat = SclCSR.from_mapped(mapped)
+        """
+        from ._mapped import MappedCustomCSR
+        
+        if not isinstance(mapped, MappedCustomCSR):
+            raise TypeError(f"Expected MappedCustomCSR, got {type(mapped).__name__}")
+        
+        storage = MappedStorage(
+            path=str(mapped._data_path.parent),
+            format='bin',
+            group='',
+            shape=mapped.shape,
+            nnz=mapped.nnz,
+            dtype=mapped.dtype
+        )
+        
+        return cls(
+            shape=mapped.shape,
+            backend=Backend.MAPPED,
+            _storage=storage,
+            _ref_chain=RefChain()
+        )
     
     @classmethod
     def from_scipy(cls, mat: Any, copy: bool = False) -> 'SclCSR':

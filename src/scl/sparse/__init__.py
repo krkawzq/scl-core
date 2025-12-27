@@ -4,56 +4,69 @@ This module provides high-performance sparse matrix data structures
 with automatic backend management, transparent ownership tracking,
 and seamless cross-platform interoperability.
 
+Type Hierarchy:
+    
+    SparseBase (ABC)
+    ├── CSRBase                       # Row-oriented interface
+    │   ├── CustomCSR                 # Contiguous arrays (data, indices, indptr)
+    │   ├── VirtualCSR                # Zero-copy views (internal, from slicing)
+    │   ├── MappedCustomCSR           # Memory-mapped files
+    │   ├── MappedVirtualCSR          # Mapped slices (internal)
+    │   ├── SclCSR                    # Smart: auto backend management
+    │   └── CallbackCSR               # User-extensible callbacks
+    └── CSCBase                       # Column-oriented interface
+        ├── CustomCSC, VirtualCSC, MappedCustomCSC, MappedVirtualCSC
+        ├── SclCSC                    # Smart: auto backend management
+        └── CallbackCSC               # User-extensible callbacks
+
 Quick Start:
-    >>> from scl.sparse import SclCSR, SclCSC, vstack_csr
+    >>> from scl.sparse import SclCSR, CustomCSR, MappedCustomCSR
     >>> 
-    >>> # Create from various sources
-    >>> mat = SclCSR.from_dense([[1, 0, 2], [0, 3, 0]])
-    >>> mat = SclCSR.from_scipy(scipy_csr_matrix)
-    >>> mat = from_anndata(adata)
+    >>> # Smart class (recommended for most uses)
+    >>> mat = SclCSR.from_scipy(scipy_mat)
+    >>> view = mat[::2, :]  # Zero-copy VirtualCSR
     >>> 
-    >>> # Smart slicing (auto backend management)
-    >>> view = mat[0:100, :]      # Virtual backend, zero-copy
-    >>> subset = mat[[0,5,10], :] # Row selection
+    >>> # Direct data structure (for advanced users)
+    >>> custom = CustomCSR.from_scipy(scipy_mat)
     >>> 
-    >>> # Stacking operations
-    >>> stacked = vstack_csr([mat1, mat2, mat3])
-    >>> 
-    >>> # Convert to external formats
-    >>> scipy_mat = mat.to_scipy()
-    >>> adata = to_anndata(mat)
+    >>> # Memory-mapped for large data
+    >>> mapped = MappedCustomCSR(
+    ...     data_path="data.bin",
+    ...     indices_path="indices.bin",
+    ...     indptr_path="indptr.bin",
+    ...     shape=(1000000, 50000)
+    ... )
 
-Architecture:
-    ┌─────────────────────────────────────────────────┐
-    │           SclCSR / SclCSC (Smart Matrix)        │
-    ├─────────────────────────────────────────────────┤
-    │  Backend: CUSTOM | VIRTUAL | MAPPED             │
-    │  Ownership: OWNED | BORROWED | VIEW             │
-    ├─────────────────────────────────────────────────┤
-    │  Auto: reference chain, slicing strategy,       │
-    │        materialization, format conversion       │
-    └─────────────────────────────────────────────────┘
-
+C++ Equivalents:
+    Python Class         -> C++ Type
+    ------------------------------------------
+    CustomCSR/CSC       -> scl::CustomSparse<T, IsCSR>
+    VirtualCSR/CSC      -> scl::VirtualSparse<T, IsCSR>
+    MappedCustomCSR/CSC -> scl::io::MappedCustomSparse<T, IsCSR>
+    MappedVirtualCSR/CSC-> scl::io::MappedVirtualSparse<T, IsCSR>
+    
 Backend Types:
-    - CUSTOM: Local arrays with full control
-    - VIRTUAL: Zero-copy views for stacking/slicing
-    - MAPPED: Memory-mapped files for large data
+    - CUSTOM: Contiguous arrays with direct ownership
+    - VIRTUAL: Pointer arrays for zero-copy views
+    - MAPPED: Memory-mapped files for out-of-core data
 
-Ownership Models:
-    - OWNED: Matrix owns the data
-    - BORROWED: Data from external source (scipy)
-    - VIEW: Derived from another matrix
+Construction Rules:
+    - CustomCSR/CSC: External construction allowed
+    - VirtualCSR/CSC: Internal only (from slicing)
+    - MappedCustomCSR/CSC: Three bin files required
+    - MappedVirtualCSR/CSC: Internal only (from Mapped slicing)
+    - SclCSR/SclCSC: Proxy for all types (smart backend)
 
 Key Classes:
-    - SclCSR: Smart row-oriented sparse matrix
-    - SclCSC: Smart column-oriented sparse matrix
-    - Array: Lightweight contiguous array
+    - SclCSR/SclCSC: Smart matrices with auto backend
+    - CustomCSR/CSC: Direct data structure access
+    - MappedCustomCSR/CSC: Memory-mapped large data
+    - CallbackCSR/CSC: User-defined data access
     
 Key Functions:
     - vstack_csr, hstack_csc: Stack matrices
     - from_scipy, to_scipy: scipy interop
     - from_anndata, to_anndata: AnnData interop
-    - align_rows, align_cols: Matrix alignment
 """
 
 # =============================================================================
@@ -112,7 +125,25 @@ from ._base import (
 )
 
 # =============================================================================
-# Smart Sparse Matrices (Main API)
+# Concrete Data Structure Classes (Foundation)
+# =============================================================================
+
+# Custom: Contiguous array storage (data, indices, indptr)
+# C++ Equivalent: scl::CustomSparse<T, IsCSR>
+from ._custom import CustomCSR, CustomCSC
+
+# Virtual: Pointer array storage (zero-copy views, internal use)
+# C++ Equivalent: scl::VirtualSparse<T, IsCSR>
+from ._virtual import VirtualCSR, VirtualCSC
+
+# Mapped: Memory-mapped file storage (three bin files)
+# C++ Equivalent: scl::io::MappedCustomSparse<T, IsCSR>
+# MappedVirtual: Zero-copy slicing over mapped storage (internal use)
+# C++ Equivalent: scl::io::MappedVirtualSparse<T, IsCSR>
+from ._mapped import MappedCustomCSR, MappedCustomCSC, MappedVirtualCSR, MappedVirtualCSC
+
+# =============================================================================
+# Smart Sparse Matrices (Main API - Auto Backend Management)
 # =============================================================================
 from ._csr import SclCSR, CSR
 from ._csc import SclCSC, CSC
@@ -121,11 +152,6 @@ from ._csc import SclCSC, CSC
 # Callback-Based Sparse Matrices (User-Extensible)
 # =============================================================================
 from ._callback import CallbackCSR, CallbackCSC
-
-# Aliases for Virtual matrices (same as base classes, for backward compatibility)
-# Virtual behavior is handled via Backend.VIRTUAL, not separate classes
-VirtualCSR = SclCSR
-VirtualCSC = SclCSC
 
 # =============================================================================
 # Operations
@@ -214,20 +240,33 @@ __all__ = [
     'CSCBase',
     'SparseFormat',
     
-    # ---- Core Classes ----
+    # ---- Concrete Data Structure Classes ----
+    # Custom: Contiguous arrays (data, indices, indptr)
+    'CustomCSR',
+    'CustomCSC',
+    
+    # Virtual: Pointer arrays (zero-copy views)
+    'VirtualCSR',
+    'VirtualCSC',
+    
+    # Mapped: Memory-mapped files
+    'MappedCustomCSR',
+    'MappedCustomCSC',
+    'MappedVirtualCSR',
+    'MappedVirtualCSC',
+    
+    # ---- Smart Classes (Auto Backend Management) ----
     'Array',
     'SclCSR',
     'SclCSC',
-    'CSR',  # Alias
-    'CSC',  # Alias
-    'VirtualCSR',  # Alias for SclCSR (backward compatibility)
-    'VirtualCSC',  # Alias for SclCSC (backward compatibility)
+    'CSR',  # Alias for SclCSR
+    'CSC',  # Alias for SclCSC
     
     # ---- Callback Classes (User-Extensible) ----
     'CallbackCSR',
     'CallbackCSC',
     
-    # ---- Backend/Ownership (advanced) ----
+    # ---- Backend/Ownership (Advanced) ----
     'Backend',
     'Ownership',
     'StorageInfo',

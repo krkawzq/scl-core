@@ -2,92 +2,83 @@
 
 #include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
+#include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
+#include "scl/core/macros.hpp"
+#include "scl/core/memory.hpp"
 #include "scl/threading/parallel_for.hpp"
 
-#include <cmath>
-
 // =============================================================================
-/// @file algebra.hpp
-/// @brief Sparse Linear Algebra - Generic Implementation
-///
-/// ## Interface Contract
-///
-/// All SpMV functions follow the signature:
-///
-///     void spmv(A, x, y, alpha, beta)
-///
-/// Computes: y = alpha * A * x + beta * y
-///
-/// Parameters:
-/// - A: Sparse matrix (any SparseLike type)
-/// - x: Input vector (Array<const T>), size = secondary_dim(A)
-/// - y: Output vector (Array<T>), size = primary_dim(A), PRE-ALLOCATED
-/// - alpha: Scalar for A*x (default: 1)
-/// - beta: Scalar for y (default: 0)
-///
-/// Design Principles:
-/// - VOID RETURN: No memory allocation, no ownership transfer
-/// - PRE-ALLOCATED: Caller provides output buffer
-/// - GENERIC: Works with any SparseLike type
-///
-/// ## Performance Strategy
-///
-/// - Generic Path: Works for all sparse types via SparseLike concept
-/// - Fast Path: Use algebra_fast_impl.hpp for optimized backends
-///
-/// Bandwidth: ~10-15 GB/s per core (memory bound)
+// FILE: scl/kernel/algebra.hpp
+// BRIEF: High-Performance Sparse Linear Algebra Kernels
 // =============================================================================
 
 namespace scl::kernel::algebra {
 
+// =============================================================================
+// SECTION 1: Configuration
+// =============================================================================
+
+namespace config {
+    constexpr size_t PREFETCH_DISTANCE = 64;
+    constexpr size_t SHORT_ROW_THRESHOLD = 8;
+    constexpr size_t MEDIUM_ROW_THRESHOLD = 64;
+}
+
+// =============================================================================
+// SECTION 2: Common Utilities
+// =============================================================================
+
 namespace detail {
 
-/// @brief Scale vector: y = beta * y (SIMD optimized)
-///
-/// Handles special cases efficiently:
-/// - beta = 0: zero fill
-/// - beta = 1: no-op
-/// - other: vectorized scaling
+// SIMD-optimized beta scaling
 template <typename T>
-SCL_FORCE_INLINE void scale_vector(T* y, Size n, T beta) noexcept {
-    namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
-
+void scale_output(T* SCL_RESTRICT y, Size n, T beta) noexcept {
     if (beta == T(0)) {
-        const auto v_zero = s::Zero(d);
-        size_t i = 0;
+        scl::memory::zero(Array<T>(y, n));
+    } else if (beta == T(1)) {
+        return;
+    } else {
+        namespace s = scl::simd;
+        const s::Tag d;
+        const size_t lanes = s::lanes();
 
-        for (; i + lanes <= n; i += lanes) {
-            s::Store(v_zero, d, y + i);
-        }
-
-        for (; i < n; ++i) {
-            y[i] = T(0);
-        }
-    } else if (beta != T(1)) {
         const auto v_beta = s::Set(d, beta);
         size_t i = 0;
-
         for (; i + lanes <= n; i += lanes) {
             auto v = s::Load(d, y + i);
-            v = s::Mul(v, v_beta);
-            s::Store(v, d, y + i);
+            s::Store(s::Mul(v, v_beta), d, y + i);
         }
-
         for (; i < n; ++i) {
             y[i] *= beta;
         }
     }
-    // beta == 1: no-op
 }
 
-/// @brief Sparse-dense dot product with 4-way unrolling
-///
-/// Breaks dependency chains for better ILP on modern CPUs.
+// Horizontal sum of 8 accumulators
 template <typename T>
-SCL_FORCE_INLINE T sparse_dot_dense(
+SCL_FORCE_INLINE T horizontal_sum_8(T s0, T s1, T s2, T s3, T s4, T s5, T s6, T s7) noexcept {
+    return ((s0 + s1) + (s2 + s3)) + ((s4 + s5) + (s6 + s7));
+}
+
+// Short row dot (nnz < 8): scalar
+template <typename T>
+SCL_FORCE_INLINE T sparse_dot_short(
+    const Index* SCL_RESTRICT indices,
+    const T* SCL_RESTRICT values,
+    Size nnz,
+    const T* SCL_RESTRICT x
+) noexcept {
+    T sum = T(0);
+    for (Size k = 0; k < nnz; ++k) {
+        sum += values[k] * x[indices[k]];
+    }
+    return sum;
+}
+
+// Medium row dot (8-64): 4-way unroll
+template <typename T>
+SCL_FORCE_INLINE T sparse_dot_medium(
     const Index* SCL_RESTRICT indices,
     const T* SCL_RESTRICT values,
     Size nnz,
@@ -104,157 +95,143 @@ SCL_FORCE_INLINE T sparse_dot_dense(
     }
 
     T sum = (sum0 + sum1) + (sum2 + sum3);
-
-    // Scalar tail
     for (; k < nnz; ++k) {
         sum += values[k] * x[indices[k]];
     }
-
     return sum;
+}
+
+// Long row dot (>= 64): 8-way unroll + prefetch
+template <typename T>
+SCL_FORCE_INLINE T sparse_dot_long(
+    const Index* SCL_RESTRICT indices,
+    const T* SCL_RESTRICT values,
+    Size nnz,
+    const T* SCL_RESTRICT x
+) noexcept {
+    T sum0 = T(0), sum1 = T(0), sum2 = T(0), sum3 = T(0);
+    T sum4 = T(0), sum5 = T(0), sum6 = T(0), sum7 = T(0);
+
+    Size k = 0;
+    for (; k + 8 <= nnz; k += 8) {
+        if (k + config::PREFETCH_DISTANCE < nnz) {
+            SCL_PREFETCH_READ(&values[k + config::PREFETCH_DISTANCE], 0);
+            SCL_PREFETCH_READ(&indices[k + config::PREFETCH_DISTANCE], 0);
+            SCL_PREFETCH_READ(&x[indices[k + config::PREFETCH_DISTANCE]], 0);
+        }
+
+        sum0 += values[k + 0] * x[indices[k + 0]];
+        sum1 += values[k + 1] * x[indices[k + 1]];
+        sum2 += values[k + 2] * x[indices[k + 2]];
+        sum3 += values[k + 3] * x[indices[k + 3]];
+        sum4 += values[k + 4] * x[indices[k + 4]];
+        sum5 += values[k + 5] * x[indices[k + 5]];
+        sum6 += values[k + 6] * x[indices[k + 6]];
+        sum7 += values[k + 7] * x[indices[k + 7]];
+    }
+
+    T sum = horizontal_sum_8(sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7);
+    for (; k < nnz; ++k) {
+        sum += values[k] * x[indices[k]];
+    }
+    return sum;
+}
+
+// Adaptive dispatcher
+template <typename T>
+SCL_FORCE_INLINE T sparse_dot_adaptive(
+    const Index* SCL_RESTRICT indices,
+    const T* SCL_RESTRICT values,
+    Size nnz,
+    const T* SCL_RESTRICT x
+) noexcept {
+    if (nnz < config::SHORT_ROW_THRESHOLD) {
+        return sparse_dot_short(indices, values, nnz, x);
+    } else if (nnz < config::MEDIUM_ROW_THRESHOLD) {
+        return sparse_dot_medium(indices, values, nnz, x);
+    } else {
+        return sparse_dot_long(indices, values, nnz, x);
+    }
 }
 
 } // namespace detail
 
 // =============================================================================
-// Public API: Generic SpMV
+// SECTION 3: Sparse Matrix-Vector Multiplication
 // =============================================================================
 
-/// @brief Sparse Matrix-Vector Multiplication (generic)
-///
-/// Computes: y = alpha * A * x + beta * y
-///
-/// Works with any type satisfying SparseLike concept.
-/// For optimized backends (Custom, Virtual, Mapped), use algebra_fast_impl.hpp.
-///
-/// @param A Sparse matrix (SparseLike)
-/// @param x Input vector, size = secondary_dim(A)
-/// @param y Output vector, size = primary_dim(A), PRE-ALLOCATED
-/// @param alpha Scalar multiplier for A*x (default: 1)
-/// @param beta Scalar multiplier for y (default: 0)
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
+// SpMV for Sparse matrices: y = alpha * A * x + beta * y
+// Optimized for pointer-based row storage with adaptive dot product strategy
+template <typename T, bool IsCSR>
 void spmv(
-    const MatrixT& A,
-    Array<const typename MatrixT::ValueType> x,
-    Array<typename MatrixT::ValueType> y,
-    typename MatrixT::ValueType alpha = typename MatrixT::ValueType(1),
-    typename MatrixT::ValueType beta = typename MatrixT::ValueType(0)
+    const Sparse<T, IsCSR>& A,
+    Array<const T> x,
+    Array<T> y,
+    T alpha = T(1),
+    T beta = T(0)
 ) {
-    using T = typename MatrixT::ValueType;
-    const Index primary_dim = scl::primary_size(A);
-    const Index secondary_dim = scl::secondary_size(A);
+    const Index primary_dim = A.primary_dim();
 
-    SCL_CHECK_DIM(x.size() >= static_cast<Size>(secondary_dim),
-        "SpMV: x dimension too small");
-    SCL_CHECK_DIM(y.size() >= static_cast<Size>(primary_dim),
-        "SpMV: y dimension too small");
+    SCL_CHECK_DIM(y.len >= static_cast<Size>(primary_dim),
+        "SpMV: output vector too small");
 
-    // Handle beta scaling
-    detail::scale_vector(y.ptr, static_cast<Size>(primary_dim), beta);
+    // Beta scaling
+    detail::scale_output(y.ptr, static_cast<Size>(primary_dim), beta);
 
     // Early exit
     if (alpha == T(0)) return;
 
-    // Fast path for CustomSparseLike (direct pointer access)
-    if constexpr (CustomSparseLike<MatrixT, true> || CustomSparseLike<MatrixT, false>) {
-        scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-            const Index start = A.indptr[p];
-            const Index end = A.indptr[p + 1];
-            const Size len = static_cast<Size>(end - start);
+    // Parallel SpMV
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+        const Index primary_idx = static_cast<Index>(p);
+        const Size len = static_cast<Size>(A.primary_length(primary_idx));
 
-            if (len == 0) return;
+        if (len == 0) return;
 
-            T dot = detail::sparse_dot_dense(
-                A.indices + start,
-                A.data + start,
-                len,
-                x.ptr
-            );
+        // Single dereference per row/column
+        auto vals = A.primary_values(primary_idx);
+        auto inds = A.primary_indices(primary_idx);
 
-            y[p] += alpha * dot;
-        });
-    } else {
-        // Generic path via SparseLike interface
-        scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-            const Index primary_idx = static_cast<Index>(p);
+        T dot = detail::sparse_dot_adaptive(inds.ptr, vals.ptr, len, x.ptr);
 
-            auto vals = scl::primary_values(A, primary_idx);
-            auto inds = scl::primary_indices(A, primary_idx);
-
-            if (vals.size() == 0) return;
-
-            T dot = detail::sparse_dot_dense(inds.ptr, vals.ptr, vals.size(), x.ptr);
-            y[p] += alpha * dot;
-        });
-    }
-}
-
-/// @brief y = A * x (simplified interface)
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void spmv_simple(
-    const MatrixT& A,
-    Array<const typename MatrixT::ValueType> x,
-    Array<typename MatrixT::ValueType> y
-) {
-    using T = typename MatrixT::ValueType;
-    spmv(A, x, y, T(1), T(0));
-}
-
-/// @brief y += A * x (accumulate)
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void spmv_add(
-    const MatrixT& A,
-    Array<const typename MatrixT::ValueType> x,
-    Array<typename MatrixT::ValueType> y
-) {
-    using T = typename MatrixT::ValueType;
-    spmv(A, x, y, T(1), T(1));
-}
-
-// =============================================================================
-// Public API: SpMM (Sparse-Dense Matrix Multiply)
-// =============================================================================
-
-/// @brief Sparse Matrix-Dense Matrix Multiplication
-///
-/// Computes: Y = alpha * A * X + beta * Y
-/// Where X and Y are dense matrices (column-major).
-///
-/// @param A Sparse matrix (M x K)
-/// @param X Dense input matrix (K x N), column-major
-/// @param Y Dense output matrix (M x N), column-major, PRE-ALLOCATED
-/// @param n_vectors Number of columns in X and Y
-/// @param alpha Scalar multiplier for A*X (default: 1)
-/// @param beta Scalar multiplier for Y (default: 0)
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void spmm(
-    const MatrixT& A,
-    const typename MatrixT::ValueType* X,
-    typename MatrixT::ValueType* Y,
-    Size n_vectors,
-    typename MatrixT::ValueType alpha = typename MatrixT::ValueType(1),
-    typename MatrixT::ValueType beta = typename MatrixT::ValueType(0)
-) {
-    using T = typename MatrixT::ValueType;
-    const Index primary_dim = scl::primary_size(A);
-    const Index secondary_dim = scl::secondary_size(A);
-
-    // Process each column of X/Y independently
-    scl::threading::parallel_for(Size(0), n_vectors, [&](size_t vec_idx) {
-        const T* x_col = X + vec_idx * static_cast<Size>(secondary_dim);
-        T* y_col = Y + vec_idx * static_cast<Size>(primary_dim);
-
-        spmv(
-            A,
-            Array<const T>(x_col, static_cast<Size>(secondary_dim)),
-            Array<T>(y_col, static_cast<Size>(primary_dim)),
-            alpha,
-            beta
-        );
+        y[p] += alpha * dot;
     });
 }
 
+// =============================================================================
+// SECTION 4: Convenience Wrappers
+// =============================================================================
+
+// y = A * x (simplified)
+template <typename T, bool IsCSR>
+void spmv_simple(
+    const Sparse<T, IsCSR>& A,
+    Array<const T> x,
+    Array<T> y
+) {
+    spmv(A, x, y, T(1), T(0));
+}
+
+// y += A * x (accumulate)
+template <typename T, bool IsCSR>
+void spmv_add(
+    const Sparse<T, IsCSR>& A,
+    Array<const T> x,
+    Array<T> y
+) {
+    spmv(A, x, y, T(1), T(1));
+}
+
+// y = alpha * A * x (scaled)
+template <typename T, bool IsCSR>
+void spmv_scaled(
+    const Sparse<T, IsCSR>& A,
+    Array<const T> x,
+    Array<T> y,
+    T alpha
+) {
+    spmv(A, x, y, alpha, T(0));
+}
+
 } // namespace scl::kernel::algebra
+

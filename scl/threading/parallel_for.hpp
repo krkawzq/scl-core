@@ -2,98 +2,130 @@
 
 #include "scl/config.hpp"
 #include "scl/core/macros.hpp"
-#include "scl/threading/scheduler.hpp" // Imports detail::get_global_pool and headers
+#include "scl/threading/scheduler.hpp"
 
 #include <cstddef>
 #include <utility>
 #include <type_traits>
+#include <vector>
+#include <future>
 
 // =============================================================================
-// Backend Specific Headers (Execution Logic)
+// Backend Specific Headers
 // =============================================================================
-// Note: Scheduler.hpp handles global state headers (like BS_thread_pool.hpp or omp.h).
-// We only explicitly include headers required for the *loop constructs* here.
 
 #if defined(SCL_USE_TBB)
-    // TBB parallel_for template definitions are needed here
     #include <tbb/parallel_for.h>
     #include <tbb/blocked_range.h>
+    #include <tbb/task_arena.h>
+#elif defined(SCL_USE_OPENMP)
+    #include <omp.h>
 #endif
 
 namespace scl::threading {
 
 // =============================================================================
-// Public Parallel Interface
+// Parallel Loop Interface
 // =============================================================================
 
-/// @brief Unified Parallel Loop Interface (Backend Agnostic)
-///
-/// Executes a loop in parallel using the backend selected at compile time via `scl/config.hpp`.
-/// The thread count and pool lifecycle are managed by `scl::threading::Scheduler`.
-///
-/// Backends:
-/// - OpenMP: Uses #pragma omp parallel for.
-/// - TBB: Uses tbb::parallel_for (Work-stealing).
-/// - BS::thread_pool: Uses detach_loop on the global singleton pool.
-/// - Serial: Fallback to simple for loop.
-///
-/// Usage:
-/// scl::threading::parallel_for(0, size, [&](size_t i) {
-///     data[i] = do_work(i);
-/// });
-///
-/// @tparam Func Function object type, signature: `void(size_t index)`
-/// @param start Start index (inclusive)
-/// @param end   End index (exclusive)
-/// @param func  The kernel function to execute
+// Unified parallel loop supporting both single-arg and dual-arg (with thread rank) lambdas
+// Usage:
+//   parallel_for(0, n, [&](size_t i) { ... });                    // Single arg
+//   parallel_for(0, n, [&](size_t i, size_t thread_rank) { ... }); // Dual arg
 template <typename Func>
-SCL_FORCE_INLINE void parallel_for(size_t start, size_t end, Func&& func) {
-    // Fast path: Branch prediction hint optimized for non-empty ranges
+inline void parallel_for(size_t start, size_t end, Func&& func) {
     if (SCL_UNLIKELY(start >= end)) {
         return;
     }
 
+    // Detect if func accepts two arguments (index, thread_rank)
+    constexpr bool has_rank_arg = std::is_invocable_v<Func, size_t, size_t>;
+
 #if defined(SCL_USE_SERIAL)
-    // --- Serial Backend (Debug / Single Thread) ---
-    // [Optimization] No overhead, direct execution for debugging
     for (size_t i = start; i < end; ++i) {
-        func(i);
+        if constexpr (has_rank_arg) {
+            func(i, 0);
+        } else {
+            func(i);
+        }
     }
 
 #elif defined(SCL_USE_OPENMP)
-    // --- OpenMP Backend (HPC Standard) ---
-    // Using signed integer for OpenMP 2.0 compatibility and safer optimization
-    #pragma omp parallel for schedule(static)
-    for (long long i = static_cast<long long>(start); i < static_cast<long long>(end); ++i) {
-        func(static_cast<size_t>(i));
+    if (omp_in_parallel()) {
+        for (size_t i = start; i < end; ++i) {
+            if constexpr (has_rank_arg) {
+                func(i, static_cast<size_t>(omp_get_thread_num()));
+            } else {
+                func(i);
+            }
+        }
+    } else {
+        #pragma omp parallel for schedule(static)
+        for (size_t i = start; i < end; ++i) {
+            if constexpr (has_rank_arg) {
+                func(i, static_cast<size_t>(omp_get_thread_num()));
+            } else {
+                func(i);
+            }
+        }
     }
 
 #elif defined(SCL_USE_TBB)
-    // --- Intel TBB Backend (Work Stealing) ---
-    // TBB handles load balancing automatically via work-stealing
-    tbb::parallel_for(tbb::blocked_range<size_t>(start, end), 
+    tbb::parallel_for(tbb::blocked_range<size_t>(start, end),
         [&](const tbb::blocked_range<size_t>& r) {
+            size_t thread_rank = tbb::this_task_arena::current_thread_index();
             for (size_t i = r.begin(); i != r.end(); ++i) {
-                func(i);
+                if constexpr (has_rank_arg) {
+                    func(i, thread_rank);
+                } else {
+                    func(i);
+                }
             }
         });
 
 #elif defined(SCL_USE_BS)
-    // --- BS::thread_pool Backend (Portable) ---
-    // Retrieve the singleton pool managed by Scheduler
-    // detail::get_global_pool is visible here because it's in the same namespace (scl::threading)
     auto& pool = detail::get_global_pool();
-    
-    // detach_loop automatically chunks the range and distributes to threads
-    pool.detach_loop(start, end, std::forward<Func>(func));
-    pool.wait(); // Barrier synchronization to mimic parallel_for semantics
+    const size_t num_threads = pool.get_thread_count();
+    const size_t range_size = end - start;
+    const size_t chunk_size = (range_size + num_threads - 1) / num_threads;
+
+    if (chunk_size == 0) return;
+
+    std::vector<std::future<void>> futures;
+    futures.reserve(num_threads);
+
+    size_t thread_rank = 0;
+    for (size_t chunk_start = start; chunk_start < end; chunk_start += chunk_size) {
+        const size_t chunk_end = (chunk_start + chunk_size < end) ? (chunk_start + chunk_size) : end;
+        const size_t rank = thread_rank++;
+
+        futures.push_back(pool.submit([&func, chunk_start, chunk_end, rank]() {
+            for (size_t i = chunk_start; i < chunk_end; ++i) {
+                if constexpr (has_rank_arg) {
+                    func(i, rank);
+                } else {
+                    func(i);
+                }
+            }
+        }));
+    }
+
+    for (auto& future : futures) {
+        future.get();
+    }
 
 #else
-    // --- Fallback (Safety Net) ---
-    // Should be caught by config.hpp checks, but just in case:
-    #warning "No threading backend defined in parallel_for.hpp, falling back to serial."
+    #if defined(_MSC_VER)
+        #pragma message("SCL: No threading backend defined, falling back to serial")
+    #else
+        #warning "No threading backend defined, falling back to serial"
+    #endif
     for (size_t i = start; i < end; ++i) {
-        func(i);
+        if constexpr (has_rank_arg) {
+            func(i, 0);
+        } else {
+            func(i);
+        }
     }
 #endif
 }

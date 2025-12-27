@@ -2,272 +2,326 @@
 
 #include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
+#include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
+#include "scl/core/macros.hpp"
 #include "scl/threading/parallel_for.hpp"
 
-// Backend implementations
-#include "scl/kernel/feature_fast_impl.hpp"
-
 #include <cmath>
+#include <algorithm>
 
 // =============================================================================
-/// @file feature.hpp
-/// @brief Feature Selection and Gene Statistics
-///
-/// ## Supported Operations
-///
-/// 1. Clipped Moments
-///    - Robust variance with outlier clipping (Seurat V3)
-///    - Formula: mu = (1/N) * sum(min(X, theta))
-///
-/// 2. Standard Moments
-///    - Basic mean/variance with ddof support
-///    - var = (1/(N-ddof)) * (sum_sq - sum*mu)
-///
-/// 3. Detection Rate
-///    - Fraction of non-zero elements: nnz/N
-///
-/// 4. Dispersion
-///    - Fano factor: variance/mean
-///
-/// ## Backend Dispatch
-///
-/// - MappedSparseLike -> feature_mapped_impl.hpp
-/// - CustomSparseLike -> feature_fast_impl.hpp
-/// - VirtualSparseLike -> feature_fast_impl.hpp
-/// - Generic -> This file (fallback)
-///
-/// ## Performance
-///
-/// All operations are single-pass, O(nnz) complexity.
-/// SIMD optimized with 4-way unrolling.
+// FILE: scl/kernel/feature.hpp
+// BRIEF: Feature statistics with SIMD optimization
 // =============================================================================
 
 namespace scl::kernel::feature {
 
 // =============================================================================
-// SECTION 1: Generic Implementation (Fallback)
+// Configuration
+// =============================================================================
+
+namespace config {
+    constexpr Size CHUNK_SIZE = 256;
+    constexpr Size PREFETCH_DISTANCE = 16;
+    constexpr Real EPSILON = 1e-12;
+}
+
+// =============================================================================
+// SIMD Utilities
 // =============================================================================
 
 namespace detail {
 
-/// @brief Generic clipped moments
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void clipped_moments_generic(
-    const MatrixT& matrix,
-    Array<const Real> clip_vals,
-    Array<Real> out_means,
-    Array<Real> out_vars
+template <typename T>
+SCL_FORCE_INLINE void compute_sum_sq_simd(
+    const T* SCL_RESTRICT vals,
+    Size len,
+    Real& out_sum,
+    Real& out_sq_sum
 ) {
-    const Index primary_dim = scl::primary_size(matrix);
-    const Real N = static_cast<Real>(scl::secondary_size(matrix));
-    const Real N_minus_1 = N - Real(1);
+    namespace s = scl::simd;
+    const s::Tag d;
+    const size_t lanes = s::lanes();
 
-    SCL_CHECK_DIM(clip_vals.size() >= static_cast<Size>(primary_dim), "Clip vals mismatch");
-    SCL_CHECK_DIM(out_means.size() >= static_cast<Size>(primary_dim), "Output mean mismatch");
-    SCL_CHECK_DIM(out_vars.size() >= static_cast<Size>(primary_dim), "Output var mismatch");
+    auto v_sum0 = s::Zero(d);
+    auto v_sum1 = s::Zero(d);
+    auto v_sq0 = s::Zero(d);
+    auto v_sq1 = s::Zero(d);
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        Real clip = clip_vals[p];
-        auto vals = scl::primary_values(matrix, static_cast<Index>(p));
+    Size k = 0;
 
-        namespace s = scl::simd;
-        const s::Tag d;
-        const size_t lanes = s::lanes();
-
-        auto v_clip = s::Set(d, clip);
-        auto v_sum = s::Zero(d);
-        auto v_ssq = s::Zero(d);
-
-        Size k = 0;
-        for (; k + lanes <= vals.size(); k += lanes) {
-            auto v = s::Min(s::Load(d, vals.ptr + k), v_clip);
-            v_sum = s::Add(v_sum, v);
-            v_ssq = s::MulAdd(v, v, v_ssq);
+    for (; k + 4 * lanes <= len; k += 4 * lanes) {
+        if (SCL_LIKELY(k + config::PREFETCH_DISTANCE * lanes < len)) {
+            SCL_PREFETCH_READ(vals + k + config::PREFETCH_DISTANCE * lanes, 0);
         }
 
-        Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
-        Real sum_sq = s::GetLane(s::SumOfLanes(d, v_ssq));
+        auto v0 = s::Load(d, vals + k + 0 * lanes);
+        auto v1 = s::Load(d, vals + k + 1 * lanes);
+        auto v2 = s::Load(d, vals + k + 2 * lanes);
+        auto v3 = s::Load(d, vals + k + 3 * lanes);
 
-        for (; k < vals.size(); ++k) {
-            Real v = std::min(static_cast<Real>(vals[k]), clip);
-            sum += v;
-            sum_sq += v * v;
-        }
+        v_sum0 = s::Add(v_sum0, v0);
+        v_sum1 = s::Add(v_sum1, v1);
+        v_sum0 = s::Add(v_sum0, v2);
+        v_sum1 = s::Add(v_sum1, v3);
 
-        Real mu = sum / N;
-        Real var = Real(0);
-        if (N > Real(1)) {
-            var = (sum_sq - N * mu * mu) / N_minus_1;
-        }
-        if (var < Real(0)) var = Real(0);
+        v_sq0 = s::MulAdd(v0, v0, v_sq0);
+        v_sq1 = s::MulAdd(v1, v1, v_sq1);
+        v_sq0 = s::MulAdd(v2, v2, v_sq0);
+        v_sq1 = s::MulAdd(v3, v3, v_sq1);
+    }
 
-        out_means[p] = mu;
-        out_vars[p] = var;
-    });
+    auto v_sum = s::Add(v_sum0, v_sum1);
+    auto v_sq = s::Add(v_sq0, v_sq1);
+
+    for (; k + lanes <= len; k += lanes) {
+        auto v = s::Load(d, vals + k);
+        v_sum = s::Add(v_sum, v);
+        v_sq = s::MulAdd(v, v, v_sq);
+    }
+
+    Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
+    Real sq_sum = s::GetLane(s::SumOfLanes(d, v_sq));
+
+    for (; k < len; ++k) {
+        Real v = static_cast<Real>(vals[k]);
+        sum += v;
+        sq_sum += v * v;
+    }
+
+    out_sum = sum;
+    out_sq_sum = sq_sum;
 }
 
-/// @brief Generic standard moments
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void standard_moments_generic(
-    const MatrixT& matrix,
-    Array<Real> out_means,
-    Array<Real> out_vars,
-    int ddof
+template <typename T>
+SCL_FORCE_INLINE void compute_clipped_sum_sq_simd(
+    const T* SCL_RESTRICT vals,
+    Size len,
+    Real clip,
+    Real& out_sum,
+    Real& out_sq_sum
 ) {
-    const Index primary_dim = scl::primary_size(matrix);
-    const Real N = static_cast<Real>(scl::secondary_size(matrix));
-    const Real denom = N - static_cast<Real>(ddof);
+    namespace s = scl::simd;
+    const s::Tag d;
+    const size_t lanes = s::lanes();
 
-    SCL_CHECK_DIM(out_means.size() >= static_cast<Size>(primary_dim), "Output mean mismatch");
-    SCL_CHECK_DIM(out_vars.size() >= static_cast<Size>(primary_dim), "Output var mismatch");
+    auto v_clip = s::Set(d, clip);
+    auto v_sum0 = s::Zero(d);
+    auto v_sum1 = s::Zero(d);
+    auto v_sq0 = s::Zero(d);
+    auto v_sq1 = s::Zero(d);
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        auto vals = scl::primary_values(matrix, static_cast<Index>(p));
+    Size k = 0;
 
-        namespace s = scl::simd;
-        const s::Tag d;
-        const size_t lanes = s::lanes();
-
-        auto v_sum = s::Zero(d);
-        auto v_ssq = s::Zero(d);
-
-        Size k = 0;
-        for (; k + lanes <= vals.size(); k += lanes) {
-            auto v = s::Load(d, vals.ptr + k);
-            v_sum = s::Add(v_sum, v);
-            v_ssq = s::MulAdd(v, v, v_ssq);
+    for (; k + 4 * lanes <= len; k += 4 * lanes) {
+        if (SCL_LIKELY(k + config::PREFETCH_DISTANCE * lanes < len)) {
+            SCL_PREFETCH_READ(vals + k + config::PREFETCH_DISTANCE * lanes, 0);
         }
 
-        Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
-        Real sum_sq = s::GetLane(s::SumOfLanes(d, v_ssq));
+        auto v0 = s::Min(s::Load(d, vals + k + 0 * lanes), v_clip);
+        auto v1 = s::Min(s::Load(d, vals + k + 1 * lanes), v_clip);
+        auto v2 = s::Min(s::Load(d, vals + k + 2 * lanes), v_clip);
+        auto v3 = s::Min(s::Load(d, vals + k + 3 * lanes), v_clip);
 
-        for (; k < vals.size(); ++k) {
-            Real v = vals[k];
-            sum += v;
-            sum_sq += v * v;
-        }
+        v_sum0 = s::Add(v_sum0, v0);
+        v_sum1 = s::Add(v_sum1, v1);
+        v_sum0 = s::Add(v_sum0, v2);
+        v_sum1 = s::Add(v_sum1, v3);
 
-        Real mu = sum / N;
-        Real var = (denom > Real(0)) ? ((sum_sq - sum * mu) / denom) : Real(0);
-        if (var < Real(0)) var = Real(0);
+        v_sq0 = s::MulAdd(v0, v0, v_sq0);
+        v_sq1 = s::MulAdd(v1, v1, v_sq1);
+        v_sq0 = s::MulAdd(v2, v2, v_sq0);
+        v_sq1 = s::MulAdd(v3, v3, v_sq1);
+    }
 
-        out_means[p] = mu;
-        out_vars[p] = var;
-    });
-}
+    auto v_sum = s::Add(v_sum0, v_sum1);
+    auto v_sq = s::Add(v_sq0, v_sq1);
 
-/// @brief Generic detection rate
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void detection_rate_generic(
-    const MatrixT& matrix,
-    Array<Real> out_rates
-) {
-    const Index primary_dim = scl::primary_size(matrix);
-    const Real inv_N = Real(1) / static_cast<Real>(scl::secondary_size(matrix));
+    for (; k + lanes <= len; k += lanes) {
+        auto v = s::Min(s::Load(d, vals + k), v_clip);
+        v_sum = s::Add(v_sum, v);
+        v_sq = s::MulAdd(v, v, v_sq);
+    }
 
-    SCL_CHECK_DIM(out_rates.size() >= static_cast<Size>(primary_dim), "Output rates mismatch");
+    Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
+    Real sq_sum = s::GetLane(s::SumOfLanes(d, v_sq));
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        Index len = scl::primary_length(matrix, static_cast<Index>(p));
-        out_rates[p] = static_cast<Real>(len) * inv_N;
-    });
+    for (; k < len; ++k) {
+        Real v = std::min(static_cast<Real>(vals[k]), clip);
+        sum += v;
+        sq_sum += v * v;
+    }
+
+    out_sum = sum;
+    out_sq_sum = sq_sum;
 }
 
 } // namespace detail
 
 // =============================================================================
-// SECTION 2: Public API
+// Transform Functions
 // =============================================================================
 
-/// @brief Compute clipped mean and variance
-///
-/// For each row/column, computes statistics on values clipped at threshold.
-/// Used by Seurat V3 for highly variable gene selection.
-///
-/// @param matrix Input sparse matrix (any backend)
-/// @param clip_vals Clipping thresholds [size = primary_dim], PRE-ALLOCATED
-/// @param out_means Output means [size = primary_dim], PRE-ALLOCATED
-/// @param out_vars Output variances [size = primary_dim], PRE-ALLOCATED
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
+template <typename T, bool IsCSR>
+void standard_moments(
+    const Sparse<T, IsCSR>& matrix,
+    Array<Real> out_means,
+    Array<Real> out_vars,
+    int ddof
+) {
+    const Index primary_dim = matrix.primary_dim();
+    const Real N = static_cast<Real>(matrix.secondary_dim());
+    const Real denom = N - static_cast<Real>(ddof);
+
+    SCL_CHECK_DIM(out_means.len >= static_cast<Size>(primary_dim), "Means size mismatch");
+    SCL_CHECK_DIM(out_vars.len >= static_cast<Size>(primary_dim), "Vars size mismatch");
+
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+        const Index idx = static_cast<Index>(p);
+        const Index len = matrix.primary_length(idx);
+        const Size len_sz = static_cast<Size>(len);
+
+        Real sum, sq_sum;
+        if (len_sz > 0) {
+            auto values = matrix.primary_values(idx);
+            detail::compute_sum_sq_simd(values.ptr, len_sz, sum, sq_sum);
+        } else {
+            sum = Real(0);
+            sq_sum = Real(0);
+        }
+
+        Real mu = sum / N;
+        Real var = (denom > Real(0)) ? ((sq_sum - sum * mu) / denom) : Real(0);
+        if (var < Real(0)) var = Real(0);
+
+        out_means[p] = mu;
+        out_vars[p] = var;
+    });
+}
+
+template <typename T, bool IsCSR>
 void clipped_moments(
-    const MatrixT& matrix,
+    const Sparse<T, IsCSR>& matrix,
     Array<const Real> clip_vals,
     Array<Real> out_means,
     Array<Real> out_vars
 ) {
-    constexpr bool IsCSR = std::is_same_v<typename MatrixT::Tag, TagCSR>;
+    const Index primary_dim = matrix.primary_dim();
+    const Real N = static_cast<Real>(matrix.secondary_dim());
+    const Real N_minus_1 = N - Real(1);
 
-    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR> ||
-                  CustomSparseLike<MatrixT, IsCSR> ||
-                  VirtualSparseLike<MatrixT, IsCSR>) {
-        fast::clipped_moments_fast<MatrixT, IsCSR>(matrix, clip_vals, out_means, out_vars);
-    } else {
-        detail::clipped_moments_generic(matrix, clip_vals, out_means, out_vars);
-    }
+    SCL_CHECK_DIM(clip_vals.len >= static_cast<Size>(primary_dim), "Clip vals mismatch");
+    SCL_CHECK_DIM(out_means.len >= static_cast<Size>(primary_dim), "Means size mismatch");
+    SCL_CHECK_DIM(out_vars.len >= static_cast<Size>(primary_dim), "Vars size mismatch");
+
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+        const Index idx = static_cast<Index>(p);
+        const Index len = matrix.primary_length(idx);
+        const Size len_sz = static_cast<Size>(len);
+        Real clip = clip_vals[p];
+
+        Real sum, sq_sum;
+        if (len_sz > 0) {
+            auto values = matrix.primary_values(idx);
+            detail::compute_clipped_sum_sq_simd(values.ptr, len_sz, clip, sum, sq_sum);
+        } else {
+            sum = Real(0);
+            sq_sum = Real(0);
+        }
+
+        Real mu = sum / N;
+        Real var = Real(0);
+        if (N > Real(1)) {
+            var = (sq_sum - N * mu * mu) / N_minus_1;
+        }
+        if (var < Real(0)) var = Real(0);
+
+        out_means[p] = mu;
+        out_vars[p] = var;
+    });
 }
 
-/// @brief Compute standard mean and variance
-///
-/// @param matrix Input sparse matrix (any backend)
-/// @param out_means Output means [size = primary_dim], PRE-ALLOCATED
-/// @param out_vars Output variances [size = primary_dim], PRE-ALLOCATED
-/// @param ddof Delta degrees of freedom (default 1 for sample variance)
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void standard_moments(
-    const MatrixT& matrix,
-    Array<Real> out_means,
-    Array<Real> out_vars,
-    int ddof = 1
-) {
-    constexpr bool IsCSR = std::is_same_v<typename MatrixT::Tag, TagCSR>;
-
-    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR> ||
-                  CustomSparseLike<MatrixT, IsCSR> ||
-                  VirtualSparseLike<MatrixT, IsCSR>) {
-        fast::standard_moments_fast<MatrixT, IsCSR>(matrix, out_means, out_vars, ddof);
-    } else {
-        detail::standard_moments_generic(matrix, out_means, out_vars, ddof);
-    }
-}
-
-/// @brief Compute detection rate (fraction of non-zero elements)
-///
-/// @param matrix Input sparse matrix (any backend)
-/// @param out_rates Output rates [size = primary_dim], values in [0, 1], PRE-ALLOCATED
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
+template <typename T, bool IsCSR>
 void detection_rate(
-    const MatrixT& matrix,
+    const Sparse<T, IsCSR>& matrix,
     Array<Real> out_rates
 ) {
-    constexpr bool IsCSR = std::is_same_v<typename MatrixT::Tag, TagCSR>;
+    const Index primary_dim = matrix.primary_dim();
+    const Real inv_N = Real(1) / static_cast<Real>(matrix.secondary_dim());
 
-    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR> ||
-                  CustomSparseLike<MatrixT, IsCSR> ||
-                  VirtualSparseLike<MatrixT, IsCSR>) {
-        fast::detection_rate_fast<MatrixT, IsCSR>(matrix, out_rates);
-    } else {
-        detail::detection_rate_generic(matrix, out_rates);
-    }
+    SCL_CHECK_DIM(out_rates.len >= static_cast<Size>(primary_dim), "Rates size mismatch");
+
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+        const Index idx = static_cast<Index>(p);
+        const Index len = matrix.primary_length(idx);
+        out_rates[p] = static_cast<Real>(len) * inv_N;
+    });
 }
 
-/// @brief Compute dispersion (Fano factor: variance/mean)
-///
-/// @param means Input means, PRE-ALLOCATED
-/// @param vars Input variances, PRE-ALLOCATED
-/// @param out_dispersion Output dispersion values, PRE-ALLOCATED
 inline void dispersion(
     Array<const Real> means,
     Array<const Real> vars,
     Array<Real> out_dispersion
 ) {
-    fast::dispersion_simd(means, vars, out_dispersion);
+    const Size n = means.len;
+
+    SCL_CHECK_DIM(vars.len >= n, "Vars size mismatch");
+    SCL_CHECK_DIM(out_dispersion.len >= n, "Output size mismatch");
+
+    namespace s = scl::simd;
+    const s::Tag d;
+    const size_t lanes = s::lanes();
+
+    const auto v_eps = s::Set(d, config::EPSILON);
+    const auto v_zero = s::Zero(d);
+
+    Size k = 0;
+
+    for (; k + 4 * lanes <= n; k += 4 * lanes) {
+        if (SCL_LIKELY(k + config::PREFETCH_DISTANCE * lanes < n)) {
+            SCL_PREFETCH_READ(means.ptr + k + config::PREFETCH_DISTANCE * lanes, 0);
+            SCL_PREFETCH_READ(vars.ptr + k + config::PREFETCH_DISTANCE * lanes, 0);
+        }
+
+        auto v_mean0 = s::Load(d, means.ptr + k + 0 * lanes);
+        auto v_mean1 = s::Load(d, means.ptr + k + 1 * lanes);
+        auto v_mean2 = s::Load(d, means.ptr + k + 2 * lanes);
+        auto v_mean3 = s::Load(d, means.ptr + k + 3 * lanes);
+
+        auto v_var0 = s::Load(d, vars.ptr + k + 0 * lanes);
+        auto v_var1 = s::Load(d, vars.ptr + k + 1 * lanes);
+        auto v_var2 = s::Load(d, vars.ptr + k + 2 * lanes);
+        auto v_var3 = s::Load(d, vars.ptr + k + 3 * lanes);
+
+        auto mask0 = s::Gt(v_mean0, v_eps);
+        auto mask1 = s::Gt(v_mean1, v_eps);
+        auto mask2 = s::Gt(v_mean2, v_eps);
+        auto mask3 = s::Gt(v_mean3, v_eps);
+
+        s::Store(s::IfThenElse(mask0, s::Div(v_var0, v_mean0), v_zero), d, out_dispersion.ptr + k + 0 * lanes);
+        s::Store(s::IfThenElse(mask1, s::Div(v_var1, v_mean1), v_zero), d, out_dispersion.ptr + k + 1 * lanes);
+        s::Store(s::IfThenElse(mask2, s::Div(v_var2, v_mean2), v_zero), d, out_dispersion.ptr + k + 2 * lanes);
+        s::Store(s::IfThenElse(mask3, s::Div(v_var3, v_mean3), v_zero), d, out_dispersion.ptr + k + 3 * lanes);
+    }
+
+    for (; k + lanes <= n; k += lanes) {
+        auto v_mean = s::Load(d, means.ptr + k);
+        auto v_var = s::Load(d, vars.ptr + k);
+
+        auto mask = s::Gt(v_mean, v_eps);
+        auto v_div = s::Div(v_var, v_mean);
+        auto v_res = s::IfThenElse(mask, v_div, v_zero);
+
+        s::Store(v_res, d, out_dispersion.ptr + k);
+    }
+
+    for (; k < n; ++k) {
+        Real m = means[k];
+        Real v = vars[k];
+        out_dispersion[k] = (m > config::EPSILON) ? (v / m) : Real(0);
+    }
 }
 
 } // namespace scl::kernel::feature
+

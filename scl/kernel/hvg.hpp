@@ -2,70 +2,39 @@
 
 #include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
+#include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
-#include "scl/core/argsort.hpp"
+#include "scl/core/macros.hpp"
+#include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/kernel/feature.hpp"
-
-// Backend implementations
-#include "scl/kernel/hvg_fast_impl.hpp"
 
 #include <cmath>
 #include <vector>
 #include <algorithm>
-#include <cstring>
+#include <limits>
 
 // =============================================================================
-/// @file hvg.hpp
-/// @brief Highly Variable Genes (HVG) Selection
-///
-/// ## Methods
-///
-/// 1. Dispersion-Based (Fano factor)
-///    - dispersion = variance / mean
-///    - Select top-K by dispersion
-///
-/// 2. Seurat V3 (VST)
-///    - Clipped variance for robustness
-///    - Select top-K by clipped variance
-///
-/// 3. Simple Variance
-///    - Select top-K by raw variance
-///
-/// ## Optimizations
-///
-/// 1. Partial Sort
-///    - O(n + k log k) instead of O(n log n)
-///    - Uses nth_element + partial_sort
-///
-/// 2. SIMD Dispersion
-///    - Vectorized variance/mean with safe division
-///
-/// 3. Feature Statistics Fast Path
-///    - Uses feature_fast_impl for mean/variance
-///
-/// ## Backend Dispatch
-///
-/// - MappedSparseLike -> hvg_mapped_impl.hpp
-/// - CustomSparseLike -> hvg_fast_impl.hpp
-/// - VirtualSparseLike -> hvg_fast_impl.hpp
-/// - Generic -> This file (fallback)
-///
-/// ## Complexity
-///
-/// Time: O(nnz) for stats + O(n + k log k) for selection
-/// Space: O(n) for temporary arrays
+// FILE: scl/kernel/hvg.hpp
+// BRIEF: Highly variable gene selection with SIMD optimization
 // =============================================================================
 
 namespace scl::kernel::hvg {
 
 // =============================================================================
-// SECTION 1: Generic Implementation (Fallback)
+// Configuration
+// =============================================================================
+
+namespace config {
+    constexpr Real EPSILON = 1e-12;
+    constexpr Size PREFETCH_DISTANCE = 16;
+}
+
+// =============================================================================
+// SIMD Utilities
 // =============================================================================
 
 namespace detail {
 
-/// @brief SIMD dispersion computation
 inline void dispersion_simd(
     Array<const Real> means,
     Array<const Real> vars,
@@ -77,11 +46,37 @@ inline void dispersion_simd(
     const s::Tag d;
     const size_t lanes = s::lanes();
 
-    constexpr Real EPSILON = 1e-12;
-    const auto v_eps = s::Set(d, EPSILON);
+    const auto v_eps = s::Set(d, config::EPSILON);
     const auto v_zero = s::Zero(d);
 
     Size k = 0;
+
+    for (; k + 4 * lanes <= n; k += 4 * lanes) {
+        if (SCL_LIKELY(k + config::PREFETCH_DISTANCE * lanes < n)) {
+            SCL_PREFETCH_READ(means.ptr + k + config::PREFETCH_DISTANCE * lanes, 0);
+            SCL_PREFETCH_READ(vars.ptr + k + config::PREFETCH_DISTANCE * lanes, 0);
+        }
+
+        auto v_mean0 = s::Load(d, means.ptr + k + 0 * lanes);
+        auto v_mean1 = s::Load(d, means.ptr + k + 1 * lanes);
+        auto v_mean2 = s::Load(d, means.ptr + k + 2 * lanes);
+        auto v_mean3 = s::Load(d, means.ptr + k + 3 * lanes);
+
+        auto v_var0 = s::Load(d, vars.ptr + k + 0 * lanes);
+        auto v_var1 = s::Load(d, vars.ptr + k + 1 * lanes);
+        auto v_var2 = s::Load(d, vars.ptr + k + 2 * lanes);
+        auto v_var3 = s::Load(d, vars.ptr + k + 3 * lanes);
+
+        auto mask0 = s::Gt(v_mean0, v_eps);
+        auto mask1 = s::Gt(v_mean1, v_eps);
+        auto mask2 = s::Gt(v_mean2, v_eps);
+        auto mask3 = s::Gt(v_mean3, v_eps);
+
+        s::Store(s::IfThenElse(mask0, s::Div(v_var0, v_mean0), v_zero), d, out_dispersion.ptr + k + 0 * lanes);
+        s::Store(s::IfThenElse(mask1, s::Div(v_var1, v_mean1), v_zero), d, out_dispersion.ptr + k + 1 * lanes);
+        s::Store(s::IfThenElse(mask2, s::Div(v_var2, v_mean2), v_zero), d, out_dispersion.ptr + k + 2 * lanes);
+        s::Store(s::IfThenElse(mask3, s::Div(v_var3, v_mean3), v_zero), d, out_dispersion.ptr + k + 3 * lanes);
+    }
 
     for (; k + lanes <= n; k += lanes) {
         auto v_mean = s::Load(d, means.ptr + k);
@@ -97,11 +92,70 @@ inline void dispersion_simd(
     for (; k < n; ++k) {
         Real m = means[k];
         Real v = vars[k];
-        out_dispersion[k] = (m > EPSILON) ? (v / m) : Real(0);
+        out_dispersion[k] = (m > config::EPSILON) ? (v / m) : Real(0);
     }
 }
 
-/// @brief Partial sort for top-K (O(n + k log k))
+inline void normalize_dispersion_simd(
+    Array<Real> dispersions,
+    Real min_mean,
+    Real max_mean,
+    Array<const Real> means
+) {
+    const Size n = dispersions.len;
+
+    namespace s = scl::simd;
+    const s::Tag d;
+    const size_t lanes = s::lanes();
+
+    Size valid_count = 0;
+    Real disp_sum = Real(0);
+    Real disp_sq = Real(0);
+
+    for (Size i = 0; i < n; ++i) {
+        Real m = means[i];
+        Real disp = dispersions[i];
+
+        if (m >= min_mean && m <= max_mean && disp > Real(0)) {
+            disp_sum += disp;
+            disp_sq += disp * disp;
+            valid_count++;
+        } else {
+            dispersions[i] = -std::numeric_limits<Real>::infinity();
+        }
+    }
+
+    if (valid_count == 0) return;
+
+    Real disp_mean = disp_sum / static_cast<Real>(valid_count);
+    Real disp_var = (disp_sq / static_cast<Real>(valid_count)) - (disp_mean * disp_mean);
+    Real disp_std = (disp_var > Real(0)) ? std::sqrt(disp_var) : Real(1);
+    Real inv_std = Real(1) / disp_std;
+
+    const auto v_mean = s::Set(d, disp_mean);
+    const auto v_inv_std = s::Set(d, inv_std);
+    const auto v_neg_inf = s::Set(d, -std::numeric_limits<Real>::infinity());
+
+    Size k = 0;
+
+    for (; k + lanes <= n; k += lanes) {
+        auto v_disp = s::Load(d, dispersions.ptr + k);
+
+        auto mask = s::Gt(v_disp, v_neg_inf);
+        auto v_norm = s::Mul(s::Sub(v_disp, v_mean), v_inv_std);
+        auto v_res = s::IfThenElse(mask, v_norm, v_neg_inf);
+
+        s::Store(v_res, d, dispersions.ptr + k);
+    }
+
+    for (; k < n; ++k) {
+        Real disp = dispersions[k];
+        if (disp > -std::numeric_limits<Real>::infinity()) {
+            dispersions[k] = (disp - disp_mean) * inv_std;
+        }
+    }
+}
+
 inline void select_top_k_partial(
     Array<const Real> scores,
     Size k,
@@ -110,16 +164,11 @@ inline void select_top_k_partial(
 ) {
     const Size n = scores.len;
 
-    SCL_CHECK_ARG(k <= n, "HVG: k exceeds number of elements");
-    SCL_CHECK_DIM(out_indices.len >= k, "HVG: Output indices too small");
-    SCL_CHECK_DIM(out_mask.len >= n, "HVG: Output mask size mismatch");
-
     std::vector<Index> indices(n);
     for (Size i = 0; i < n; ++i) {
         indices[i] = static_cast<Index>(i);
     }
 
-    // Partial sort: O(n + k log k)
     std::nth_element(
         indices.begin(),
         indices.begin() + static_cast<std::ptrdiff_t>(k),
@@ -137,10 +186,8 @@ inline void select_top_k_partial(
         }
     );
 
-    // Zero mask efficiently
     std::memset(out_mask.ptr, 0, n * sizeof(uint8_t));
 
-    // Mark top-K
     for (Size i = 0; i < k; ++i) {
         Index idx = indices[i];
         out_indices[i] = idx;
@@ -148,38 +195,114 @@ inline void select_top_k_partial(
     }
 }
 
-/// @brief Generic dispersion-based selection
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void select_by_dispersion_generic(
-    const MatrixT& matrix,
+template <typename T, bool IsCSR>
+void compute_moments(
+    const Sparse<T, IsCSR>& matrix,
+    Array<Real> out_means,
+    Array<Real> out_vars,
+    int ddof
+) {
+    const Index primary_dim = matrix.primary_dim();
+    const Index secondary_dim = matrix.secondary_dim();
+    const Real N = static_cast<Real>(secondary_dim);
+    const Real denom = N - static_cast<Real>(ddof);
+
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+        const Index idx = static_cast<Index>(p);
+        const auto values = matrix.primary_values(idx);
+        const Size len_sz = values.size();
+
+        Real sum = Real(0);
+        Real sq_sum = Real(0);
+
+        if (len_sz > 0) {
+            Array<const T> vals_arr(values.data(), len_sz);
+            sum = scl::vectorize::sum(vals_arr);
+            sq_sum = scl::vectorize::sum_squared(vals_arr);
+        }
+
+        Real mu = sum / N;
+        Real var = (denom > Real(0)) ? ((sq_sum - sum * mu) / denom) : Real(0);
+        if (var < Real(0)) var = Real(0);
+
+        out_means[p] = mu;
+        out_vars[p] = var;
+    });
+}
+
+template <typename T, bool IsCSR>
+void compute_clipped_moments(
+    const Sparse<T, IsCSR>& matrix,
+    Array<const Real> clip_vals,
+    Array<Real> out_means,
+    Array<Real> out_vars
+) {
+    const Index primary_dim = matrix.primary_dim();
+    const Index secondary_dim = matrix.secondary_dim();
+    const Real N = static_cast<Real>(secondary_dim);
+    const Real N_minus_1 = N - Real(1);
+
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+        const Index idx = static_cast<Index>(p);
+        const auto values = matrix.primary_values(idx);
+        const Index len = matrix.primary_length(idx);
+        const Real clip = clip_vals[p];
+
+        Real sum = Real(0);
+        Real sq_sum = Real(0);
+
+        for (Index k = 0; k < len; ++k) {
+            Real v = std::min(static_cast<Real>(values[k]), clip);
+            sum += v;
+            sq_sum += v * v;
+        }
+
+        Real mu = sum / N;
+        Real var = Real(0);
+        if (N > Real(1)) {
+            var = (sq_sum - N * mu * mu) / N_minus_1;
+        }
+        if (var < Real(0)) var = Real(0);
+
+        out_means[p] = mu;
+        out_vars[p] = var;
+    });
+}
+
+} // namespace detail
+
+// =============================================================================
+// HVG Selection Functions
+// =============================================================================
+
+template <typename T, bool IsCSR>
+void select_by_dispersion(
+    const Sparse<T, IsCSR>& matrix,
     Size n_top,
     Array<Index> out_indices,
     Array<uint8_t> out_mask,
     Array<Real> out_dispersions
 ) {
-    const Index primary_dim = scl::primary_size(matrix);
+    const Index primary_dim = matrix.primary_dim();
     const Size n = static_cast<Size>(primary_dim);
-
-    SCL_CHECK_DIM(out_dispersions.len >= n, "HVG: Dispersions size mismatch");
 
     std::vector<Real> means(n);
     std::vector<Real> vars(n);
 
-    scl::kernel::feature::standard_moments(
+    detail::compute_moments(
         matrix,
         Array<Real>(means.data(), n),
         Array<Real>(vars.data(), n),
         1
     );
 
-    dispersion_simd(
+    detail::dispersion_simd(
         Array<const Real>(means.data(), n),
         Array<const Real>(vars.data(), n),
         out_dispersions
     );
 
-    select_top_k_partial(
+    detail::select_top_k_partial(
         Array<const Real>(out_dispersions.ptr, n),
         n_top,
         out_indices,
@@ -187,172 +310,33 @@ void select_by_dispersion_generic(
     );
 }
 
-/// @brief Generic VST-based selection
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void select_by_vst_generic(
-    const MatrixT& matrix,
+template <typename T, bool IsCSR>
+void select_by_vst(
+    const Sparse<T, IsCSR>& matrix,
     Array<const Real> clip_vals,
     Size n_top,
     Array<Index> out_indices,
     Array<uint8_t> out_mask,
     Array<Real> out_variances
 ) {
-    const Index primary_dim = scl::primary_size(matrix);
+    const Index primary_dim = matrix.primary_dim();
     const Size n = static_cast<Size>(primary_dim);
-
-    SCL_CHECK_DIM(clip_vals.len >= n, "HVG: Clip vals size mismatch");
-    SCL_CHECK_DIM(out_variances.len >= n, "HVG: Variances size mismatch");
 
     std::vector<Real> means(n);
 
-    scl::kernel::feature::clipped_moments(
+    detail::compute_clipped_moments(
         matrix,
         clip_vals,
         Array<Real>(means.data(), n),
         out_variances
     );
 
-    select_top_k_partial(
+    detail::select_top_k_partial(
         Array<const Real>(out_variances.ptr, n),
         n_top,
         out_indices,
         out_mask
     );
-}
-
-/// @brief Generic variance-based selection
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void select_by_variance_generic(
-    const MatrixT& matrix,
-    Size n_top,
-    Array<Index> out_indices,
-    Array<uint8_t> out_mask
-) {
-    const Index primary_dim = scl::primary_size(matrix);
-    const Size n = static_cast<Size>(primary_dim);
-
-    std::vector<Real> means(n);
-    std::vector<Real> vars(n);
-
-    scl::kernel::feature::standard_moments(
-        matrix,
-        Array<Real>(means.data(), n),
-        Array<Real>(vars.data(), n),
-        1
-    );
-
-    select_top_k_partial(
-        Array<const Real>(vars.data(), n),
-        n_top,
-        out_indices,
-        out_mask
-    );
-}
-
-} // namespace detail
-
-// =============================================================================
-// SECTION 2: Public API
-// =============================================================================
-
-/// @brief Select HVGs by dispersion (Fano factor: variance/mean)
-///
-/// @param matrix Input sparse matrix (any backend)
-/// @param n_top Number of HVGs to select
-/// @param out_indices Output indices [size >= n_top], PRE-ALLOCATED
-/// @param out_mask Output mask [size = primary_dim], PRE-ALLOCATED
-/// @param out_dispersions Output dispersion values [size = primary_dim], PRE-ALLOCATED
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void select_by_dispersion(
-    const MatrixT& matrix,
-    Size n_top,
-    Array<Index> out_indices,
-    Array<uint8_t> out_mask,
-    Array<Real> out_dispersions
-) {
-    constexpr bool IsCSR = std::is_same_v<typename MatrixT::Tag, TagCSR>;
-
-    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR> ||
-                  CustomSparseLike<MatrixT, IsCSR> ||
-                  VirtualSparseLike<MatrixT, IsCSR>) {
-        fast::select_by_dispersion_fast<MatrixT, IsCSR>(
-            matrix, n_top, out_indices, out_mask, out_dispersions
-        );
-    } else {
-        detail::select_by_dispersion_generic(
-            matrix, n_top, out_indices, out_mask, out_dispersions
-        );
-    }
-}
-
-/// @brief Select HVGs using Seurat V3 method (clipped variance)
-///
-/// @param matrix Input sparse matrix (any backend)
-/// @param clip_vals Clipping thresholds [size = primary_dim]
-/// @param n_top Number of HVGs to select
-/// @param out_indices Output indices [size >= n_top], PRE-ALLOCATED
-/// @param out_mask Output mask [size = primary_dim], PRE-ALLOCATED
-/// @param out_variances Output clipped variances [size = primary_dim], PRE-ALLOCATED
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void select_by_vst(
-    const MatrixT& matrix,
-    Array<const Real> clip_vals,
-    Size n_top,
-    Array<Index> out_indices,
-    Array<uint8_t> out_mask,
-    Array<Real> out_variances
-) {
-    constexpr bool IsCSR = std::is_same_v<typename MatrixT::Tag, TagCSR>;
-
-    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR> ||
-                  CustomSparseLike<MatrixT, IsCSR> ||
-                  VirtualSparseLike<MatrixT, IsCSR>) {
-        fast::select_by_vst_fast<MatrixT, IsCSR>(
-            matrix, clip_vals, n_top, out_indices, out_mask, out_variances
-        );
-    } else {
-        detail::select_by_vst_generic(
-            matrix, clip_vals, n_top, out_indices, out_mask, out_variances
-        );
-    }
-}
-
-/// @brief Select HVGs by raw variance (simple method)
-///
-/// @param matrix Input sparse matrix (any backend)
-/// @param n_top Number of HVGs to select
-/// @param out_indices Output indices [size >= n_top], PRE-ALLOCATED
-/// @param out_mask Output mask [size = primary_dim], PRE-ALLOCATED
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void select_by_variance(
-    const MatrixT& matrix,
-    Size n_top,
-    Array<Index> out_indices,
-    Array<uint8_t> out_mask
-) {
-    // Variance-based selection always uses generic path
-    // (no special optimization needed beyond feature stats)
-    detail::select_by_variance_generic(matrix, n_top, out_indices, out_mask);
-}
-
-/// @brief Helper: Select top K indices by descending scores
-///
-/// @param scores Input scores
-/// @param k Number of top elements
-/// @param out_indices Output indices [size >= k], PRE-ALLOCATED
-/// @param out_mask Output binary mask [size = n], PRE-ALLOCATED
-inline void select_top_k(
-    Array<const Real> scores,
-    Size k,
-    Array<Index> out_indices,
-    Array<uint8_t> out_mask
-) {
-    detail::select_top_k_partial(scores, k, out_indices, out_mask);
 }
 
 } // namespace scl::kernel::hvg

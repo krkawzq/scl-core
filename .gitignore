@@ -69,3 +69,9 @@ uv.lock
 
 forks/
 .claude
+
+
+scl_v*/
+
+
+node_modules/

@@ -1,0 +1,221 @@
+/**
+ * Custom styles for SCL-Core documentation
+ * Extends VitePress default theme
+ */
+
+:root {
+  /* Brand colors */
+  --vp-c-brand-1: #5f67ee;
+  --vp-c-brand-2: #7b82f0;
+  --vp-c-brand-3: #9ca3f2;
+  --vp-c-brand-soft: rgba(95, 103, 238, 0.14);
+  
+  /* Custom colors for components */
+  --scl-c-accent: #10b981;
+  --scl-c-warning: #f59e0b;
+  --scl-c-danger: #ef4444;
+  --scl-c-info: #3b82f6;
+  
+  /* Code block enhancements */
+  --vp-code-line-height: 1.7;
+  --vp-code-font-size: 14px;
+  
+  /* Spacing */
+  --scl-spacing-xs: 0.5rem;
+  --scl-spacing-sm: 1rem;
+  --scl-spacing-md: 1.5rem;
+  --scl-spacing-lg: 2rem;
+  --scl-spacing-xl: 3rem;
+}
+
+/* Dark mode adjustments */
+.dark {
+  --vp-c-brand-1: #7b82f0;
+  --vp-c-brand-2: #5f67ee;
+  --vp-c-brand-3: #4a51d6;
+}
+
+/* Custom container styles */
+.vp-doc .custom-block {
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+}
+
+/* Performance callout */
+.custom-block.performance {
+  border-left: 4px solid var(--scl-c-accent);
+  background-color: rgba(16, 185, 129, 0.1);
+}
+
+.custom-block.performance .custom-block-title {
+  color: var(--scl-c-accent);
+  font-weight: 600;
+}
+
+/* Algorithm block styling */
+.algorithm-block {
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  padding: var(--scl-spacing-md);
+  margin: var(--scl-spacing-md) 0;
+}
+
+.algorithm-block h4 {
+  margin-top: 0;
+  color: var(--vp-c-brand-1);
+}
+
+/* API card styling */
+.api-card {
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  padding: var(--scl-spacing-md);
+  margin: var(--scl-spacing-md) 0;
+  transition: all 0.3s ease;
+}
+
+.api-card:hover {
+  border-color: var(--vp-c-brand-1);
+  box-shadow: 0 4px 12px rgba(95, 103, 238, 0.15);
+}
+
+.api-signature {
+  font-family: var(--vp-font-family-mono);
+  font-size: 14px;
+  background: var(--vp-code-block-bg);
+  padding: var(--scl-spacing-sm);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+/* Parameter table styling */
+.parameter-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--scl-spacing-md) 0;
+}
+
+.parameter-table th,
+.parameter-table td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.parameter-table th {
+  background: var(--vp-c-bg-soft);
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+}
+
+.parameter-table code {
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Complexity badge styling */
+.complexity-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--vp-font-family-mono);
+}
+
+.complexity-badge.time {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--scl-c-info);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.complexity-badge.space {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--scl-c-accent);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* Code comparison layout */
+.code-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--scl-spacing-md);
+  margin: var(--scl-spacing-md) 0;
+}
+
+@media (max-width: 768px) {
+  .code-compare {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Enhanced code blocks */
+.vp-doc div[class*='language-'] {
+  border-radius: 8px;
+  margin: var(--scl-spacing-md) 0;
+}
+
+.vp-doc div[class*='language-'] > button.copy {
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.vp-doc div[class*='language-']:hover > button.copy {
+  opacity: 1;
+}
+
+/* Math block styling */
+.math-block {
+  padding: var(--scl-spacing-md);
+  background: var(--vp-c-bg-soft);
+  border-radius: 8px;
+  margin: var(--scl-spacing-md) 0;
+  overflow-x: auto;
+}
+
+/* Responsive tables */
+.vp-doc table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--vp-c-bg-soft);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vp-c-divider);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vp-c-text-3);
+}
+
+/* Print styles */
+@media print {
+  .VPNav,
+  .VPSidebar,
+  .VPFooter {
+    display: none !important;
+  }
+  
+  .VPContent {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+}
+

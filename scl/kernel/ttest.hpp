@@ -1,58 +1,24 @@
 #pragma once
 
 #include "scl/core/type.hpp"
+#include "scl/core/simd.hpp"
+#include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/memory.hpp"
 #include "scl/threading/parallel_for.hpp"
-
-// Backend implementations
-#include "scl/kernel/ttest_fast_impl.hpp"
-#include "scl/kernel/ttest_mapped_impl.hpp"
 
 #include <cmath>
 #include <vector>
 
 // =============================================================================
-/// @file ttest.hpp
-/// @brief Differential Expression via T-Test
-///
-/// ## Supported Operations
-///
-/// 1. Welch's T-Test (unequal variance)
-/// 2. Pooled T-Test (equal variance)
-///
-/// ## Key Optimizations
-///
-/// 1. Fused Group Statistics
-///    - Single pass: sum, sum_sq, count per group
-///    - 4-way unrolled accumulation
-///
-/// 2. Fast erfc Approximation
-///    - Polynomial approximation (max error < 1.5e-7)
-///    - Avoids expensive std::erfc calls
-///
-/// 3. Backend Dispatch
-///    - CustomSparseLike -> ttest_fast_impl.hpp
-///    - VirtualSparseLike -> ttest_fast_impl.hpp
-///    - MappedSparseLike -> ttest_mapped_impl.hpp
-///
-/// ## Architecture
-///
-/// 1. Aggregation: Compute mean/var per group (single pass)
-/// 2. Testing: Compute T-statistics for Ref vs each Target
-///
-/// Performance: Dominated by group aggregation O(nnz)
+// FILE: scl/kernel/ttest.hpp
+// BRIEF: T-test computation with SIMD optimization
 // =============================================================================
 
-namespace scl::kernel::diff_expr {
-
-// =============================================================================
-// SECTION 1: Generic Implementation (Fallback)
-// =============================================================================
+namespace scl::kernel::ttest {
 
 namespace detail {
 
-/// @brief Fast erfc approximation (Abramowitz & Stegun)
 SCL_FORCE_INLINE Real fast_erfc(Real x) {
     Real sign = Real(1);
     if (x < Real(0)) {
@@ -73,65 +39,72 @@ SCL_FORCE_INLINE Real fast_erfc(Real x) {
               + Real(1.061405429) * t5;
     
     Real result = poly * std::exp(-x * x);
+    
     return (sign > Real(0)) ? result : (Real(2) - result);
 }
 
-/// @brief Compute p-value from t-statistic
 SCL_FORCE_INLINE Real t_to_pvalue(Real t_stat) {
     return Real(2) * fast_erfc(std::abs(t_stat) / Real(M_SQRT2));
 }
 
-/// @brief Count group sizes from group_ids
-SCL_FORCE_INLINE void count_group_sizes(
-    Array<const int32_t> group_ids,
-    Size n_groups,
-    Array<Size> out_sizes
-) {
-    SCL_CHECK_DIM(out_sizes.len >= n_groups, "Output size mismatch");
-    
-    std::fill(out_sizes.ptr, out_sizes.ptr + n_groups, Size(0));
-    
-    for (Size i = 0; i < group_ids.len; ++i) {
-        int32_t g = group_ids[i];
-        if (g >= 0 && static_cast<Size>(g) < n_groups) {
-            out_sizes[g]++;
-        }
-    }
-}
+} // namespace detail
 
-/// @brief Generic group statistics computation
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void compute_group_stats_generic(
-    const MatrixT& matrix,
+// =============================================================================
+// Group Statistics
+// =============================================================================
+
+template <typename T, bool IsCSR>
+void compute_group_stats(
+    const Sparse<T, IsCSR>& matrix,
     Array<const int32_t> group_ids,
     Size n_groups,
     Array<Real> out_means,
     Array<Real> out_vars,
     Array<Size> out_counts
 ) {
-    const Index primary_dim = scl::primary_size(matrix);
+    const Index primary_dim = matrix.primary_dim();
     const Size total_size = static_cast<Size>(primary_dim) * n_groups;
     
     SCL_CHECK_DIM(out_means.len >= total_size, "Means size mismatch");
     SCL_CHECK_DIM(out_vars.len >= total_size, "Vars size mismatch");
     SCL_CHECK_DIM(out_counts.len >= total_size, "Counts size mismatch");
-    
-    std::fill(out_means.ptr, out_means.ptr + total_size, Real(0));
-    std::fill(out_vars.ptr, out_vars.ptr + total_size, Real(0));
+
+    scl::memory::zero(out_means);
+    scl::memory::zero(out_vars);
     std::fill(out_counts.ptr, out_counts.ptr + total_size, Size(0));
     
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        auto values = scl::primary_values(matrix, static_cast<Index>(p));
-        auto indices = scl::primary_indices(matrix, static_cast<Index>(p));
+        const Index idx = static_cast<Index>(p);
+        const Index len = matrix.primary_length(idx);
+        const Size len_sz = static_cast<Size>(len);
+        
+        if (len_sz == 0) return;
         
         Real* mean_ptr = out_means.ptr + (p * n_groups);
         Real* var_ptr = out_vars.ptr + (p * n_groups);
         Size* count_ptr = out_counts.ptr + (p * n_groups);
         
-        for (Size k = 0; k < values.len; ++k) {
-            Index idx = indices[k];
-            int32_t g = group_ids[idx];
+        auto values = matrix.primary_values(idx);
+        auto indices = matrix.primary_indices(idx);
+        
+        Size k = 0;
+        for (; k + 4 <= len_sz; k += 4) {
+            for (int u = 0; u < 4; ++u) {
+                Index idx_col = indices[k + u];
+                int32_t g = group_ids[idx_col];
+                
+                if (g >= 0 && static_cast<Size>(g) < n_groups) {
+                    Real v = static_cast<Real>(values[k + u]);
+                    mean_ptr[g] += v;
+                    var_ptr[g] += v * v;
+                    count_ptr[g]++;
+                }
+            }
+        }
+        
+        for (; k < len_sz; ++k) {
+            Index idx_col = indices[k];
+            int32_t g = group_ids[idx_col];
             
             if (g >= 0 && static_cast<Size>(g) < n_groups) {
                 Real v = static_cast<Real>(values[k]);
@@ -142,27 +115,30 @@ void compute_group_stats_generic(
         }
     });
     
-    // Finalize
     scl::threading::parallel_for(Size(0), total_size, [&](size_t i) {
         Size n = out_counts[i];
         if (n > 0) {
             Real mean = out_means[i] / static_cast<Real>(n);
             Real sum_sq = out_vars[i];
             Real var = (n > 1) ? (sum_sq / static_cast<Real>(n) - mean * mean) : Real(0);
+            
             if (n > 1) {
                 var = var * static_cast<Real>(n) / static_cast<Real>(n - 1);
             }
+            
             out_means[i] = mean;
             out_vars[i] = var;
         }
     });
 }
 
-/// @brief Generic t-test computation
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void ttest_generic(
-    const MatrixT& matrix,
+// =============================================================================
+// T-Test Computation
+// =============================================================================
+
+template <typename T, bool IsCSR>
+void ttest(
+    const Sparse<T, IsCSR>& matrix,
     Array<const int32_t> group_ids,
     Size n_groups,
     Array<const Size> group_sizes,
@@ -171,7 +147,7 @@ void ttest_generic(
     Array<Real> out_log2_fc,
     bool use_welch
 ) {
-    const Index n_features = scl::primary_size(matrix);
+    const Index n_features = matrix.primary_dim();
     const Size n_targets = n_groups - 1;
     const Size output_size = static_cast<Size>(n_features) * n_targets;
     
@@ -183,7 +159,7 @@ void ttest_generic(
     std::vector<Real> vars(static_cast<Size>(n_features) * n_groups);
     std::vector<Size> counts(static_cast<Size>(n_features) * n_groups);
     
-    compute_group_stats_generic(
+    compute_group_stats(
         matrix, group_ids, n_groups,
         Array<Real>(means.data(), means.size()),
         Array<Real>(vars.data(), vars.size()),
@@ -219,7 +195,7 @@ void ttest_generic(
                     Real se_sq = var_ref * inv_N_ref + var_target * inv_N_target;
                     if (se_sq > Real(0)) {
                         t_stat = mean_diff / std::sqrt(se_sq);
-                        p_value = t_to_pvalue(t_stat);
+                        p_value = detail::t_to_pvalue(t_stat);
                     }
                 } else {
                     Real df_ref = static_cast<Real>(N_ref - 1);
@@ -228,7 +204,7 @@ void ttest_generic(
                     Real se = std::sqrt(pooled_var * (inv_N_ref + inv_N_target));
                     if (se > Real(0)) {
                         t_stat = mean_diff / se;
-                        p_value = t_to_pvalue(t_stat);
+                        p_value = detail::t_to_pvalue(t_stat);
                     }
                 }
             }
@@ -241,108 +217,5 @@ void ttest_generic(
     });
 }
 
-} // namespace detail
+} // namespace scl::kernel::ttest
 
-// =============================================================================
-// SECTION 2: Public API with Backend Dispatch
-// =============================================================================
-
-/// @brief Count group sizes from group labels
-///
-/// @param group_ids Group labels for each observation
-/// @param n_groups Total number of groups
-/// @param out_sizes Output sizes [size = n_groups], PRE-ALLOCATED
-SCL_FORCE_INLINE void count_group_sizes(
-    Array<const int32_t> group_ids,
-    Size n_groups,
-    Array<Size> out_sizes
-) {
-    detail::count_group_sizes(group_ids, n_groups, out_sizes);
-}
-
-/// @brief T-test for differential expression
-///
-/// Compares Group 0 (Reference) against Groups 1..K (Targets).
-///
-/// @param matrix Input sparse matrix
-/// @param group_ids Group labels (0=Ref, 1..K=Targets)
-/// @param n_groups Total groups (K+1)
-/// @param out_t_stats T-statistics [size = n_features * n_targets], PRE-ALLOCATED
-/// @param out_p_values P-values [size = n_features * n_targets], PRE-ALLOCATED
-/// @param out_log2_fc Log2 fold changes [size = n_features * n_targets], PRE-ALLOCATED
-/// @param use_welch Use Welch's t-test (default true)
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void ttest(
-    const MatrixT& matrix,
-    Array<const int32_t> group_ids,
-    Size n_groups,
-    Array<Real> out_t_stats,
-    Array<Real> out_p_values,
-    Array<Real> out_log2_fc,
-    bool use_welch = true
-) {
-    constexpr bool IsCSR = std::is_same_v<typename MatrixT::Tag, TagCSR>;
-    
-    // Count group sizes
-    std::vector<Size> group_sizes(n_groups);
-    detail::count_group_sizes(group_ids, n_groups, Array<Size>(group_sizes.data(), n_groups));
-    
-    // Dispatch to backend
-    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR>) {
-        ttest::mapped::ttest_mapped_dispatch<MatrixT, IsCSR>(
-            matrix, group_ids, n_groups,
-            Array<const Size>(group_sizes.data(), n_groups),
-            out_t_stats, out_p_values, out_log2_fc, use_welch
-        );
-    } else if constexpr (CustomSparseLike<MatrixT, IsCSR> || VirtualSparseLike<MatrixT, IsCSR>) {
-        fast::ttest_fast_dispatch<MatrixT, IsCSR>(
-            matrix, group_ids, n_groups,
-            Array<const Size>(group_sizes.data(), n_groups),
-            out_t_stats, out_p_values, out_log2_fc, use_welch
-        );
-    } else {
-        detail::ttest_generic(
-            matrix, group_ids, n_groups,
-            Array<const Size>(group_sizes.data(), n_groups),
-            out_t_stats, out_p_values, out_log2_fc, use_welch
-        );
-    }
-}
-
-/// @brief T-test with pre-computed group sizes
-///
-/// Useful when group sizes are already known (avoids re-counting).
-template <typename MatrixT>
-    requires AnySparse<MatrixT>
-void ttest_with_sizes(
-    const MatrixT& matrix,
-    Array<const int32_t> group_ids,
-    Size n_groups,
-    Array<const Size> group_sizes,
-    Array<Real> out_t_stats,
-    Array<Real> out_p_values,
-    Array<Real> out_log2_fc,
-    bool use_welch = true
-) {
-    constexpr bool IsCSR = std::is_same_v<typename MatrixT::Tag, TagCSR>;
-    
-    if constexpr (kernel::mapped::MappedSparseLike<MatrixT, IsCSR>) {
-        ttest::mapped::ttest_mapped_dispatch<MatrixT, IsCSR>(
-            matrix, group_ids, n_groups, group_sizes,
-            out_t_stats, out_p_values, out_log2_fc, use_welch
-        );
-    } else if constexpr (CustomSparseLike<MatrixT, IsCSR> || VirtualSparseLike<MatrixT, IsCSR>) {
-        fast::ttest_fast_dispatch<MatrixT, IsCSR>(
-            matrix, group_ids, n_groups, group_sizes,
-            out_t_stats, out_p_values, out_log2_fc, use_welch
-        );
-    } else {
-        detail::ttest_generic(
-            matrix, group_ids, n_groups, group_sizes,
-            out_t_stats, out_p_values, out_log2_fc, use_welch
-        );
-    }
-}
-
-} // namespace scl::kernel::diff_expr
