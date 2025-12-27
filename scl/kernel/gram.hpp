@@ -101,11 +101,11 @@ SCL_FORCE_INLINE T dot_binary(
     Index last_target = idx_small[n_small - 1];
 
     // Binary search for start position in large array
-    const Index* start = std::lower_bound(idx_large, idx_large + n_large, first_target);
+    const Index* start = scl::algo::lower_bound(idx_large, idx_large + n_large, first_target);
     if (start == idx_large + n_large) return T(0);
 
     // Binary search for end position in large array
-    const Index* end = std::upper_bound(start, idx_large + n_large, last_target);
+    const Index* end = scl::algo::upper_bound(start, idx_large + n_large, last_target);
 
     const Index* base = start;
     Size len = static_cast<Size>(end - start);
@@ -123,7 +123,7 @@ SCL_FORCE_INLINE T dot_binary(
         // Early termination: target exceeds remaining range
         if (SCL_UNLIKELY(target > idx_large[n_large - 1])) break;
 
-        auto it = std::lower_bound(base, base + len, target);
+        auto it = scl::algo::lower_bound(base, base + len, target);
 
         if (it != base + len && *it == target) {
             Size offset = static_cast<Size>(it - idx_large);
@@ -162,7 +162,7 @@ SCL_FORCE_INLINE T dot_gallop(
         step *= 2;
     }
     Size lo = j;
-    Size hi = std::min(j + step, n_large);
+    Size hi = scl::algo::min2(j + step, n_large);
     while (lo < hi) {
         Size mid = lo + (hi - lo) / 2;
         if (idx_large[mid] < first_target) {
@@ -179,7 +179,7 @@ SCL_FORCE_INLINE T dot_gallop(
     // Find effective end via binary search
     Size n_large_effective = n_large;
     if (last_target < idx_large[n_large - 1]) {
-        auto end_it = std::upper_bound(idx_large + j, idx_large + n_large, last_target);
+        auto end_it = scl::algo::upper_bound(idx_large + j, idx_large + n_large, last_target);
         n_large_effective = static_cast<Size>(end_it - idx_large);
     }
 
@@ -198,7 +198,7 @@ SCL_FORCE_INLINE T dot_gallop(
         }
 
         lo = j;
-        hi = std::min(j + step, n_large_effective);
+        hi = scl::algo::min2(j + step, n_large_effective);
 
         // Binary search within bounds
         while (lo < hi) {
@@ -238,9 +238,9 @@ SCL_FORCE_INLINE T sparse_dot_adaptive(
 
     // Ensure n1 <= n2 for algorithm selection
     if (n1 > n2) {
-        std::swap(idx1, idx2);
-        std::swap(val1, val2);
-        std::swap(n1, n2);
+        scl::algo::swap(idx1, idx2);
+        scl::algo::swap(val1, val2);
+        scl::algo::swap(n1, n2);
     }
 
     Size ratio = n2 / n1;

@@ -5,10 +5,10 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/memory.hpp"
+#include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <cmath>
-#include <vector>
 
 // =============================================================================
 // FILE: scl/kernel/ttest.hpp
@@ -71,7 +71,7 @@ void compute_group_stats(
 
     scl::memory::zero(out_means);
     scl::memory::zero(out_vars);
-    std::fill(out_counts.ptr, out_counts.ptr + total_size, Size(0));
+    scl::algo::zero(out_counts.ptr, total_size);
     
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
@@ -150,47 +150,48 @@ void ttest(
     const Index n_features = matrix.primary_dim();
     const Size n_targets = n_groups - 1;
     const Size output_size = static_cast<Size>(n_features) * n_targets;
-    
+    const Size stats_size = static_cast<Size>(n_features) * n_groups;
+
     SCL_CHECK_DIM(out_t_stats.len >= output_size, "T-stats size mismatch");
     SCL_CHECK_DIM(out_p_values.len >= output_size, "P-values size mismatch");
     SCL_CHECK_DIM(out_log2_fc.len >= output_size, "Log2FC size mismatch");
-    
-    std::vector<Real> means(static_cast<Size>(n_features) * n_groups);
-    std::vector<Real> vars(static_cast<Size>(n_features) * n_groups);
-    std::vector<Size> counts(static_cast<Size>(n_features) * n_groups);
-    
+
+    Real* means = scl::memory::aligned_alloc<Real>(stats_size, SCL_ALIGNMENT);
+    Real* vars = scl::memory::aligned_alloc<Real>(stats_size, SCL_ALIGNMENT);
+    Size* counts = scl::memory::aligned_alloc<Size>(stats_size, SCL_ALIGNMENT);
+
     compute_group_stats(
         matrix, group_ids, n_groups,
-        Array<Real>(means.data(), means.size()),
-        Array<Real>(vars.data(), vars.size()),
-        Array<Size>(counts.data(), counts.size())
+        Array<Real>(means, stats_size),
+        Array<Real>(vars, stats_size),
+        Array<Size>(counts, stats_size)
     );
-    
+
     const Size N_ref = group_sizes[0];
     const Real inv_N_ref = (N_ref > 0) ? (Real(1) / static_cast<Real>(N_ref)) : Real(0);
-    
+
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_features), [&](size_t i) {
         Real mean_ref = means[i * n_groups + 0];
         Real var_ref = vars[i * n_groups + 0];
-        
+
         for (Size t = 0; t < n_targets; ++t) {
             Size target_group = t + 1;
             Size N_target = group_sizes[target_group];
-            
+
             Real mean_target = means[i * n_groups + target_group];
             Real var_target = vars[i * n_groups + target_group];
-            
+
             Real mean_diff = mean_target - mean_ref;
-            
+
             constexpr Real PSEUDOCOUNT = Real(1e-9);
             Real log2_fc = std::log2((mean_target + PSEUDOCOUNT) / (mean_ref + PSEUDOCOUNT));
-            
+
             Real t_stat = Real(0);
             Real p_value = Real(1);
-            
+
             if (N_ref > 0 && N_target > 0) {
                 Real inv_N_target = Real(1) / static_cast<Real>(N_target);
-                
+
                 if (use_welch) {
                     Real se_sq = var_ref * inv_N_ref + var_target * inv_N_target;
                     if (se_sq > Real(0)) {
@@ -208,13 +209,17 @@ void ttest(
                     }
                 }
             }
-            
+
             Size out_idx = i * n_targets + t;
             out_t_stats[out_idx] = t_stat;
             out_p_values[out_idx] = p_value;
             out_log2_fc[out_idx] = log2_fc;
         }
     });
+
+    scl::memory::aligned_free(means, SCL_ALIGNMENT);
+    scl::memory::aligned_free(vars, SCL_ALIGNMENT);
+    scl::memory::aligned_free(counts, SCL_ALIGNMENT);
 }
 
 } // namespace scl::kernel::ttest

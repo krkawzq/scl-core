@@ -6,9 +6,10 @@
 #include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/core/simd.hpp"
+#include "scl/core/memory.hpp"
+#include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
 
-#include <algorithm>
 #include <cstring>
 
 // =============================================================================
@@ -226,18 +227,21 @@ void align_secondary(
         auto indices_arr = matrix.primary_indices(idx);
         auto values_arr = matrix.primary_values(idx);
 
-        std::vector<Index> indices_copy(indices_arr.ptr, indices_arr.ptr + len_sz);
-        std::vector<T> values_copy(values_arr.ptr, values_arr.ptr + len_sz);
+        Index* indices_copy = scl::memory::aligned_alloc<Index>(len_sz, SCL_ALIGNMENT);
+        T* values_copy = scl::memory::aligned_alloc<T>(len_sz, SCL_ALIGNMENT);
+
+        scl::algo::copy(indices_arr.ptr, indices_copy, len_sz);
+        scl::algo::copy(values_arr.ptr, values_copy, len_sz);
 
         Size new_len = detail::remap_compact_adaptive(
-            indices_copy.data(), values_copy.data(), len_sz,
+            indices_copy, values_copy, len_sz,
             index_map.ptr, new_secondary_dim
         );
 
         if (new_len > 1) {
             scl::sort::sort_pairs(
-                Array<Index>(indices_copy.data(), new_len),
-                Array<T>(values_copy.data(), new_len)
+                Array<Index>(indices_copy, new_len),
+                Array<T>(values_copy, new_len)
             );
         }
 
@@ -245,6 +249,9 @@ void align_secondary(
             indices_arr.ptr[k] = indices_copy[k];
             values_arr.ptr[k] = values_copy[k];
         }
+
+        scl::memory::aligned_free(indices_copy, SCL_ALIGNMENT);
+        scl::memory::aligned_free(values_copy, SCL_ALIGNMENT);
 
         out_lengths[p] = static_cast<Index>(new_len);
     });
@@ -258,7 +265,7 @@ Size compute_filtered_nnz(
 ) {
     const Index primary_dim = matrix.primary_dim();
 
-    std::vector<Size> partial_sums(static_cast<size_t>(primary_dim));
+    Size* partial_sums = scl::memory::aligned_alloc<Size>(static_cast<Size>(primary_dim), SCL_ALIGNMENT);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
@@ -277,10 +284,11 @@ Size compute_filtered_nnz(
     });
 
     Size total = 0;
-    for (Size s : partial_sums) {
-        total += s;
+    for (Size i = 0; i < static_cast<Size>(primary_dim); ++i) {
+        total += partial_sums[i];
     }
 
+    scl::memory::aligned_free(partial_sums, SCL_ALIGNMENT);
     return total;
 }
 

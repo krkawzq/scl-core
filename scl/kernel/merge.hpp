@@ -4,11 +4,11 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/simd.hpp"
+#include "scl/core/memory.hpp"
+#include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <cstring>
-#include <algorithm>
-#include <vector>
 
 // =============================================================================
 // FILE: scl/kernel/merge.hpp
@@ -76,7 +76,7 @@ inline void parallel_memcpy(
 
     scl::threading::parallel_for(Size(0), n_chunks, [&](size_t c) {
         Size start = c * chunk_size;
-        Size end = std::min(start + chunk_size, count);
+        Size end = scl::algo::min2(start + chunk_size, count);
         Size len = end - start;
 
         if (c + 1 < n_chunks) {
@@ -105,9 +105,9 @@ Sparse<T, IsCSR> vstack(
     const Index secondary2 = matrix2.secondary_dim();
 
     const Index total_primary = primary1 + primary2;
-    const Index total_secondary = std::max(secondary1, secondary2);
+    const Index total_secondary = scl::algo::max2(secondary1, secondary2);
 
-    std::vector<Index> nnzs(total_primary);
+    Index* nnzs = scl::memory::aligned_alloc<Index>(total_primary, SCL_ALIGNMENT);
     for (Index i = 0; i < primary1; ++i) {
         nnzs[i] = matrix1.primary_length(i);
     }
@@ -118,9 +118,11 @@ Sparse<T, IsCSR> vstack(
     Sparse<T, IsCSR> result = Sparse<T, IsCSR>::create(
         IsCSR ? total_primary : total_secondary,
         IsCSR ? total_secondary : total_primary,
-        nnzs,
+        Array<const Index>(nnzs, static_cast<Size>(total_primary)),
         strategy
     );
+
+    scl::memory::aligned_free(nnzs, SCL_ALIGNMENT);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary1), [&](size_t i) {
         const Index idx = static_cast<Index>(i);
@@ -170,7 +172,7 @@ Sparse<T, IsCSR> hstack(
     const Index primary_dim = primary1;
     const Index total_secondary = secondary1 + secondary2;
 
-    std::vector<Index> nnzs(primary_dim);
+    Index* nnzs = scl::memory::aligned_alloc<Index>(primary_dim, SCL_ALIGNMENT);
     for (Index i = 0; i < primary_dim; ++i) {
         nnzs[i] = matrix1.primary_length(i) + matrix2.primary_length(i);
     }
@@ -178,9 +180,11 @@ Sparse<T, IsCSR> hstack(
     Sparse<T, IsCSR> result = Sparse<T, IsCSR>::create(
         IsCSR ? primary_dim : total_secondary,
         IsCSR ? total_secondary : primary_dim,
-        nnzs,
+        Array<const Index>(nnzs, static_cast<Size>(primary_dim)),
         strategy
     );
+
+    scl::memory::aligned_free(nnzs, SCL_ALIGNMENT);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);

@@ -6,11 +6,12 @@
 #include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/core/vectorize.hpp"
+#include "scl/core/memory.hpp"
+#include "scl/core/algo.hpp"
+#include "scl/core/sort.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <cmath>
-#include <vector>
-#include <algorithm>
 #include <limits>
 
 // =============================================================================
@@ -164,35 +165,23 @@ inline void select_top_k_partial(
 ) {
     const Size n = scores.len;
 
-    std::vector<Index> indices(n);
-    for (Size i = 0; i < n; ++i) {
-        indices[i] = static_cast<Index>(i);
-    }
+    Index* indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    scl::algo::iota(indices, n, Index(0));
 
-    std::nth_element(
-        indices.begin(),
-        indices.begin() + static_cast<std::ptrdiff_t>(k),
-        indices.end(),
-        [&scores](Index a, Index b) {
-            return scores[a] > scores[b];
-        }
-    );
+    // Partial sort: first k elements will be the k largest (in descending order)
+    scl::algo::partial_sort(indices, n, k, [&scores](Index a, Index b) {
+        return scores[a] > scores[b];
+    });
 
-    std::sort(
-        indices.begin(),
-        indices.begin() + static_cast<std::ptrdiff_t>(k),
-        [&scores](Index a, Index b) {
-            return scores[a] > scores[b];
-        }
-    );
-
-    std::memset(out_mask.ptr, 0, n * sizeof(uint8_t));
+    scl::algo::zero(out_mask.ptr, n);
 
     for (Size i = 0; i < k; ++i) {
         Index idx = indices[i];
         out_indices[i] = idx;
         out_mask[idx] = 1;
     }
+
+    scl::memory::aligned_free(indices, SCL_ALIGNMENT);
 }
 
 template <typename T, bool IsCSR>
@@ -252,7 +241,7 @@ void compute_clipped_moments(
         Real sq_sum = Real(0);
 
         for (Index k = 0; k < len; ++k) {
-            Real v = std::min(static_cast<Real>(values[k]), clip);
+            Real v = scl::algo::min2(static_cast<Real>(values[k]), clip);
             sum += v;
             sq_sum += v * v;
         }
@@ -286,19 +275,19 @@ void select_by_dispersion(
     const Index primary_dim = matrix.primary_dim();
     const Size n = static_cast<Size>(primary_dim);
 
-    std::vector<Real> means(n);
-    std::vector<Real> vars(n);
+    Real* means = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* vars = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
 
     detail::compute_moments(
         matrix,
-        Array<Real>(means.data(), n),
-        Array<Real>(vars.data(), n),
+        Array<Real>(means, n),
+        Array<Real>(vars, n),
         1
     );
 
     detail::dispersion_simd(
-        Array<const Real>(means.data(), n),
-        Array<const Real>(vars.data(), n),
+        Array<const Real>(means, n),
+        Array<const Real>(vars, n),
         out_dispersions
     );
 
@@ -308,6 +297,9 @@ void select_by_dispersion(
         out_indices,
         out_mask
     );
+
+    scl::memory::aligned_free(means, SCL_ALIGNMENT);
+    scl::memory::aligned_free(vars, SCL_ALIGNMENT);
 }
 
 template <typename T, bool IsCSR>
@@ -322,12 +314,12 @@ void select_by_vst(
     const Index primary_dim = matrix.primary_dim();
     const Size n = static_cast<Size>(primary_dim);
 
-    std::vector<Real> means(n);
+    Real* means = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
 
     detail::compute_clipped_moments(
         matrix,
         clip_vals,
-        Array<Real>(means.data(), n),
+        Array<Real>(means, n),
         out_variances
     );
 
@@ -337,6 +329,8 @@ void select_by_vst(
         out_indices,
         out_mask
     );
+
+    scl::memory::aligned_free(means, SCL_ALIGNMENT);
 }
 
 } // namespace scl::kernel::hvg

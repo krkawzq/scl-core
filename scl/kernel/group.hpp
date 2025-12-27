@@ -5,10 +5,8 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/memory.hpp"
+#include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
-
-#include <cstring>
-#include <vector>
 
 // =============================================================================
 // FILE: scl/kernel/group.hpp
@@ -105,16 +103,16 @@ void group_stats(
 
         Size nnz_counts_local[256];
         Size* nnz_counts = nullptr;
-        std::vector<Size> nnz_counts_heap;
+        Size* nnz_counts_heap = nullptr;
 
         if (!include_zeros) {
             if (n_groups <= 256) {
                 nnz_counts = nnz_counts_local;
             } else {
-                nnz_counts_heap.resize(n_groups, 0);
-                nnz_counts = nnz_counts_heap.data();
+                nnz_counts_heap = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
+                nnz_counts = nnz_counts_heap;
             }
-            std::memset(nnz_counts, 0, n_groups * sizeof(Size));
+            scl::algo::zero(nnz_counts, n_groups);
         }
 
         Index k = 0;
@@ -151,6 +149,10 @@ void group_stats(
 
         detail::finalize_stats(mean_ptr, var_ptr, group_sizes.ptr, nnz_counts,
                                n_groups, ddof, include_zeros);
+
+        if (nnz_counts_heap) {
+            scl::memory::aligned_free(nnz_counts_heap, SCL_ALIGNMENT);
+        }
     });
 }
 
