@@ -32,6 +32,7 @@ Example:
 
 from typing import Tuple, Any, Optional, Union, List, Callable, TYPE_CHECKING
 from dataclasses import dataclass
+import numpy as np
 
 from ._array import Array, zeros, empty, from_list
 from ._dtypes import normalize_dtype, validate_dtype
@@ -40,6 +41,7 @@ from ._backend import (
     CustomStorage, VirtualStorage, MappedStorage, ChunkInfo
 )
 from ._ownership import RefChain, OwnershipTracker, ensure_alive
+from ._base import CSRBase
 
 if TYPE_CHECKING:
     from ._csc import SclCSC
@@ -47,7 +49,7 @@ if TYPE_CHECKING:
 __all__ = ['SclCSR', 'CSR']
 
 
-class SclCSR:
+class SclCSR(CSRBase):
     """Smart CSR Sparse Matrix with automatic backend management.
     
     A row-oriented sparse matrix that automatically manages:
@@ -317,6 +319,119 @@ class SclCSR:
         """Row pointer array."""
         self._ensure_custom()
         return self._storage.indptr
+    
+    @property
+    def format(self) -> str:
+        """Sparse format (always 'csr')."""
+        return 'csr'
+    
+    # =========================================================================
+    # CSRBase Interface Implementation
+    # =========================================================================
+    
+    def row_values(self, i: int) -> Array:
+        """Get non-zero values for row i.
+        
+        Args:
+            i: Row index (0 <= i < rows)
+            
+        Returns:
+            Array of non-zero values in row i
+            
+        Note:
+            For Virtual/Mapped backends, this may trigger partial materialization.
+        """
+        if self._backend == Backend.CUSTOM:
+            start = int(self._storage.indptr[i])
+            end = int(self._storage.indptr[i + 1])
+            length = end - start
+            
+            if length == 0:
+                return zeros(0, dtype=self._dtype)
+            
+            # Create view using numpy slice
+            data_np = self._storage.data.to_numpy()
+            return Array.from_numpy(data_np[start:end], copy=False)
+            
+        elif self._backend == Backend.VIRTUAL:
+            # For virtual storage, get from the source chunk
+            chunk_idx, local_idx = self._storage.get_chunk_for_index(i)
+            chunk = self._storage.chunks[chunk_idx]
+            
+            if chunk.is_identity:
+                # Direct access to source
+                src = chunk.source
+                return src.row_values(local_idx)
+            else:
+                # Indexed access
+                src = chunk.source
+                actual_idx = int(chunk.local_indices[local_idx])
+                return src.row_values(actual_idx)
+        else:
+            # Mapped backend - materialize first
+            self._ensure_custom()
+            return self.row_values(i)
+    
+    def row_indices(self, i: int) -> Array:
+        """Get column indices of non-zeros for row i.
+        
+        Args:
+            i: Row index (0 <= i < rows)
+            
+        Returns:
+            Array of column indices for non-zeros in row i
+        """
+        if self._backend == Backend.CUSTOM:
+            start = int(self._storage.indptr[i])
+            end = int(self._storage.indptr[i + 1])
+            length = end - start
+            
+            if length == 0:
+                return zeros(0, dtype='int64')
+            
+            indices_np = self._storage.indices.to_numpy()
+            return Array.from_numpy(indices_np[start:end], copy=False)
+            
+        elif self._backend == Backend.VIRTUAL:
+            chunk_idx, local_idx = self._storage.get_chunk_for_index(i)
+            chunk = self._storage.chunks[chunk_idx]
+            
+            if chunk.is_identity:
+                src = chunk.source
+                return src.row_indices(local_idx)
+            else:
+                src = chunk.source
+                actual_idx = int(chunk.local_indices[local_idx])
+                return src.row_indices(actual_idx)
+        else:
+            self._ensure_custom()
+            return self.row_indices(i)
+    
+    def row_length(self, i: int) -> int:
+        """Get number of non-zeros in row i.
+        
+        Args:
+            i: Row index (0 <= i < rows)
+            
+        Returns:
+            Number of non-zero elements in row i
+        """
+        if self._backend == Backend.CUSTOM:
+            return int(self._storage.indptr[i + 1] - self._storage.indptr[i])
+        elif self._backend == Backend.VIRTUAL:
+            chunk_idx, local_idx = self._storage.get_chunk_for_index(i)
+            chunk = self._storage.chunks[chunk_idx]
+            
+            if chunk.is_identity:
+                src = chunk.source
+                return src.row_length(local_idx)
+            else:
+                src = chunk.source
+                actual_idx = int(chunk.local_indices[local_idx])
+                return src.row_length(actual_idx)
+        else:
+            self._ensure_custom()
+            return self.row_length(i)
     
     # =========================================================================
     # Factory Methods

@@ -19,6 +19,7 @@ Example:
 """
 
 from typing import Tuple, Any, Optional, Union, List, TYPE_CHECKING
+import numpy as np
 
 from ._array import Array, zeros, empty, from_list
 from ._dtypes import normalize_dtype, validate_dtype
@@ -27,6 +28,7 @@ from ._backend import (
     CustomStorage, VirtualStorage, MappedStorage, ChunkInfo
 )
 from ._ownership import RefChain, OwnershipTracker, ensure_alive
+from ._base import CSCBase
 
 if TYPE_CHECKING:
     from ._csr import SclCSR
@@ -34,7 +36,7 @@ if TYPE_CHECKING:
 __all__ = ['SclCSC', 'CSC']
 
 
-class SclCSC:
+class SclCSC(CSCBase):
     """Smart CSC Sparse Matrix with automatic backend management.
     
     A column-oriented sparse matrix that automatically manages:

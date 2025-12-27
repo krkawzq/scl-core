@@ -262,7 +262,7 @@ void detection_rate(
 /// @param means Input means, PRE-ALLOCATED
 /// @param vars Input variances, PRE-ALLOCATED
 /// @param out_dispersion Output dispersion values, PRE-ALLOCATED
-void dispersion(
+inline void dispersion(
     Array<const Real> means,
     Array<const Real> vars,
     Array<Real> out_dispersion

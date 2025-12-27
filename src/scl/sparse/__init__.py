@@ -102,10 +102,25 @@ from ._ownership import (
 )
 
 # =============================================================================
+# Base Classes (Abstract Interfaces)
+# =============================================================================
+from ._base import (
+    SparseBase,
+    CSRBase,
+    CSCBase,
+    SparseFormat,
+)
+
+# =============================================================================
 # Smart Sparse Matrices (Main API)
 # =============================================================================
 from ._csr import SclCSR, CSR
 from ._csc import SclCSC, CSC
+
+# =============================================================================
+# Callback-Based Sparse Matrices (User-Extensible)
+# =============================================================================
+from ._callback import CallbackCSR, CallbackCSC
 
 # Aliases for Virtual matrices (same as base classes, for backward compatibility)
 # Virtual behavior is handled via Backend.VIRTUAL, not separate classes
@@ -157,24 +172,48 @@ from ._ops import (
 # =============================================================================
 
 def is_sparse_like(obj) -> bool:
-    """Check if object is a sparse matrix-like type."""
-    return isinstance(obj, (SclCSR, SclCSC))
+    """Check if object is a sparse matrix-like type.
+    
+    Returns True for:
+    - SclCSR, SclCSC (standard matrices)
+    - CallbackCSR, CallbackCSC (callback-based matrices)
+    - Any subclass of SparseBase
+    """
+    return isinstance(obj, SparseBase)
 
 
 def is_csr_like(obj) -> bool:
-    """Check if object is CSR-like."""
-    return isinstance(obj, SclCSR)
+    """Check if object is CSR-like.
+    
+    Returns True for:
+    - SclCSR (standard CSR)
+    - CallbackCSR (callback-based CSR)
+    - Any subclass of CSRBase
+    """
+    return isinstance(obj, CSRBase)
 
 
 def is_csc_like(obj) -> bool:
-    """Check if object is CSC-like."""
-    return isinstance(obj, SclCSC)
+    """Check if object is CSC-like.
+    
+    Returns True for:
+    - SclCSC (standard CSC)
+    - CallbackCSC (callback-based CSC)
+    - Any subclass of CSCBase
+    """
+    return isinstance(obj, CSCBase)
 
 
 # =============================================================================
 # Public API
 # =============================================================================
 __all__ = [
+    # ---- Base Classes (Abstract) ----
+    'SparseBase',
+    'CSRBase',
+    'CSCBase',
+    'SparseFormat',
+    
     # ---- Core Classes ----
     'Array',
     'SclCSR',
@@ -183,6 +222,10 @@ __all__ = [
     'CSC',  # Alias
     'VirtualCSR',  # Alias for SclCSR (backward compatibility)
     'VirtualCSC',  # Alias for SclCSC (backward compatibility)
+    
+    # ---- Callback Classes (User-Extensible) ----
+    'CallbackCSR',
+    'CallbackCSC',
     
     # ---- Backend/Ownership (advanced) ----
     'Backend',

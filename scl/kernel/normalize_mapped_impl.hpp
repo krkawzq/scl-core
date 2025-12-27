@@ -258,12 +258,14 @@ scl::io::OwnedSparse<T, IsCSR> scale_rows_mapped(
 
     SCL_CHECK_DIM(scales.len >= static_cast<Size>(n_primary), "Scales dim mismatch");
 
-    // Allocate owned storage
-    scl::io::OwnedSparse<T, IsCSR> owned(matrix.rows, matrix.cols, nnz);
+    // Allocate vectors
+    std::vector<T> out_data(static_cast<size_t>(nnz));
+    std::vector<Index> out_indices(static_cast<size_t>(nnz));
+    std::vector<Index> out_indptr(static_cast<size_t>(n_primary) + 1);
 
     // Copy structure
-    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
-    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, out_indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, out_indices.begin());
 
     kernel::mapped::hint_prefetch(matrix);
 
@@ -277,7 +279,7 @@ scl::io::OwnedSparse<T, IsCSR> scale_rows_mapped(
 
         T scale = scales[p];
         const T* src = matrix.data() + start;
-        T* dst = owned.data.data() + start;
+        T* dst = out_data.data() + start;
 
         if (scale == T(1)) {
             std::copy(src, src + len, dst);
@@ -286,7 +288,12 @@ scl::io::OwnedSparse<T, IsCSR> scale_rows_mapped(
         }
     });
 
-    return owned;
+    return scl::io::OwnedSparse<T, IsCSR>(
+        std::move(out_data),
+        std::move(out_indices),
+        std::move(out_indptr),
+        matrix.rows, matrix.cols
+    );
 }
 
 /// @brief Normalize rows - returns materialized result

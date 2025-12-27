@@ -62,6 +62,7 @@ from . import mmap
 from . import io
 from . import sorting
 from . import core
+from . import callback
 
 __all__ = [
     'lib_loader',
@@ -87,6 +88,7 @@ __all__ = [
     'io',
     'sorting',
     'core',
+    'callback',
 ]
 
 __version__ = '0.1.0'

@@ -58,11 +58,14 @@ concept IsMappedCustomSparse = requires {
 } && HasPrefetch<T> && HasDropCache<T>;
 
 /// @brief Detect if type is MappedVirtualSparse
+///
+/// MappedVirtualSparse has materialize() method which CustomSparse/VirtualSparse don't have
 template <typename T>
 concept IsMappedVirtualSparse = requires(const T& t) {
     typename T::ValueType;
     typename T::Tag;
     { t.nnz() } -> std::convertible_to<Index>;
+    { t.materialize() };  // Only MappedVirtualSparse has this
 };
 
 } // namespace detail
@@ -294,8 +297,10 @@ inline std::vector<BalancedRange> compute_balanced_ranges_from_indptr(
 
     // Extract row lengths from indptr
     std::vector<Index> lengths(static_cast<Size>(n_primary));
+
+    // Use primary_length accessor which works for all matrix types
     for (Index i = 0; i < n_primary; ++i) {
-        lengths[i] = matrix.indptr[i + 1] - matrix.indptr[i];
+        lengths[i] = scl::primary_length(matrix, i);
     }
 
     return compute_balanced_ranges(lengths.data(), n_primary, n_partitions);

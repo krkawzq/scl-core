@@ -3,6 +3,7 @@
 #include "scl/config.hpp"
 #include "scl/core/type.hpp"
 #include "scl/core/macros.hpp"
+#include "scl/core/error.hpp"
 #include "scl/core/simd.hpp"
 #include <cstring>  // For std::memcpy, std::memmove, std::memset
 #include <atomic>   // For std::atomic_thread_fence
@@ -194,18 +195,30 @@ private:
 // =============================================================================
 
 /// @brief Fill memory with a value using aggressive SIMD unrolling.
+///
+/// Supports multiple types with type-appropriate SIMD tags:
+/// - Real: uses simd::Tag
+/// - Index: uses simd::IndexTag
+/// - Other types: uses ScalableTag<T>
 template <typename T>
 SCL_FORCE_INLINE void fill(Array<T> span, T value) {
     namespace s = scl::simd;
-    const s::Tag d;
+
+    // Select appropriate SIMD tag based on type
+    using SimdTag = std::conditional_t<
+        std::is_same_v<T, Real>, s::Tag,
+        std::conditional_t<std::is_same_v<T, Index>, s::IndexTag,
+            hwy::HWY_NAMESPACE::ScalableTag<T>>>;
+
+    const SimdTag d;
     const size_t N = span.len;
-    const size_t lanes = s::lanes();
-    
+    const size_t lanes = s::Lanes(d);
+
     // Broadcast value
     const auto v_val = s::Set(d, value);
 
     size_t i = 0;
-    
+
     // 4-way Unrolled SIMD Loop
     for (; i + 4 * lanes <= N; i += 4 * lanes) {
         s::Store(v_val, d, span.ptr + i);

@@ -294,7 +294,7 @@ void primary_sums_masked(
 /// @param data Input data
 /// @param workspace Temporary buffer (size >= data.size())
 /// @param out_median Output median value
-void median(
+inline void median(
     Array<const Real> data,
     Array<Real> workspace,
     Real& out_median

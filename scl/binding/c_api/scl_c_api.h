@@ -1468,6 +1468,168 @@ int scl_spmv_trans_mapped_csc(
     scl_real_t beta
 );
 
+// =============================================================================
+// Callback-Based Sparse Matrices
+// =============================================================================
+
+/// @brief Handle type for callback sparse matrices
+typedef int64_t scl_callback_handle_t;
+
+/// @brief Callback function types for sparse matrix access
+typedef scl_index_t (*scl_get_rows_callback)(void* context);
+typedef scl_index_t (*scl_get_cols_callback)(void* context);
+typedef scl_index_t (*scl_get_nnz_callback)(void* context);
+typedef int (*scl_get_primary_values_callback)(void* context, scl_index_t i, 
+                                                scl_real_t** out_data, scl_index_t* out_len);
+typedef int (*scl_get_primary_indices_callback)(void* context, scl_index_t i,
+                                                 scl_index_t** out_indices, scl_index_t* out_len);
+typedef scl_index_t (*scl_get_primary_length_callback)(void* context, scl_index_t i);
+typedef int (*scl_prefetch_range_callback)(void* context, scl_index_t start, scl_index_t end);
+typedef int (*scl_release_primary_callback)(void* context, scl_index_t i);
+
+/// @brief Virtual function table for callback-based sparse matrices
+///
+/// Required fields (must be non-null):
+/// - get_rows, get_cols, get_nnz
+/// - get_primary_values, get_primary_indices
+///
+/// Optional fields (can be null):
+/// - get_primary_length: Fast length query
+/// - prefetch_range: Batch prefetch for performance
+/// - release_primary: Release resources after use
+typedef struct {
+    scl_get_rows_callback get_rows;
+    scl_get_cols_callback get_cols;
+    scl_get_nnz_callback get_nnz;
+    scl_get_primary_values_callback get_primary_values;
+    scl_get_primary_indices_callback get_primary_indices;
+    scl_get_primary_length_callback get_primary_length;     // Optional
+    scl_prefetch_range_callback prefetch_range;             // Optional
+    scl_release_primary_callback release_primary;           // Optional
+} scl_callback_vtable_t;
+
+// --- Lifecycle ---
+
+/// @brief Create a callback-based CSR matrix
+/// @param context User context pointer (passed to all callbacks)
+/// @param vtable Pointer to callback function table
+/// @param out_handle Output: handle for the created matrix
+/// @return 0 on success, error code on failure
+int scl_create_callback_csr(
+    void* context,
+    const scl_callback_vtable_t* vtable,
+    scl_callback_handle_t* out_handle
+);
+
+/// @brief Create a callback-based CSC matrix
+int scl_create_callback_csc(
+    void* context,
+    const scl_callback_vtable_t* vtable,
+    scl_callback_handle_t* out_handle
+);
+
+/// @brief Destroy a callback CSR matrix
+int scl_destroy_callback_csr(scl_callback_handle_t handle);
+
+/// @brief Destroy a callback CSC matrix
+int scl_destroy_callback_csc(scl_callback_handle_t handle);
+
+// --- Properties ---
+
+/// @brief Get shape of callback CSR matrix
+int scl_callback_csr_shape(
+    scl_callback_handle_t handle,
+    scl_index_t* out_rows,
+    scl_index_t* out_cols,
+    scl_index_t* out_nnz
+);
+
+/// @brief Get shape of callback CSC matrix
+int scl_callback_csc_shape(
+    scl_callback_handle_t handle,
+    scl_index_t* out_rows,
+    scl_index_t* out_cols,
+    scl_index_t* out_nnz
+);
+
+// --- Statistics (CSR) ---
+
+/// @brief Compute row sums for callback CSR
+int scl_callback_csr_row_sums(scl_callback_handle_t handle, scl_real_t* output);
+
+/// @brief Compute row means for callback CSR
+int scl_callback_csr_row_means(scl_callback_handle_t handle, scl_real_t* output);
+
+/// @brief Compute row variances for callback CSR
+int scl_callback_csr_row_variances(
+    scl_callback_handle_t handle,
+    scl_real_t* output,
+    int ddof
+);
+
+/// @brief Compute row nnz counts for callback CSR
+int scl_callback_csr_row_nnz(scl_callback_handle_t handle, scl_index_t* output);
+
+// --- Statistics (CSC) ---
+
+/// @brief Compute column sums for callback CSC
+int scl_callback_csc_col_sums(scl_callback_handle_t handle, scl_real_t* output);
+
+/// @brief Compute column means for callback CSC
+int scl_callback_csc_col_means(scl_callback_handle_t handle, scl_real_t* output);
+
+/// @brief Compute column variances for callback CSC
+int scl_callback_csc_col_variances(
+    scl_callback_handle_t handle,
+    scl_real_t* output,
+    int ddof
+);
+
+/// @brief Compute column nnz counts for callback CSC
+int scl_callback_csc_col_nnz(scl_callback_handle_t handle, scl_index_t* output);
+
+// --- Utility ---
+
+/// @brief Prefetch a range of rows for callback CSR
+int scl_callback_csr_prefetch(
+    scl_callback_handle_t handle,
+    scl_index_t start,
+    scl_index_t end
+);
+
+/// @brief Prefetch a range of columns for callback CSC
+int scl_callback_csc_prefetch(
+    scl_callback_handle_t handle,
+    scl_index_t start,
+    scl_index_t end
+);
+
+/// @brief Invalidate cached dimensions for callback CSR
+int scl_callback_csr_invalidate_cache(scl_callback_handle_t handle);
+
+/// @brief Invalidate cached dimensions for callback CSC
+int scl_callback_csc_invalidate_cache(scl_callback_handle_t handle);
+
+// --- Direct Access (for debugging) ---
+
+/// @brief Get row data from callback CSR
+int scl_callback_csr_get_row(
+    scl_callback_handle_t handle,
+    scl_index_t row_idx,
+    scl_real_t** out_values,
+    scl_index_t** out_indices,
+    scl_index_t* out_len
+);
+
+/// @brief Get column data from callback CSC
+int scl_callback_csc_get_col(
+    scl_callback_handle_t handle,
+    scl_index_t col_idx,
+    scl_real_t** out_values,
+    scl_index_t** out_indices,
+    scl_index_t* out_len
+);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

@@ -103,7 +103,7 @@ SCL_FORCE_INLINE void argsort_buffered(
     Array<Byte> buffer
 ) {
     SCL_ASSERT(keys.len == indices.len, "Argsort: Indices size mismatch");
-    SCL_ASSERT(buffer.len >= keys.byte_size(), "Argsort: Buffer too small");
+    SCL_ASSERT(buffer.len >= keys.len * sizeof(T), "Argsort: Buffer too small");
 
     T* buffer_ptr = reinterpret_cast<T*>(buffer.ptr);
     Array<T> key_copy(buffer_ptr, keys.len);
@@ -121,7 +121,7 @@ SCL_FORCE_INLINE void argsort_buffered_descending(
     Array<Byte> buffer
 ) {
     SCL_ASSERT(keys.len == indices.len, "Argsort: Indices size mismatch");
-    SCL_ASSERT(buffer.len >= keys.byte_size(), "Argsort: Buffer too small");
+    SCL_ASSERT(buffer.len >= keys.len * sizeof(T), "Argsort: Buffer too small");
 
     T* buffer_ptr = reinterpret_cast<T*>(buffer.ptr);
     Array<T> key_copy(buffer_ptr, keys.len);

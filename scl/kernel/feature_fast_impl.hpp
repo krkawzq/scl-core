@@ -368,7 +368,7 @@ void detection_rate_virtual(
 // =============================================================================
 
 /// @brief SIMD dispersion computation
-void dispersion_simd(
+inline void dispersion_simd(
     Array<const Real> means,
     Array<const Real> vars,
     Array<Real> out_dispersion

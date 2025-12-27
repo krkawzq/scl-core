@@ -194,13 +194,14 @@ scl::io::OwnedSparse<T, IsCSR> log1p_mapped(
     const Index n_primary = scl::primary_size(matrix);
     const Index nnz = matrix.nnz();
 
-    // Allocate owned storage
-    scl::io::OwnedSparse<T, IsCSR> owned(
-        matrix.rows, matrix.cols, nnz);
+    // Allocate vectors
+    std::vector<T> out_data(static_cast<size_t>(nnz));
+    std::vector<Index> out_indices(static_cast<size_t>(nnz));
+    std::vector<Index> out_indptr(static_cast<size_t>(n_primary) + 1);
 
     // Copy structure (indptr, indices)
-    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
-    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, out_indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, out_indices.begin());
 
     // Prefetch hint
     kernel::mapped::hint_prefetch(matrix);
@@ -213,12 +214,17 @@ scl::io::OwnedSparse<T, IsCSR> log1p_mapped(
 
         if (len > 0) {
             const T* src = matrix.data() + start;
-            T* dst = owned.data.data() + start;
+            T* dst = out_data.data() + start;
             detail::copy_log1p_simd(src, dst, len);
         }
     });
 
-    return owned;
+    return scl::io::OwnedSparse<T, IsCSR>(
+        std::move(out_data),
+        std::move(out_indices),
+        std::move(out_indptr),
+        matrix.rows, matrix.cols
+    );
 }
 
 /// @brief log2p1 for MappedCustomSparse
@@ -230,11 +236,13 @@ scl::io::OwnedSparse<T, IsCSR> log2p1_mapped(
     const Index n_primary = scl::primary_size(matrix);
     const Index nnz = matrix.nnz();
 
-    scl::io::OwnedSparse<T, IsCSR> owned(
-        matrix.rows, matrix.cols, nnz);
+    // Allocate vectors
+    std::vector<T> out_data(static_cast<size_t>(nnz));
+    std::vector<Index> out_indices(static_cast<size_t>(nnz));
+    std::vector<Index> out_indptr(static_cast<size_t>(n_primary) + 1);
 
-    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
-    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, out_indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, out_indices.begin());
 
     kernel::mapped::hint_prefetch(matrix);
 
@@ -245,12 +253,17 @@ scl::io::OwnedSparse<T, IsCSR> log2p1_mapped(
 
         if (len > 0) {
             const T* src = matrix.data() + start;
-            T* dst = owned.data.data() + start;
+            T* dst = out_data.data() + start;
             detail::copy_log2p1_simd(src, dst, len);
         }
     });
 
-    return owned;
+    return scl::io::OwnedSparse<T, IsCSR>(
+        std::move(out_data),
+        std::move(out_indices),
+        std::move(out_indptr),
+        matrix.rows, matrix.cols
+    );
 }
 
 /// @brief expm1 for MappedCustomSparse
@@ -262,11 +275,13 @@ scl::io::OwnedSparse<T, IsCSR> expm1_mapped(
     const Index n_primary = scl::primary_size(matrix);
     const Index nnz = matrix.nnz();
 
-    scl::io::OwnedSparse<T, IsCSR> owned(
-        matrix.rows, matrix.cols, nnz);
+    // Allocate vectors
+    std::vector<T> out_data(static_cast<size_t>(nnz));
+    std::vector<Index> out_indices(static_cast<size_t>(nnz));
+    std::vector<Index> out_indptr(static_cast<size_t>(n_primary) + 1);
 
-    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, owned.indptr.begin());
-    std::copy(matrix.indices(), matrix.indices() + nnz, owned.indices.begin());
+    std::copy(matrix.indptr(), matrix.indptr() + n_primary + 1, out_indptr.begin());
+    std::copy(matrix.indices(), matrix.indices() + nnz, out_indices.begin());
 
     kernel::mapped::hint_prefetch(matrix);
 
@@ -277,12 +292,17 @@ scl::io::OwnedSparse<T, IsCSR> expm1_mapped(
 
         if (len > 0) {
             const T* src = matrix.data() + start;
-            T* dst = owned.data.data() + start;
+            T* dst = out_data.data() + start;
             detail::copy_expm1_simd(src, dst, len);
         }
     });
 
-    return owned;
+    return scl::io::OwnedSparse<T, IsCSR>(
+        std::move(out_data),
+        std::move(out_indices),
+        std::move(out_indptr),
+        matrix.rows, matrix.cols
+    );
 }
 
 // =============================================================================
