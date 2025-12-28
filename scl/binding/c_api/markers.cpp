@@ -134,7 +134,7 @@ scl_error_t scl_markers_find_markers(
         wrapper->visit([&](auto& expr) {
             // This is a simplified version - the actual implementation may be more complex
             // For now, we'll use a basic marker finding approach
-            scl::kernel::markers::find_markers(
+            scl::kernel::markers::filter_markers(
                 expr,
                 scl::Array<const scl::Index>(
                     reinterpret_cast<const scl::Index*>(group_labels),

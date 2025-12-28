@@ -7,6 +7,7 @@
 #include "scl/binding/c_api/core/internal.hpp"
 #include "scl/core/sparse.hpp"
 #include "scl/core/registry.hpp"
+#include "scl/kernel/sparse.hpp"
 
 #include <span>
 #include <vector>

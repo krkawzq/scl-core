@@ -141,7 +141,7 @@ Real silhouette_score(
         std::atomic<Size> valid_count{0};
 
         scl::threading::WorkspacePool<Real> workspace;
-        workspace.init(scl::threading::max_threads(), static_cast<Size>(n_clusters));
+        workspace.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_clusters));
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
             Index my_cluster = labels.ptr[i];
@@ -153,11 +153,11 @@ Real silhouette_score(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices_unsafe()[i];
-            const Index row_end = distances.row_indices_unsafe()[i + 1];
+            const Index row_start = distances.row_indices_unsafe(i];
+            const Index row_end = distances.row_indices_unsafe(i + 1];
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = distances.col_indices_unsafe()[j];
+                Index neighbor = distances.col_indices_unsafe(j];
                 if (neighbor == static_cast<Index>(i)) continue;
 
                 T dist_val = distances.values()[j];
@@ -211,11 +211,11 @@ Real silhouette_score(
             cluster_dist_sum[c] = Real(0.0);
         }
 
-        const Index row_start = distances.row_indices_unsafe()[i];
-        const Index row_end = distances.row_indices_unsafe()[i + 1];
+        const Index row_start = distances.row_indices_unsafe(i];
+        const Index row_end = distances.row_indices_unsafe(i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = distances.col_indices_unsafe()[j];
+            Index neighbor = distances.col_indices_unsafe(j];
             if (neighbor == static_cast<Index>(i)) continue;
 
             T dist_val = distances.values()[j];
@@ -275,7 +275,7 @@ void silhouette_samples(
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
         scl::threading::WorkspacePool<Real> workspace;
-        workspace.init(scl::threading::max_threads(), static_cast<Size>(n_clusters));
+        workspace.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_clusters));
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
             Index my_cluster = labels.ptr[i];
@@ -290,11 +290,11 @@ void silhouette_samples(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices_unsafe()[i];
-            const Index row_end = distances.row_indices_unsafe()[i + 1];
+            const Index row_start = distances.row_indices_unsafe(i];
+            const Index row_end = distances.row_indices_unsafe(i + 1];
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = distances.col_indices_unsafe()[j];
+                Index neighbor = distances.col_indices_unsafe(j];
                 if (neighbor == static_cast<Index>(i)) continue;
 
                 T dist_val = distances.values()[j];
@@ -340,11 +340,11 @@ void silhouette_samples(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices_unsafe()[i];
-            const Index row_end = distances.row_indices_unsafe()[i + 1];
+            const Index row_start = distances.row_indices_unsafe(i];
+            const Index row_end = distances.row_indices_unsafe(i + 1];
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = distances.col_indices_unsafe()[j];
+                Index neighbor = distances.col_indices_unsafe(j];
                 if (neighbor == static_cast<Index>(i)) continue;
 
                 T dist_val = distances.values()[j];
@@ -673,7 +673,7 @@ void batch_entropy(
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
         scl::threading::WorkspacePool<Size> workspace;
-        workspace.init(scl::threading::max_threads(), static_cast<Size>(n_batches));
+        workspace.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_batches));
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
             compute_cell_entropy(i, workspace.get(thread_id));
@@ -745,7 +745,7 @@ void lisi(
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
         scl::threading::WorkspacePool<Size> workspace;
-        workspace.init(scl::threading::max_threads(), static_cast<Size>(n_labels));
+        workspace.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_labels));
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
             compute_lisi(i, workspace.get(thread_id));

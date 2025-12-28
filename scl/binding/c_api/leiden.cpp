@@ -144,7 +144,10 @@ scl_error_t scl_leiden_compute_modularity(
         wrapper->visit([&](const auto& adj) {
             modularity = compute_modularity(
                 adj,
-                reinterpret_cast<const Index*>(partition),
+                scl::Array<const Index>(
+                    reinterpret_cast<const Index*>(partition),
+                    static_cast<Size>(n_nodes)
+                ),
                 static_cast<Real>(resolution)
             );
         });

@@ -459,8 +459,7 @@ SCL_HOT bool parallel_local_moving(
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Atomic sigma_tot for parallel updates
-    std::atomic<int64_t>* atomic_sigma = static_cast<std::atomic<int64_t>*>(
-        scl::memory::aligned_alloc<int64_t>(N, SCL_ALIGNMENT));
+    std::atomic<int64_t>* atomic_sigma = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
     
     // Convert sigma_tot to fixed-point for atomic operations
     constexpr int64_t SCALE = 1000000;

@@ -164,28 +164,27 @@ SCL_FORCE_INLINE void shuffle_indices(Index* indices, Index n, FastRNG& rng) noe
 }
 
 // -----------------------------------------------------------------------------
-// SIMD Statistics
+// SIMD Statistics (using Highway SIMD for type-safe operations)
 // -----------------------------------------------------------------------------
 
-#if defined(__AVX2__) || defined(__AVX__)
-#include <immintrin.h>
-
 SCL_FORCE_INLINE Real compute_sum(const Real* v, Index n) noexcept {
-    __m256d sum = _mm256_setzero_pd();
-    Index i = 0;
-
-    for (; i + 4 <= n; i += 4) {
-        sum = _mm256_add_pd(sum, _mm256_loadu_pd(v + i));
+    namespace s = scl::simd;
+    const s::Tag d;
+    const size_t lanes = s::Lanes(d);
+    
+    auto vec_sum = s::Zero(d);
+    size_t i = 0;
+    
+    for (; i + lanes <= static_cast<size_t>(n); i += lanes) {
+        vec_sum = s::Add(vec_sum, s::LoadU(d, v + i));
     }
-
-    alignas(32) double temp[4];
-    _mm256_store_pd(temp, sum);
-    Real result = temp[0] + temp[1] + temp[2] + temp[3];
-
-    for (; i < n; ++i) {
+    
+    Real result = s::ReduceSum(d, vec_sum);
+    
+    for (; i < static_cast<size_t>(n); ++i) {
         result += v[i];
     }
-
+    
     return result;
 }
 
@@ -195,25 +194,27 @@ SCL_FORCE_INLINE Real compute_mean(const Real* values, Index n) noexcept {
 }
 
 SCL_FORCE_INLINE Real compute_sum_sq_diff(const Real* values, Index n, Real mean) noexcept {
-    __m256d sum_sq = _mm256_setzero_pd();
-    __m256d mean_v = _mm256_set1_pd(mean);
-    Index i = 0;
-
-    for (; i + 4 <= n; i += 4) {
-        __m256d v = _mm256_loadu_pd(values + i);
-        __m256d d = _mm256_sub_pd(v, mean_v);
-        sum_sq = _mm256_fmadd_pd(d, d, sum_sq);
+    namespace s = scl::simd;
+    const s::Tag d;
+    const size_t lanes = s::Lanes(d);
+    
+    auto vec_mean = s::Set(d, mean);
+    auto vec_sum_sq = s::Zero(d);
+    size_t i = 0;
+    
+    for (; i + lanes <= static_cast<size_t>(n); i += lanes) {
+        auto v = s::LoadU(d, values + i);
+        auto diff = s::Sub(v, vec_mean);
+        vec_sum_sq = s::MulAdd(diff, diff, vec_sum_sq);
     }
-
-    alignas(32) double temp[4];
-    _mm256_store_pd(temp, sum_sq);
-    Real result = temp[0] + temp[1] + temp[2] + temp[3];
-
-    for (; i < n; ++i) {
+    
+    Real result = s::ReduceSum(d, vec_sum_sq);
+    
+    for (; i < static_cast<size_t>(n); ++i) {
         Real d = values[i] - mean;
         result += d * d;
     }
-
+    
     return result;
 }
 
@@ -228,26 +229,34 @@ SCL_FORCE_INLINE Real compute_m2(const Real* values, Index n, Real mean) noexcep
 }
 
 void standardize(const Real* values, Index n, Real* z_values) noexcept {
+    namespace s = scl::simd;
+    const s::Tag d;
+    const size_t lanes = s::Lanes(d);
+    
     Real mean = compute_mean(values, n);
     Real var = compute_variance(values, n, mean);
     Real inv_std = (var > config::EPSILON) ? Real(1) / std::sqrt(var) : Real(1);
     
-    __m256d mean_v = _mm256_set1_pd(mean);
-    __m256d inv_std_v = _mm256_set1_pd(inv_std);
+    auto vec_mean = s::Set(d, mean);
+    auto vec_inv_std = s::Set(d, inv_std);
+    size_t i = 0;
     
-    Index i = 0;
-    for (; i + 4 <= n; i += 4) {
-        __m256d v = _mm256_loadu_pd(values + i);
-        __m256d z = _mm256_mul_pd(_mm256_sub_pd(v, mean_v), inv_std_v);
-        _mm256_storeu_pd(z_values + i, z);
+    for (; i + lanes <= static_cast<size_t>(n); i += lanes) {
+        auto v = s::LoadU(d, values + i);
+        auto z = s::Mul(s::Sub(v, vec_mean), vec_inv_std);
+        s::StoreU(z, d, z_values + i);
     }
-
-    for (; i < n; ++i) {
+    
+    for (; i < static_cast<size_t>(n); ++i) {
         z_values[i] = (values[i] - mean) * inv_std;
     }
 }
 
-#else  // Scalar fallback
+// -----------------------------------------------------------------------------
+// Scalar fallback (not needed, Highway handles this automatically)
+// -----------------------------------------------------------------------------
+
+#if 0  // Scalar fallback now handled by Highway
 
 SCL_FORCE_INLINE Real compute_sum(const Real* v, Index n) noexcept {
     Real sum = 0;

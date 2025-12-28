@@ -166,7 +166,7 @@ scl_error_t scl_metrics_homogeneity_completeness_vmeasure(
         scl::Real c = scl::Real(0);
         scl::Real v = scl::Real(0);
 
-        scl::kernel::metrics::homogeneity_completeness_vmeasure(
+        scl::kernel::metrics::clustering_metrics(
             scl::Array<const scl::Index>(
                 reinterpret_cast<const scl::Index*>(labels_true),
                 static_cast<scl::Size>(n_cells)

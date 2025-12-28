@@ -301,7 +301,7 @@ scl_error_t scl_pick_soft_threshold(
         auto* wrapper = static_cast<scl_sparse_matrix*>(expression);
         Real best = wrapper->visit([&](auto& m) -> Real {
             return pick_soft_threshold(m, n_cells, n_genes,
-                                      reinterpret_cast<const Real*>(powers_to_test), n_powers,
+                                      const_cast<Real*>(reinterpret_cast<const Real*>(powers_to_test)), n_powers,
                                       reinterpret_cast<Real*>(scale_free_fits),
                                       reinterpret_cast<Real*>(mean_connectivity),
                                       convert_corr_type(corr_type));

@@ -36,7 +36,7 @@ scl_error_t scl_diffusion_compute_transition_matrix(
             using T = typename MatType::ValueType;
             constexpr bool IsCSR = MatType::is_csr;
             
-            // Note: compute_transition_matrix modifies matrix in-place, no separate values array needed
+            // compute_transition_matrix modifies matrix in-place
             scl::kernel::diffusion::compute_transition_matrix<T, IsCSR>(mat, symmetric != 0);
         });
         return SCL_OK;

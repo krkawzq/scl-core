@@ -44,7 +44,7 @@ scl_error_t scl_louvain_clustering(
         if (err != SCL_OK) return err;
 
         wrapper->visit([&](auto& adj) {
-            scl::kernel::louvain::louvain_clustering(
+            scl::kernel::louvain::compute_modularity(
                 adj,
                 scl::Array<scl::Index>(
                     reinterpret_cast<scl::Index*>(labels),

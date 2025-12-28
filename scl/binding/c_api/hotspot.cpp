@@ -117,9 +117,7 @@ scl_error_t scl_hotspot_getis_ord_g_star(
                 g_star_arr,
                 z_scores_arr,
                 p_values_arr,
-                include_self != 0,
-                n_permutations,
-                seed
+                include_self != 0
             );
         });
         
