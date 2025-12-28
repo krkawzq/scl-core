@@ -12,11 +12,11 @@ We strictly enforce a "Human-in-the-Loop" architecture. Code is not just logic; 
 
 ### 1.1 Documentation Standard
 
-**Dual-File Documentation System**:
+**Documentation Location**:
 
-This project uses a dual-file documentation approach:
+This project uses a centralized documentation approach:
 - `xxx.hpp`: Implementation with minimal inline comments
-- `xxx.h`: Comprehensive API documentation (C++ syntax, documentation-only)
+- `docs/`: Comprehensive API documentation in Markdown format
 
 **Implementation Files (.hpp) - Minimal Comments**:
 
@@ -25,7 +25,7 @@ Implementation files should contain only brief, essential comments:
 - Non-obvious algorithm tricks or optimizations
 - Warning about subtle behavior
 
-Keep implementation clean and readable. All detailed documentation belongs in the corresponding `.h` file.
+Keep implementation clean and readable. All detailed documentation belongs in the `docs/` directory.
 
 ```cpp
 // GOOD - minimal inline comment
@@ -41,146 +41,143 @@ void normalize_rows(MatrixT& matrix, NormMode mode, Real eps) {
 /// @brief Normalizes each row of a sparse matrix to unit norm.
 /// @detailed This function computes the norm of each row and divides
 /// each element by the norm. Supports L1, L2, Max normalization...
-/// (This belongs in 。h)
+/// (This belongs in docs/)
 ```
 
-**API Documentation Files (.h) - Comprehensive Reference**:
+**API Documentation in docs/ - Comprehensive Reference**:
 
-The `.h` suffix indicates a documentation-only file using C++ syntax. These files are NOT compiled - the `.h` extension is chosen to enable C++ syntax highlighting while avoiding template instantiation issues.
+All API documentation is stored in the `docs/` directory using Markdown format. The documentation structure mirrors the codebase organization:
+- `docs/cpp/kernels/`: Documentation for kernel modules
+- `docs/cpp/core/`: Documentation for core utilities
+- `docs/cpp/mmap/`: Documentation for memory-mapped operations
+- `docs/api/`: API reference documentation
 
-**Structure**: Each `.h` file contains both documentation and function declarations:
-- Block comments (`/* */`) outside functions: Comprehensive API documentation
-- Function declarations: Actual C++ signatures with inline comments
-- Inline comments inside declarations: Key information visible during quick queries
-
-**Quick Query**: To extract only function signatures (skip documentation):
-```bash
-sed '/^\/\*/,/\*\/$/d' scl/kernel/normalize.h
-```
-
-This allows rapid interface inspection without reading full documentation.
+**Structure**: Each documentation file should contain:
+- Function signatures with C++ syntax
+- Comprehensive API documentation using the format specified below
+- Clear organization matching the codebase structure
 
 ### 1.2 API Documentation Format
 
-API files use block comments (`/* */`) for documentation, followed by actual function declarations with inline comments:
+API documentation in `docs/` uses Markdown format with code blocks for function signatures:
 
+```markdown
+# Normalize Kernels
+
+## row_norms
+
+**SUMMARY:**
+Compute the norm of each row in a CSR sparse matrix.
+
+**SIGNATURE:**
 ```cpp
-// =============================================================================
-// FILE: scl/kernel/normalize/normalize.h
-// BRIEF: API reference for normalization kernels
-// NOTE: Documentation only - do not include in builds
-// =============================================================================
-#pragma once
-
-namespace scl::kernel::normalize {
-
-/* -----------------------------------------------------------------------------
- * FUNCTION: row_norms
- * -----------------------------------------------------------------------------
- * SUMMARY:
- *     Compute the norm of each row in a CSR sparse matrix.
- *
- * PARAMETERS:
- *     matrix   [in]  CSR sparse matrix, shape (n_rows, n_cols)
- *     mode     [in]  Norm type: L1, L2, Max, or Sum
- *     output   [out] Pre-allocated buffer, size = n_rows
- *
- * PRECONDITIONS:
- *     - output.size() == matrix.rows()
- *     - matrix must be valid CSR format (sorted indices, no duplicates)
- *
- * POSTCONDITIONS:
- *     - output[i] contains the norm of row i
- *     - matrix is unchanged
- *
- * ALGORITHM:
- *     For each row i in parallel:
- *         1. Iterate over non-zero elements in row i
- *         2. Accumulate according to mode:
- *            - L1:  sum(|x_j|)
- *            - L2:  sqrt(sum(x_j^2))
- *            - Max: max(|x_j|)
- *            - Sum: sum(x_j)
- *         3. Write result to output[i]
- *
- * COMPLEXITY:
- *     Time:  O(nnz)
- *     Space: O(1) auxiliary
- *
- * THREAD SAFETY:
- *     Safe - parallelized over rows, no shared mutable state
- *
- * THROWS:
- *     DimensionError - if output.size() != matrix.rows()
- * -------------------------------------------------------------------------- */
 template <CSRLike MatrixT>
 void row_norms(
     const MatrixT& matrix,        // CSR matrix input
     NormMode mode,                 // L1, L2, Max, or Sum
     MutableSpan<Real> output       // Output buffer [n_rows]
 );
+```
 
-/* -----------------------------------------------------------------------------
- * FUNCTION: normalize_rows_inplace
- * -----------------------------------------------------------------------------
- * SUMMARY:
- *     Normalize each row of a CSR matrix to unit norm in-place.
- *
- * PARAMETERS:
- *     matrix   [in,out] Mutable CSR matrix, modified in-place
- *     mode     [in]     Norm type for normalization
- *     epsilon  [in]     Small constant to prevent division by zero
- *
- * PRECONDITIONS:
- *     - matrix must be valid CSR format
- *     - matrix values must be mutable
- *
- * POSTCONDITIONS:
- *     - Each row has unit norm under specified mode (if original norm > epsilon)
- *     - Rows with norm <= epsilon are unchanged
- *     - Matrix structure (indices, indptr) unchanged
- *
- * MUTABILITY:
- *     INPLACE - modifies matrix.values() directly
- *
- * ALGORITHM:
- *     For each row i in parallel:
- *         1. Compute norm of row i
- *         2. If norm > epsilon: divide each element by norm
- *         3. Otherwise: leave row unchanged
- *
- * COMPLEXITY:
- *     Time:  O(nnz)
- *     Space: O(1) auxiliary
- *
- * NUMERICAL NOTES:
- *     - Uses epsilon to handle zero/near-zero rows gracefully
- *     - L2 norm uses compensated summation for accuracy
- * -------------------------------------------------------------------------- */
+**PARAMETERS:**
+- matrix [in]  CSR sparse matrix, shape (n_rows, n_cols)
+- mode   [in]  Norm type: L1, L2, Max, or Sum
+- output [out] Pre-allocated buffer, size = n_rows
+
+**PRECONDITIONS:**
+- output.size() == matrix.rows()
+- matrix must be valid CSR format (sorted indices, no duplicates)
+
+**POSTCONDITIONS:**
+- output[i] contains the norm of row i
+- matrix is unchanged
+
+**ALGORITHM:**
+For each row i in parallel:
+1. Iterate over non-zero elements in row i
+2. Accumulate according to mode:
+   - L1:  sum(|x_j|)
+   - L2:  sqrt(sum(x_j^2))
+   - Max: max(|x_j|)
+   - Sum: sum(x_j)
+3. Write result to output[i]
+
+**COMPLEXITY:**
+- Time:  O(nnz)
+- Space: O(1) auxiliary
+
+**THREAD SAFETY:**
+Safe - parallelized over rows, no shared mutable state
+
+**THROWS:**
+DimensionError - if output.size() != matrix.rows()
+
+---
+
+## normalize_rows_inplace
+
+**SUMMARY:**
+Normalize each row of a CSR matrix to unit norm in-place.
+
+**SIGNATURE:**
+```cpp
 template <CSRLike MatrixT>
 void normalize_rows_inplace(
     MatrixT& matrix,               // CSR matrix, modified in-place
     NormMode mode,                 // Normalization type
     Real epsilon = 1e-12           // Zero-norm threshold
 );
+```
 
-/* -----------------------------------------------------------------------------
- * ENUM: NormMode
- * -----------------------------------------------------------------------------
- * VALUES:
- *     L1   - Sum of absolute values: sum(|x_i|)
- *     L2   - Euclidean norm: sqrt(sum(x_i^2))
- *     Max  - Maximum absolute value: max(|x_i|)
- *     Sum  - Simple sum (signed): sum(x_i)
- * -------------------------------------------------------------------------- */
+**PARAMETERS:**
+- matrix  [in,out] Mutable CSR matrix, modified in-place
+- mode    [in]     Norm type for normalization
+- epsilon [in]     Small constant to prevent division by zero
+
+**PRECONDITIONS:**
+- matrix must be valid CSR format
+- matrix values must be mutable
+
+**POSTCONDITIONS:**
+- Each row has unit norm under specified mode (if original norm > epsilon)
+- Rows with norm <= epsilon are unchanged
+- Matrix structure (indices, indptr) unchanged
+
+**MUTABILITY:**
+INPLACE - modifies matrix.values() directly
+
+**ALGORITHM:**
+For each row i in parallel:
+1. Compute norm of row i
+2. If norm > epsilon: divide each element by norm
+3. Otherwise: leave row unchanged
+
+**COMPLEXITY:**
+- Time:  O(nnz)
+- Space: O(1) auxiliary
+
+**NUMERICAL NOTES:**
+- Uses epsilon to handle zero/near-zero rows gracefully
+- L2 norm uses compensated summation for accuracy
+
+---
+
+## NormMode
+
+**VALUES:**
+- L1   - Sum of absolute values: sum(|x_i|)
+- L2   - Euclidean norm: sqrt(sum(x_i^2))
+- Max  - Maximum absolute value: max(|x_i|)
+- Sum  - Simple sum (signed): sum(x_i)
+
+**SIGNATURE:**
+```cpp
 enum class NormMode {
     L1,    // sum(|x_i|)
     L2,    // sqrt(sum(x_i^2))
     Max,   // max(|x_i|)
     Sum    // sum(x_i) - signed
 };
-
-} // namespace scl::kernel::normalize
 ```
 
 ### 1.3 API Documentation Sections
@@ -209,17 +206,17 @@ After the documentation block, include the actual function declaration with inli
 
 ### 1.4 Workflow Requirement
 
-**CRITICAL**: After completing any file modification task, you MUST update the corresponding `.h` file to reflect the changes.
+**CRITICAL**: After completing any file modification task, you MUST update the corresponding documentation in `docs/` to reflect the changes.
 
 Checklist before marking task complete:
 1. Implementation in `.hpp` file is correct
-2. Corresponding `.h` file exists
-3. `.h` contains actual function declarations (not just documentation)
-4. All function signatures in `.h` match implementation exactly
-5. Block comments document all PRECONDITIONS and POSTCONDITIONS
-6. Inline comments in declarations are concise and informative
+2. Corresponding documentation file exists in `docs/` directory
+3. Documentation contains actual function signatures in code blocks
+4. All function signatures in documentation match implementation exactly
+5. Documentation includes all PRECONDITIONS and POSTCONDITIONS
+6. Function signatures are clearly formatted with inline comments
 7. MUTABILITY section is correct for any in-place operations
-8. Quick query command works: `sed '/^\/\*/,/\*\/$/d' file.h` shows clean signatures
+8. Documentation structure matches codebase organization
 
 ### 1.5 Language and Formatting Rules
 
@@ -291,13 +288,12 @@ When completing any task, verify:
 
 - [ ] Implementation is correct and compiles
 - [ ] Code uses minimal inline comments
-- [ ] Corresponding `.h` file is created/updated
-- [ ] `.h` file contains actual function declarations (not just docs)
-- [ ] All function signatures in `.h` match implementation exactly
-- [ ] Inline comments in `.h` declarations are concise and aligned
+- [ ] Corresponding documentation file is created/updated in `docs/`
+- [ ] Documentation contains actual function signatures in code blocks
+- [ ] All function signatures in documentation match implementation exactly
+- [ ] Function signatures are clearly formatted with inline comments
 - [ ] PRECONDITIONS document all input requirements
 - [ ] POSTCONDITIONS document all guarantees
 - [ ] MUTABILITY is specified for state-changing functions
-- [ ] No Markdown or LaTeX in any comments
-- [ ] No examples in API documentation
-- [ ] Quick query works: `sed '/^\/\*/,/\*\/$/d' file.h` shows clean interfaces
+- [ ] Documentation structure matches codebase organization
+- [ ] No examples in API documentation (use precise contract descriptions)

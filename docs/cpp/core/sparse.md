@@ -4,7 +4,7 @@
 
 ## Overview
 
-This file provides the `Sparse<T, IsCSR>` struct, SCL-Core's primary sparse matrix data structure. Unlike traditional contiguous CSR/CSC formats, Sparse uses pointer arrays where each row/column can be stored in a separate allocation, enabling flexible integration with external data sources.
+This file provides the `` `Sparse<T, IsCSR>` `` struct, SCL-Core's primary sparse matrix data structure. Unlike traditional contiguous CSR/CSC formats, Sparse uses pointer arrays where each row/column can be stored in a separate allocation, enabling flexible integration with external data sources.
 
 Key features:
 - Discontiguous storage (each row/column can be in separate allocation)
@@ -13,13 +13,13 @@ Key features:
 - Lazy loading support (load rows/columns on demand)
 - Registry-managed metadata arrays
 
-**Header**: `#include "scl/core/sparse.hpp"`
+**Header**: `` `#include "scl/core/sparse.hpp"` ``
 
 ---
 
 ## Main APIs
 
-### Sparse<T, IsCSR>
+### `` `Sparse<T, IsCSR>` ``
 
 Sparse matrix structure with discontiguous storage.
 
@@ -116,17 +116,17 @@ Get array view of values in a row (CSR) or column (CSC).
 
 **Algorithm Description**
 
-Returns an Array<T> view of values in the specified row (CSR) or column (CSC):
+Returns an `` `Array<T>` `` view of values in the specified row (CSR) or column (CSC):
 - CSR: `primary_values(i)` = values in row i
 - CSC: `primary_values(j)` = values in column j
 
-The method performs pointer dereference: `data_ptrs[i]` cast to `T*` and wrapped in Array<T> with length from `lengths[i]`.
+The method performs pointer dereference: `data_ptrs[i]` cast to `` `T*` `` and wrapped in `` `Array<T>` `` with length from `lengths[i]`.
 
 **Edge Cases**
 
 - **Out-of-bounds index**: Debug builds assert, release builds undefined behavior
 - **Null pointer in data_ptrs**: Debug builds assert, release builds undefined behavior
-- **Zero-length row/column**: Returns empty Array<T> (ptr may be nullptr)
+- **Zero-length row/column**: Returns empty `` `Array<T>` `` (ptr may be nullptr)
 
 **Data Guarantees (Preconditions)**
 
@@ -136,8 +136,8 @@ The method performs pointer dereference: `data_ptrs[i]` cast to `T*` and wrapped
 
 **Complexity Analysis**
 
-- **Time**: O(1) - pointer dereference and Array construction
-- **Space**: O(1) - returns Array view (non-owning)
+- **Time**: O(1) - pointer dereference and `` `Array` `` construction
+- **Space**: O(1) - returns `` `Array` `` view (non-owning)
 
 **Example**
 
@@ -166,7 +166,7 @@ Get array view of column indices (CSR) or row indices (CSC).
 
 **Algorithm Description**
 
-Returns an Array<Index> view of column indices (CSR) or row indices (CSC):
+Returns an `` `Array<Index>` `` view of column indices (CSR) or row indices (CSC):
 - CSR: `primary_indices(i)` = column indices in row i
 - CSC: `primary_indices(j)` = row indices in column j
 
@@ -174,7 +174,7 @@ Returns an Array<Index> view of column indices (CSR) or row indices (CSC):
 
 - **Out-of-bounds index**: Debug builds assert, release builds undefined behavior
 - **Null pointer in indices_ptrs**: Debug builds assert, release builds undefined behavior
-- **Zero-length row/column**: Returns empty Array<Index>
+- **Zero-length row/column**: Returns empty `` `Array<Index>` ``
 
 **Data Guarantees (Preconditions)**
 
@@ -184,8 +184,8 @@ Returns an Array<Index> view of column indices (CSR) or row indices (CSC):
 
 **Complexity Analysis**
 
-- **Time**: O(1) - pointer dereference and Array construction
-- **Space**: O(1) - returns Array view
+- **Time**: O(1) - pointer dereference and `` `Array` `` construction
+- **Space**: O(1) - returns `` `Array` `` view
 
 **Example**
 
@@ -407,6 +407,6 @@ When using `new_registered()`:
 
 ## See Also
 
-- [Type System](./types) - Array<T> type used for views
+- [Type System](./types) - `` `Array<T>` `` type used for views
 - [Registry](./registry) - HandlerRegistry for memory tracking
 - [Memory Management](./memory) - Aligned allocation functions

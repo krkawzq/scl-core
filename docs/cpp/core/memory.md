@@ -13,7 +13,7 @@ Key features:
 - RAII wrapper for aligned buffers
 - Cache optimization hints (prefetch)
 
-**Header**: `#include "scl/core/memory.hpp"`
+**Header**: `` `#include "scl/core/memory.hpp"` ``
 
 ---
 

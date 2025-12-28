@@ -12,7 +12,7 @@ Key features:
 - Type-safe array views (Array<T>)
 - Generic concepts for container interoperability (ArrayLike, CSRLike)
 
-**Header**: `#include "scl/core/type.hpp"`
+**Header**: `` `#include "scl/core/type.hpp"` ``
 
 ---
 

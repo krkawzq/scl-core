@@ -6,13 +6,18 @@
 
 内核函数提供：
 
-- **稀疏工具** - 矩阵转换、验证、清理
-- **归一化** - 行/列归一化、缩放
-- **统计** - 统计检验、指标
+- **稀疏工具** - 矩阵转换、验证、清理、优化
+- **线性代数** - 稀疏矩阵向量乘法、Gram 矩阵
+- **预处理** - 归一化、缩放、对数变换、标准化
+- **特征选择** - 高变基因、质量控制指标
+- **统计** - 统计检验、相关性、多重检验校正
 - **邻居搜索** - KNN、批次平衡 KNN
 - **聚类** - Leiden、Louvain 社区检测
-- **空间分析** - 空间分析、热点检测
+- **空间分析** - 空间模式、热点检测、组织分析
 - **富集分析** - 基因集富集分析
+- **图操作** - 扩散、传播、中心性
+- **单细胞分析** - 标记基因、双细胞检测、速度、拟时序
+- **数据操作** - 合并、切片、重排序、采样、排列
 
 ## 分类
 
@@ -79,19 +84,70 @@ scl::kernel::softmax::log_softmax_inplace(values, len);
 scl::kernel::softmax::softmax_inplace(matrix);
 ```
 
+### 缩放与变换
+
+标准化、缩放和对数变换：
+
+```cpp
+#include "scl/kernel/scale.hpp"
+#include "scl/kernel/log1p.hpp"
+
+// 标准化矩阵
+scl::kernel::scale::standardize(matrix, means, stds, max_value, zero_center);
+
+// 缩放行
+scl::kernel::scale::scale_rows(matrix, scales);
+
+// Log1p 变换
+scl::kernel::log1p::log1p_inplace(matrix);
+
+// Log2(1+x) 变换
+scl::kernel::log1p::log2p1_inplace(matrix);
+
+// 反向变换
+scl::kernel::log1p::expm1_inplace(matrix);
+```
+
+### 线性代数
+
+稀疏矩阵向量乘法和 Gram 矩阵：
+
+```cpp
+#include "scl/kernel/algebra.hpp"
+#include "scl/kernel/gram.hpp"
+
+// 稀疏矩阵向量乘法: y = alpha * A * x + beta * y
+scl::kernel::algebra::spmv(A, x, y, alpha, beta);
+
+// 简单形式: y = A * x
+scl::kernel::algebra::spmv_simple(A, x, y);
+
+// Gram 矩阵: G[i,j] = dot(row_i, row_j)
+scl::kernel::gram::gram(matrix, output);
+```
+
 ### 统计
 
-统计检验和指标：
+统计检验、相关性和多重检验校正：
 
 ```cpp
 #include "scl/kernel/ttest.hpp"
 #include "scl/kernel/mwu.hpp"
+#include "scl/kernel/correlation.hpp"
+#include "scl/kernel/multiple_testing.hpp"
 
 // T 检验
 scl::kernel::ttest::ttest(matrix, group_ids, t_stats, p_values, log2_fc);
 
 // Mann-Whitney U 检验
 scl::kernel::mwu::mwu_test(matrix, group_ids, u_stats, p_values, log2_fc);
+
+// Pearson 相关性
+scl::kernel::correlation::pearson(matrix, output);
+
+// 多重检验校正
+scl::kernel::multiple_testing::benjamini_hochberg(p_values, adjusted_p_values);
+scl::kernel::multiple_testing::bonferroni(p_values, adjusted_p_values);
 ```
 
 ### 分组聚合
@@ -184,6 +240,61 @@ auto labels = scl::kernel::leiden::leiden(graph, resolution);
 auto labels = scl::kernel::louvain::louvain(graph, resolution);
 ```
 
+### 特征选择
+
+高变基因和质量控制：
+
+```cpp
+#include "scl/kernel/hvg.hpp"
+#include "scl/kernel/qc.hpp"
+
+// 通过离散度选择高变基因
+scl::kernel::hvg::select_by_dispersion(
+    matrix, n_top, out_indices, out_mask, out_dispersions
+);
+
+// 质量控制指标
+scl::kernel::qc::compute_basic_qc(matrix, out_n_genes, out_total_counts);
+scl::kernel::qc::compute_subset_pct(matrix, subset_mask, out_pcts);
+```
+
+### 标记基因
+
+标记基因识别和特异性评分：
+
+```cpp
+#include "scl/kernel/markers.hpp"
+
+// 为每个簇寻找标记基因
+scl::kernel::markers::find_markers(
+    expression, cluster_labels, n_cells, n_genes, n_clusters,
+    marker_genes, marker_scores, max_markers, min_fc, max_pval
+);
+```
+
+### 数据操作
+
+重排序、采样和排列：
+
+```cpp
+#include "scl/kernel/reorder.hpp"
+#include "scl/kernel/sampling.hpp"
+#include "scl/kernel/permutation.hpp"
+
+// 重排序行
+scl::kernel::reorder::reorder_rows(matrix, permutation, n_rows, output);
+
+// 几何草图采样用于降采样
+scl::kernel::sampling::geometric_sketching(
+    data, target_size, selected_indices, n_selected, seed
+);
+
+// 排列检验
+scl::kernel::permutation::permutation_test(
+    data, labels, test_func, n_permutations, p_value, seed
+);
+```
+
 ## 设计模式
 
 ### 函数式 API
@@ -253,19 +364,44 @@ parallel_for(Size(0), n, [&](size_t i, size_t thread_rank) {
 
 探索特定的内核类别：
 
-- [稀疏工具](/zh/cpp/kernels/sparse-tools) - 矩阵工具
+### 核心基础设施
+- [稀疏工具](/zh/cpp/kernels/sparse-tools) - 矩阵工具和优化
+- [代数](/zh/cpp/kernels/algebra) - 稀疏线性代数操作
+- [Gram](/zh/cpp/kernels/gram) - Gram 矩阵计算
+
+### 预处理
 - [归一化](/zh/cpp/kernels/normalization) - 归一化和缩放
+- [缩放](/zh/cpp/kernels/scale) - 标准化和行缩放
+- [Log1p](/zh/cpp/kernels/log1p) - 对数变换
 - [Softmax](/zh/cpp/kernels/softmax) - 带温度缩放的 Softmax 归一化
-- [Mann-Whitney U](/zh/cpp/kernels/mwu) - 非参数统计检验
+
+### 特征选择
+- [HVG](/zh/cpp/kernels/hvg) - 高变基因选择
+- [QC](/zh/cpp/kernels/qc) - 质量控制指标
+- [标记基因](/zh/cpp/kernels/markers) - 标记基因识别
+
+### 统计
 - [T 检验](/zh/cpp/kernels/ttest) - 参数统计检验
+- [Mann-Whitney U](/zh/cpp/kernels/mwu) - 非参数统计检验
+- [相关性](/zh/cpp/kernels/correlation) - Pearson 相关性
+- [多重检验](/zh/cpp/kernels/multiple_testing) - FDR 和 FWER 校正
+
+### 邻居搜索与聚类
 - [邻居搜索](/zh/cpp/kernels/neighbors) - KNN 算法
 - [BBKNN](/zh/cpp/kernels/bbknn) - 用于批次整合的批次平衡 KNN
-- [MMD](/zh/cpp/kernels/mmd) - 用于分布比较的最大均值差异
+- [Leiden](/zh/cpp/kernels/leiden) - Leiden 聚类
+- [Louvain](/zh/cpp/kernels/louvain) - Louvain 聚类
+
+### 数据操作
 - [合并](/zh/cpp/kernels/merge) - 矩阵合并操作
 - [切片](/zh/cpp/kernels/slice) - 矩阵切片操作
+- [重排序](/zh/cpp/kernels/reorder) - 矩阵重排序
+- [采样](/zh/cpp/kernels/sampling) - 降采样方法
+- [排列](/zh/cpp/kernels/permutation) - 排列检验
+
+### 高级分析
+- [MMD](/zh/cpp/kernels/mmd) - 最大均值差异
 - [分组](/zh/cpp/kernels/group) - 分组聚合统计
-- [统计](/zh/cpp/kernels/statistics) - 统计检验
-- [聚类](/zh/cpp/kernels/clustering) - 社区检测
 
 ---
 

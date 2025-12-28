@@ -70,7 +70,7 @@ export default defineConfig({
             ]
           },
           {
-            text: 'v0.2',
+            text: 'v0.3.0',
             items: [
               { text: 'Contributing', link: '/CONTRIBUTING.md' }
             ]
@@ -274,7 +274,7 @@ export default defineConfig({
             ]
           },
           {
-            text: 'v0.2',
+            text: 'v0.3.0',
             items: [
               { text: '贡献指南', link: '/CONTRIBUTING.md' }
             ]

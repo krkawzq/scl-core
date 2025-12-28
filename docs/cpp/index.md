@@ -26,6 +26,7 @@ SCL-Core is a high-performance biological operator library built with modern C++
 - [Core Modules](/cpp/core/) - Types, sparse matrices, memory management
 - [Threading](/cpp/threading/) - Parallel processing infrastructure
 - [Kernels](/cpp/kernels/) - Computational operators
+- [Memory-Mapped Arrays](/cpp/mmap/) - Out-of-core processing (Experimental)
 
 ### For Advanced Users
 
@@ -94,7 +95,7 @@ scl/
 ├── threading/      # Parallel processing infrastructure
 ├── kernel/         # Computational operators (80+ files, 400+ functions)
 ├── math/           # Statistical functions and regression
-├── mmap/           # Memory-mapped arrays for large datasets
+├── mmap/           # [Experimental] Memory-mapped arrays for out-of-core processing
 └── io/             # I/O utilities
 ```
 
