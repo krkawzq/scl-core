@@ -5,6 +5,7 @@
 #include "scl/core/error.hpp"
 #include "scl/core/sparse.hpp"
 #include "scl/core/macros.hpp"
+#include "scl/core/algo.hpp"
 #include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
 
@@ -21,6 +22,8 @@ namespace scl::kernel::sparse {
 
 namespace config {
     constexpr Size PREFETCH_DISTANCE = 16;
+    constexpr Size PARALLEL_THRESHOLD = 1024;
+    constexpr Size BATCH_SIZE = 64;
 }
 
 // =============================================================================
@@ -188,12 +191,28 @@ void primary_nnz(
     Array<Index> output
 ) {
     const Index primary_dim = matrix.primary_dim();
+    const Size n = static_cast<Size>(primary_dim);
 
-    SCL_CHECK_DIM(output.len == static_cast<Size>(primary_dim), "Output size mismatch");
+    SCL_CHECK_DIM(output.len == n, "Output size mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
-        output[p] = matrix.primary_length(idx);
+    // Sequential for small matrices (parallel overhead > computation)
+    if (SCL_UNLIKELY(n < config::PARALLEL_THRESHOLD)) {
+        for (Size p = 0; p < n; ++p) {
+            output[p] = matrix.primary_length(static_cast<Index>(p));
+        }
+        return;
+    }
+
+    // Parallel with batching for better cache utilization
+    const Size num_batches = (n + config::BATCH_SIZE - 1) / config::BATCH_SIZE;
+
+    scl::threading::parallel_for(Size(0), num_batches, [&](size_t batch_idx) {
+        const Size start = batch_idx * config::BATCH_SIZE;
+        const Size end = scl::algo::min2(start + config::BATCH_SIZE, n);
+
+        for (Size p = start; p < end; ++p) {
+            output[p] = matrix.primary_length(static_cast<Index>(p));
+        }
     });
 }
 

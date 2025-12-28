@@ -29,8 +29,11 @@ namespace config {
     constexpr Real DEFAULT_BANDWIDTH = Real(1.0);
     constexpr Real MIN_BANDWIDTH = Real(1e-10);
     constexpr Size PARALLEL_THRESHOLD = 500;
+    constexpr Size SIMD_THRESHOLD = 32;
+    constexpr Size PREFETCH_DISTANCE = 16;
     constexpr Real LOG_MIN = Real(1e-300);
     constexpr Index DEFAULT_K_NEIGHBORS = 15;
+    constexpr Index NYSTROM_MAX_ITER = 50;
 }
 
 // =============================================================================
@@ -57,73 +60,134 @@ enum class KernelType {
 namespace detail {
 
 // Gaussian kernel: exp(-||x-y||^2 / (2 * h^2))
-SCL_FORCE_INLINE Real gaussian_kernel(Real dist_sq, Real bandwidth) {
-    Real h2 = bandwidth * bandwidth;
-    return std::exp(-dist_sq / (Real(2) * h2));
+SCL_FORCE_INLINE Real gaussian_kernel(Real dist_sq, Real inv_2h2) {
+    return std::exp(-dist_sq * inv_2h2);
+}
+
+// Precompute 1/(2*h^2) for Gaussian kernel
+SCL_FORCE_INLINE Real gaussian_precompute(Real bandwidth) {
+    return Real(1) / (Real(2) * bandwidth * bandwidth);
 }
 
 // Epanechnikov kernel: 3/4 * (1 - u^2) for |u| <= 1
-SCL_FORCE_INLINE Real epanechnikov_kernel(Real dist, Real bandwidth) {
-    Real u = dist / bandwidth;
-    if (u > Real(1)) return Real(0);
-    return Real(0.75) * (Real(1) - u * u);
+SCL_FORCE_INLINE Real epanechnikov_kernel(Real dist_sq, Real inv_h2) {
+    Real u2 = dist_sq * inv_h2;
+    if (SCL_UNLIKELY(u2 > Real(1))) return Real(0);
+    return Real(0.75) * (Real(1) - u2);
 }
 
 // Cosine kernel: (pi/4) * cos(pi/2 * u) for |u| <= 1
-SCL_FORCE_INLINE Real cosine_kernel(Real dist, Real bandwidth) {
-    Real u = dist / bandwidth;
-    if (u > Real(1)) return Real(0);
+SCL_FORCE_INLINE Real cosine_kernel(Real dist, Real inv_h) {
+    Real u = dist * inv_h;
+    if (SCL_UNLIKELY(u > Real(1))) return Real(0);
     constexpr Real pi = Real(3.14159265358979323846);
     return (pi / Real(4)) * std::cos(pi * u / Real(2));
 }
 
 // Laplacian kernel: exp(-|x-y| / h)
-SCL_FORCE_INLINE Real laplacian_kernel(Real dist, Real bandwidth) {
-    return std::exp(-dist / bandwidth);
+SCL_FORCE_INLINE Real laplacian_kernel(Real dist, Real inv_h) {
+    return std::exp(-dist * inv_h);
 }
 
 // Cauchy kernel: 1 / (1 + (d/h)^2)
-SCL_FORCE_INLINE Real cauchy_kernel(Real dist_sq, Real bandwidth) {
-    Real h2 = bandwidth * bandwidth;
-    return Real(1) / (Real(1) + dist_sq / h2);
+SCL_FORCE_INLINE Real cauchy_kernel(Real dist_sq, Real inv_h2) {
+    return Real(1) / (Real(1) + dist_sq * inv_h2);
 }
 
 // Uniform kernel: 0.5 if d < h, else 0
-SCL_FORCE_INLINE Real uniform_kernel(Real dist, Real bandwidth) {
-    return (dist < bandwidth) ? Real(0.5) : Real(0);
+SCL_FORCE_INLINE Real uniform_kernel(Real dist_sq, Real h2) {
+    return (dist_sq < h2) ? Real(0.5) : Real(0);
 }
 
 // Triangular kernel: (1 - |d|/h) if d < h
-SCL_FORCE_INLINE Real triangular_kernel(Real dist, Real bandwidth) {
-    if (dist >= bandwidth) return Real(0);
-    return Real(1) - dist / bandwidth;
+SCL_FORCE_INLINE Real triangular_kernel(Real dist, Real inv_h) {
+    Real u = dist * inv_h;
+    if (SCL_UNLIKELY(u >= Real(1))) return Real(0);
+    return Real(1) - u;
 }
 
-// Apply kernel based on type
-SCL_FORCE_INLINE Real apply_kernel(
-    Real dist_sq,
-    Real bandwidth,
-    KernelType kernel_type
-) {
-    Real dist = std::sqrt(dist_sq);
+// Kernel parameters structure for precomputation
+struct KernelParams {
+    Real inv_h;      // 1/h
+    Real inv_h2;     // 1/h^2
+    Real inv_2h2;    // 1/(2h^2)
+    Real h2;         // h^2
+    KernelType type;
 
-    switch (kernel_type) {
+    SCL_FORCE_INLINE explicit KernelParams(Real bandwidth, KernelType t) noexcept : type(t) {
+        bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+        inv_h = Real(1) / bandwidth;
+        inv_h2 = inv_h * inv_h;
+        inv_2h2 = Real(0.5) * inv_h2;
+        h2 = bandwidth * bandwidth;
+    }
+};
+
+// Apply kernel based on type (optimized with precomputed params)
+SCL_FORCE_INLINE Real apply_kernel(Real dist_sq, const KernelParams& params) {
+    switch (params.type) {
         case KernelType::Gaussian:
-            return gaussian_kernel(dist_sq, bandwidth);
+            return gaussian_kernel(dist_sq, params.inv_2h2);
         case KernelType::Epanechnikov:
-            return epanechnikov_kernel(dist, bandwidth);
+            return epanechnikov_kernel(dist_sq, params.inv_h2);
         case KernelType::Cosine:
-            return cosine_kernel(dist, bandwidth);
+            return cosine_kernel(std::sqrt(dist_sq), params.inv_h);
         case KernelType::Laplacian:
-            return laplacian_kernel(dist, bandwidth);
+            return laplacian_kernel(std::sqrt(dist_sq), params.inv_h);
         case KernelType::Cauchy:
-            return cauchy_kernel(dist_sq, bandwidth);
+            return cauchy_kernel(dist_sq, params.inv_h2);
         case KernelType::Uniform:
-            return uniform_kernel(dist, bandwidth);
+            return uniform_kernel(dist_sq, params.h2);
         case KernelType::Triangular:
-            return triangular_kernel(dist, bandwidth);
+            return triangular_kernel(std::sqrt(dist_sq), params.inv_h);
         default:
-            return gaussian_kernel(dist_sq, bandwidth);
+            return gaussian_kernel(dist_sq, params.inv_2h2);
+    }
+}
+
+// Self-kernel value (distance = 0)
+SCL_FORCE_INLINE Real self_kernel(const KernelParams& params) {
+    switch (params.type) {
+        case KernelType::Gaussian:
+        case KernelType::Laplacian:
+        case KernelType::Cauchy:
+            return Real(1);
+        case KernelType::Epanechnikov:
+            return Real(0.75);
+        case KernelType::Cosine:
+            return Real(3.14159265358979323846) / Real(4);
+        case KernelType::Uniform:
+            return Real(0.5);
+        case KernelType::Triangular:
+            return Real(1);
+        default:
+            return Real(1);
+    }
+}
+
+// SIMD Gaussian kernel batch evaluation
+SCL_FORCE_INLINE void gaussian_kernel_batch(
+    const Real* SCL_RESTRICT dist_sq,
+    Real* SCL_RESTRICT result,
+    Size n,
+    Real inv_2h2
+) {
+    namespace s = scl::simd;
+    using SimdTag = s::SimdTagFor<Real>;
+    const SimdTag d;
+    const size_t lanes = s::Lanes(d);
+    auto v_inv_2h2 = s::Set(d, -inv_2h2);
+    Size k = 0;
+
+    for (; k + lanes <= n; k += lanes) {
+        auto v_dsq = s::Load(d, dist_sq + k);
+        auto v_exp_arg = s::Mul(v_dsq, v_inv_2h2);
+        auto v_result = s::Exp(d, v_exp_arg);
+        s::Store(v_result, d, result + k);
+    }
+
+    for (; k < n; ++k) {
+        result[k] = std::exp(-dist_sq[k] * inv_2h2);
     }
 }
 
@@ -149,10 +213,85 @@ struct FastRNG {
     }
 };
 
+// SIMD-optimized mean computation
+SCL_FORCE_INLINE Real compute_mean(const Real* SCL_RESTRICT data, Size n, Size stride = 1) {
+    if (SCL_UNLIKELY(n == 0)) return Real(0);
+
+    if (stride == 1) {
+        namespace s = scl::simd;
+        using SimdTag = s::SimdTagFor<Real>;
+        const SimdTag d;
+        const size_t lanes = s::Lanes(d);
+        auto v_sum0 = s::Zero(d);
+        auto v_sum1 = s::Zero(d);
+        Size i = 0;
+
+        for (; i + 2 * lanes <= n; i += 2 * lanes) {
+            v_sum0 = s::Add(v_sum0, s::Load(d, data + i));
+            v_sum1 = s::Add(v_sum1, s::Load(d, data + i + lanes));
+        }
+
+        auto v_sum = s::Add(v_sum0, v_sum1);
+        Real sum = s::GetLane(s::SumOfLanes(d, v_sum));
+
+        for (; i < n; ++i) {
+            sum += data[i];
+        }
+
+        return sum / static_cast<Real>(n);
+    } else {
+        Real sum = Real(0);
+        for (Size i = 0; i < n; ++i) {
+            sum += data[i * stride];
+        }
+        return sum / static_cast<Real>(n);
+    }
+}
+
+// SIMD-optimized variance computation
+SCL_FORCE_INLINE Real compute_variance(const Real* SCL_RESTRICT data, Size n, Real mean, Size stride = 1) {
+    if (SCL_UNLIKELY(n <= 1)) return Real(0);
+
+    if (stride == 1) {
+        namespace s = scl::simd;
+        using SimdTag = s::SimdTagFor<Real>;
+        const SimdTag d;
+        const size_t lanes = s::Lanes(d);
+        auto v_mean = s::Set(d, mean);
+        auto v_var0 = s::Zero(d);
+        auto v_var1 = s::Zero(d);
+        Size i = 0;
+
+        for (; i + 2 * lanes <= n; i += 2 * lanes) {
+            auto v0 = s::Sub(s::Load(d, data + i), v_mean);
+            auto v1 = s::Sub(s::Load(d, data + i + lanes), v_mean);
+            v_var0 = s::MulAdd(v0, v0, v_var0);
+            v_var1 = s::MulAdd(v1, v1, v_var1);
+        }
+
+        auto v_var = s::Add(v_var0, v_var1);
+        Real var = s::GetLane(s::SumOfLanes(d, v_var));
+
+        for (; i < n; ++i) {
+            Real diff = data[i] - mean;
+            var += diff * diff;
+        }
+
+        return var / static_cast<Real>(n - 1);
+    } else {
+        Real var = Real(0);
+        for (Size i = 0; i < n; ++i) {
+            Real diff = data[i * stride] - mean;
+            var += diff * diff;
+        }
+        return var / static_cast<Real>(n - 1);
+    }
+}
+
 } // namespace detail
 
 // =============================================================================
-// Kernel Density Estimation (KDE) from Distance Matrix
+// Kernel Density Estimation (KDE) from Distance Matrix - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -163,36 +302,63 @@ void kde_from_distances(
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = distances.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    SCL_CHECK_DIM(density.len >= static_cast<Size>(n),
-                  "KDE: density buffer too small");
+    SCL_CHECK_DIM(density.len >= N, "KDE: density buffer too small");
 
-    if (n == 0) return;
+    if (SCL_UNLIKELY(n == 0)) return;
 
-    bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+    detail::KernelParams params(bandwidth, kernel_type);
+    const Real self_k = detail::self_kernel(params);
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    for (Index i = 0; i < n; ++i) {
-        auto indices = distances.primary_indices(i);
+    auto process_node = [&](Index i) {
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
 
-        Real sum = Real(0);
-        for (Index k = 0; k < len; ++k) {
-            Real d = static_cast<Real>(values[k]);
-            Real d_sq = d * d;
-            sum += detail::apply_kernel(d_sq, bandwidth, kernel_type);
+        if (SCL_UNLIKELY(len == 0)) {
+            density[i] = self_k;
+            return;
         }
 
-        // Add self-contribution (distance = 0)
-        sum += detail::apply_kernel(Real(0), bandwidth, kernel_type);
+        Real sum = Real(0);
 
-        // Normalize by effective number of neighbors + 1
+        // Unrolled accumulation
+        Index k = 0;
+        for (; k + 4 <= len; k += 4) {
+            Real d0 = static_cast<Real>(values[k + 0]);
+            Real d1 = static_cast<Real>(values[k + 1]);
+            Real d2 = static_cast<Real>(values[k + 2]);
+            Real d3 = static_cast<Real>(values[k + 3]);
+            sum += detail::apply_kernel(d0 * d0, params);
+            sum += detail::apply_kernel(d1 * d1, params);
+            sum += detail::apply_kernel(d2 * d2, params);
+            sum += detail::apply_kernel(d3 * d3, params);
+        }
+
+        for (; k < len; ++k) {
+            Real d = static_cast<Real>(values[k]);
+            sum += detail::apply_kernel(d * d, params);
+        }
+
+        // Add self-contribution
+        sum += self_k;
         density[i] = sum / static_cast<Real>(len + 1);
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
+        }
     }
 }
 
 // =============================================================================
-// Adaptive Bandwidth Estimation (Silverman's rule of thumb)
+// Adaptive Bandwidth Estimation (Silverman's rule of thumb) - Optimized
 // =============================================================================
 
 inline Real silverman_bandwidth(
@@ -200,31 +366,20 @@ inline Real silverman_bandwidth(
     Index n_features = 1
 ) {
     const Size n = data.len / static_cast<Size>(n_features);
-    if (n <= 1) return config::DEFAULT_BANDWIDTH;
+    if (SCL_UNLIKELY(n <= 1)) return config::DEFAULT_BANDWIDTH;
 
-    // Compute standard deviation of first feature
-    Real mean = Real(0);
-    for (Size i = 0; i < n; ++i) {
-        mean += data[i * n_features];
-    }
-    mean /= static_cast<Real>(n);
-
-    Real var = Real(0);
-    for (Size i = 0; i < n; ++i) {
-        Real d = data[i * n_features] - mean;
-        var += d * d;
-    }
-    var /= static_cast<Real>(n - 1);
+    const Size stride = static_cast<Size>(n_features);
+    Real mean = detail::compute_mean(data.ptr, n, stride);
+    Real var = detail::compute_variance(data.ptr, n, mean, stride);
     Real std_dev = std::sqrt(var);
 
     // Silverman's rule: h = 1.06 * std * n^(-1/5)
     Real h = Real(1.06) * std_dev * std::pow(static_cast<Real>(n), Real(-0.2));
-
     return scl::algo::max2(h, config::MIN_BANDWIDTH);
 }
 
 // =============================================================================
-// Scott's Rule for Bandwidth
+// Scott's Rule for Bandwidth - Optimized
 // =============================================================================
 
 inline Real scott_bandwidth(
@@ -232,31 +387,20 @@ inline Real scott_bandwidth(
     Index n_features = 1
 ) {
     const Size n = data.len / static_cast<Size>(n_features);
-    if (n <= 1) return config::DEFAULT_BANDWIDTH;
+    if (SCL_UNLIKELY(n <= 1)) return config::DEFAULT_BANDWIDTH;
 
-    // Compute standard deviation
-    Real mean = Real(0);
-    for (Size i = 0; i < n; ++i) {
-        mean += data[i * n_features];
-    }
-    mean /= static_cast<Real>(n);
-
-    Real var = Real(0);
-    for (Size i = 0; i < n; ++i) {
-        Real d = data[i * n_features] - mean;
-        var += d * d;
-    }
-    var /= static_cast<Real>(n - 1);
+    const Size stride = static_cast<Size>(n_features);
+    Real mean = detail::compute_mean(data.ptr, n, stride);
+    Real var = detail::compute_variance(data.ptr, n, mean, stride);
     Real std_dev = std::sqrt(var);
 
-    // Scott's rule: h = std * n^(-1/(d+4)) where d = 1 for univariate
+    // Scott's rule: h = std * n^(-1/(d+4))
     Real h = std_dev * std::pow(static_cast<Real>(n), Real(-0.2));
-
     return scl::algo::max2(h, config::MIN_BANDWIDTH);
 }
 
 // =============================================================================
-// Local Bandwidth Estimation (k-NN based)
+// Local Bandwidth Estimation (k-NN based) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -266,34 +410,57 @@ void local_bandwidth(
     Index k = 0
 ) {
     const Index n = distances.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    SCL_CHECK_DIM(bandwidths.len >= static_cast<Size>(n),
-                  "LocalBandwidth: output buffer too small");
+    SCL_CHECK_DIM(bandwidths.len >= N, "LocalBandwidth: output buffer too small");
 
-    for (Index i = 0; i < n; ++i) {
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
+
+    auto process_node = [&](Index i) {
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
 
-        if (len == 0) {
+        if (SCL_UNLIKELY(len == 0)) {
             bandwidths[i] = config::DEFAULT_BANDWIDTH;
-            continue;
+            return;
         }
 
         Index effective_k = (k > 0 && k <= len) ? k : len;
 
-        // Use distance to k-th neighbor as bandwidth
+        // Find max distance to k-th neighbor
         Real max_dist = Real(0);
-        for (Index j = 0; j < effective_k; ++j) {
-            Real d = static_cast<Real>(values[j]);
-            max_dist = scl::algo::max2(max_dist, d);
+        Index j = 0;
+
+        // Unrolled max search
+        for (; j + 4 <= effective_k; j += 4) {
+            Real d0 = static_cast<Real>(values[j + 0]);
+            Real d1 = static_cast<Real>(values[j + 1]);
+            Real d2 = static_cast<Real>(values[j + 2]);
+            Real d3 = static_cast<Real>(values[j + 3]);
+            max_dist = scl::algo::max2(max_dist, scl::algo::max2(d0, d1));
+            max_dist = scl::algo::max2(max_dist, scl::algo::max2(d2, d3));
+        }
+
+        for (; j < effective_k; ++j) {
+            max_dist = scl::algo::max2(max_dist, static_cast<Real>(values[j]));
         }
 
         bandwidths[i] = scl::algo::max2(max_dist, config::MIN_BANDWIDTH);
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
+        }
     }
 }
 
 // =============================================================================
-// KDE with Local Bandwidth (Adaptive KDE)
+// KDE with Local Bandwidth (Adaptive KDE) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -304,71 +471,128 @@ void adaptive_kde(
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = distances.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    SCL_CHECK_DIM(density.len >= static_cast<Size>(n),
-                  "AdaptiveKDE: density buffer too small");
-    SCL_CHECK_DIM(bandwidths.len >= static_cast<Size>(n),
-                  "AdaptiveKDE: bandwidths buffer too small");
+    SCL_CHECK_DIM(density.len >= N, "AdaptiveKDE: density buffer too small");
+    SCL_CHECK_DIM(bandwidths.len >= N, "AdaptiveKDE: bandwidths buffer too small");
 
-    if (n == 0) return;
+    if (SCL_UNLIKELY(n == 0)) return;
 
-    for (Index i = 0; i < n; ++i) {
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
+
+    auto process_node = [&](Index i) {
         auto indices = distances.primary_indices(i);
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
 
         Real h_i = scl::algo::max2(bandwidths[i], config::MIN_BANDWIDTH);
+
+        if (SCL_UNLIKELY(len == 0)) {
+            detail::KernelParams params(h_i, kernel_type);
+            density[i] = detail::self_kernel(params);
+            return;
+        }
+
         Real sum = Real(0);
 
         for (Index k = 0; k < len; ++k) {
             Index j = indices[k];
             Real d = static_cast<Real>(values[k]);
 
-            // Geometric mean of bandwidths for symmetric kernel
+            // Geometric mean of bandwidths
             Real h_j = scl::algo::max2(bandwidths[j], config::MIN_BANDWIDTH);
             Real h = std::sqrt(h_i * h_j);
 
-            Real d_sq = d * d;
-            sum += detail::apply_kernel(d_sq, h, kernel_type);
+            detail::KernelParams params(h, kernel_type);
+            sum += detail::apply_kernel(d * d, params);
         }
 
         // Self contribution
-        sum += detail::apply_kernel(Real(0), h_i, kernel_type);
+        detail::KernelParams self_params(h_i, kernel_type);
+        sum += detail::self_kernel(self_params);
 
         density[i] = sum / static_cast<Real>(len + 1);
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
+        }
     }
 }
 
 // =============================================================================
-// Kernel Matrix Computation (Sparse Output)
+// Kernel Matrix Computation (Sparse Output) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
 void compute_kernel_matrix(
     const Sparse<T, IsCSR>& distances,
-    Real* kernel_values,
+    Real* SCL_RESTRICT kernel_values,
     Real bandwidth = config::DEFAULT_BANDWIDTH,
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = distances.primary_dim();
+    detail::KernelParams params(bandwidth, kernel_type);
 
-    bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+    // For Gaussian kernel, use SIMD batch evaluation
+    if (kernel_type == KernelType::Gaussian) {
+        const Real inv_2h2 = params.inv_2h2;
+        Size val_idx = 0;
 
-    Size val_idx = 0;
-    for (Index i = 0; i < n; ++i) {
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        for (Index i = 0; i < n; ++i) {
+            auto values = distances.primary_values(i);
+            const Index len = distances.primary_length(i);
 
-        for (Index k = 0; k < len; ++k) {
-            Real d = static_cast<Real>(values[k]);
-            Real d_sq = d * d;
-            kernel_values[val_idx++] = detail::apply_kernel(d_sq, bandwidth, kernel_type);
+            // Convert distances to squared distances first
+            for (Index k = 0; k < len; ++k) {
+                Real d = static_cast<Real>(values[k]);
+                kernel_values[val_idx + k] = d * d;
+            }
+
+            // Batch Gaussian evaluation
+            detail::gaussian_kernel_batch(
+                kernel_values + val_idx,
+                kernel_values + val_idx,
+                static_cast<Size>(len),
+                inv_2h2
+            );
+
+            val_idx += static_cast<Size>(len);
+        }
+    } else {
+        Size val_idx = 0;
+
+        for (Index i = 0; i < n; ++i) {
+            auto values = distances.primary_values(i);
+            const Index len = distances.primary_length(i);
+
+            Index k = 0;
+            for (; k + 4 <= len; k += 4) {
+                Real d0 = static_cast<Real>(values[k + 0]);
+                Real d1 = static_cast<Real>(values[k + 1]);
+                Real d2 = static_cast<Real>(values[k + 2]);
+                Real d3 = static_cast<Real>(values[k + 3]);
+                kernel_values[val_idx++] = detail::apply_kernel(d0 * d0, params);
+                kernel_values[val_idx++] = detail::apply_kernel(d1 * d1, params);
+                kernel_values[val_idx++] = detail::apply_kernel(d2 * d2, params);
+                kernel_values[val_idx++] = detail::apply_kernel(d3 * d3, params);
+            }
+
+            for (; k < len; ++k) {
+                Real d = static_cast<Real>(values[k]);
+                kernel_values[val_idx++] = detail::apply_kernel(d * d, params);
+            }
         }
     }
 }
 
 // =============================================================================
-// Kernel Sum (Aggregated Kernel Values per Row)
+// Kernel Sum (Aggregated Kernel Values per Row) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -379,29 +603,52 @@ void kernel_row_sums(
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = distances.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    SCL_CHECK_DIM(sums.len >= static_cast<Size>(n),
-                  "KernelRowSums: output buffer too small");
+    SCL_CHECK_DIM(sums.len >= N, "KernelRowSums: output buffer too small");
 
-    bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+    detail::KernelParams params(bandwidth, kernel_type);
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    for (Index i = 0; i < n; ++i) {
+    auto process_node = [&](Index i) {
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
 
         Real sum = Real(0);
-        for (Index k = 0; k < len; ++k) {
+        Index k = 0;
+
+        for (; k + 4 <= len; k += 4) {
+            Real d0 = static_cast<Real>(values[k + 0]);
+            Real d1 = static_cast<Real>(values[k + 1]);
+            Real d2 = static_cast<Real>(values[k + 2]);
+            Real d3 = static_cast<Real>(values[k + 3]);
+            sum += detail::apply_kernel(d0 * d0, params);
+            sum += detail::apply_kernel(d1 * d1, params);
+            sum += detail::apply_kernel(d2 * d2, params);
+            sum += detail::apply_kernel(d3 * d3, params);
+        }
+
+        for (; k < len; ++k) {
             Real d = static_cast<Real>(values[k]);
-            Real d_sq = d * d;
-            sum += detail::apply_kernel(d_sq, bandwidth, kernel_type);
+            sum += detail::apply_kernel(d * d, params);
         }
 
         sums[i] = sum;
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
+        }
     }
 }
 
 // =============================================================================
-// Kernel Weighted Mean (Nadaraya-Watson Estimator)
+// Kernel Weighted Mean (Nadaraya-Watson Estimator) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -413,13 +660,15 @@ void nadaraya_watson(
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = distances.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    SCL_CHECK_DIM(predictions.len >= static_cast<Size>(n),
-                  "NW: predictions buffer too small");
+    SCL_CHECK_DIM(predictions.len >= N, "NW: predictions buffer too small");
 
-    bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+    detail::KernelParams params(bandwidth, kernel_type);
+    const Real self_k = detail::self_kernel(params);
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    for (Index i = 0; i < n; ++i) {
+    auto process_node = [&](Index i) {
         auto indices = distances.primary_indices(i);
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
@@ -427,27 +676,46 @@ void nadaraya_watson(
         Real weighted_sum = Real(0);
         Real weight_sum = Real(0);
 
-        for (Index k = 0; k < len; ++k) {
+        Index k = 0;
+        for (; k + 4 <= len; k += 4) {
+            for (int off = 0; off < 4; ++off) {
+                Index j = indices[k + off];
+                Real d = static_cast<Real>(values[k + off]);
+                Real w = detail::apply_kernel(d * d, params);
+                weighted_sum += w * y_values[j];
+                weight_sum += w;
+            }
+        }
+
+        for (; k < len; ++k) {
             Index j = indices[k];
             Real d = static_cast<Real>(values[k]);
-            Real d_sq = d * d;
-            Real w = detail::apply_kernel(d_sq, bandwidth, kernel_type);
-
+            Real w = detail::apply_kernel(d * d, params);
             weighted_sum += w * y_values[j];
             weight_sum += w;
         }
 
-        // Add self contribution
-        Real self_weight = detail::apply_kernel(Real(0), bandwidth, kernel_type);
-        weighted_sum += self_weight * y_values[i];
-        weight_sum += self_weight;
+        // Self contribution
+        weighted_sum += self_k * y_values[i];
+        weight_sum += self_k;
 
-        predictions[i] = (weight_sum > Real(1e-15)) ? weighted_sum / weight_sum : y_values[i];
+        predictions[i] = (SCL_LIKELY(weight_sum > Real(1e-15))) ?
+            weighted_sum / weight_sum : y_values[i];
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
+        }
     }
 }
 
 // =============================================================================
-// Kernel Smoothing on Graph
+// Kernel Smoothing on Graph - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -457,11 +725,13 @@ void kernel_smooth_graph(
     Array<Real> smoothed_values
 ) {
     const Index n = kernel_weights.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    SCL_CHECK_DIM(smoothed_values.len >= static_cast<Size>(n),
-                  "KernelSmooth: output buffer too small");
+    SCL_CHECK_DIM(smoothed_values.len >= N, "KernelSmooth: output buffer too small");
 
-    for (Index i = 0; i < n; ++i) {
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
+
+    auto process_node = [&](Index i) {
         auto indices = kernel_weights.primary_indices(i);
         auto weights = kernel_weights.primary_values(i);
         const Index len = kernel_weights.primary_length(i);
@@ -469,23 +739,44 @@ void kernel_smooth_graph(
         Real weighted_sum = Real(0);
         Real weight_sum = Real(0);
 
-        for (Index k = 0; k < len; ++k) {
+        Index k = 0;
+        for (; k + 4 <= len; k += 4) {
+            for (int off = 0; off < 4; ++off) {
+                Index j = indices[k + off];
+                Real w = static_cast<Real>(weights[k + off]);
+                weighted_sum += w * values[j];
+                weight_sum += w;
+            }
+        }
+
+        for (; k < len; ++k) {
             Index j = indices[k];
             Real w = static_cast<Real>(weights[k]);
             weighted_sum += w * values[j];
             weight_sum += w;
         }
 
-        // Self contribution with weight 1
+        // Self contribution
         weighted_sum += values[i];
         weight_sum += Real(1);
 
-        smoothed_values[i] = (weight_sum > Real(1e-15)) ? weighted_sum / weight_sum : values[i];
+        smoothed_values[i] = (SCL_LIKELY(weight_sum > Real(1e-15))) ?
+            weighted_sum / weight_sum : values[i];
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
+        }
     }
 }
 
 // =============================================================================
-// Local Linear Regression (Kernel Smoothing)
+// Local Linear Regression (Kernel Smoothing) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -498,29 +789,29 @@ void local_linear_regression(
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = distances.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    SCL_CHECK_DIM(predictions.len >= static_cast<Size>(n),
-                  "LLR: predictions buffer too small");
+    SCL_CHECK_DIM(predictions.len >= N, "LLR: predictions buffer too small");
 
-    bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+    detail::KernelParams params(bandwidth, kernel_type);
+    const Real self_k = detail::self_kernel(params);
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    for (Index i = 0; i < n; ++i) {
+    auto process_node = [&](Index i) {
         auto indices = distances.primary_indices(i);
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
 
         Real x_i = X[i];
 
-        // Compute weighted least squares
+        // Compute weighted least squares moments
         Real s0 = Real(0), s1 = Real(0), s2 = Real(0);
         Real t0 = Real(0), t1 = Real(0);
 
         for (Index k = 0; k < len; ++k) {
             Index j = indices[k];
             Real d = static_cast<Real>(values[k]);
-            Real d_sq = d * d;
-            Real w = detail::apply_kernel(d_sq, bandwidth, kernel_type);
-
+            Real w = detail::apply_kernel(d * d, params);
             Real dx = X[j] - x_i;
 
             s0 += w;
@@ -530,25 +821,33 @@ void local_linear_regression(
             t1 += w * Y[j] * dx;
         }
 
-        // Add self contribution
-        Real w0 = detail::apply_kernel(Real(0), bandwidth, kernel_type);
-        s0 += w0;
-        t0 += w0 * Y[i];
+        // Self contribution
+        s0 += self_k;
+        t0 += self_k * Y[i];
 
         // Solve 2x2 system
         Real det = s0 * s2 - s1 * s1;
-        if (std::abs(det) > Real(1e-15)) {
-            Real a = (s2 * t0 - s1 * t1) / det;
-            predictions[i] = a;
+        if (SCL_LIKELY(std::abs(det) > Real(1e-15))) {
+            predictions[i] = (s2 * t0 - s1 * t1) / det;
         } else {
             // Fall back to Nadaraya-Watson
             predictions[i] = (s0 > Real(1e-15)) ? t0 / s0 : Y[i];
+        }
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
         }
     }
 }
 
 // =============================================================================
-// Kernel PCA Approximation (via Nystrom)
+// Kernel PCA Approximation (via Nystrom) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -560,15 +859,17 @@ void nystrom_approximation(
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = landmark_distances.rows();
+    const Size N = static_cast<Size>(n);
+    const Size n_comp = static_cast<Size>(n_components);
 
-    SCL_CHECK_DIM(embedding.len >= static_cast<Size>(n) * static_cast<Size>(n_components),
-                  "Nystrom: embedding buffer too small");
+    SCL_CHECK_DIM(embedding.len >= N * n_comp, "Nystrom: embedding buffer too small");
 
-    if (n == 0 || n_components == 0) return;
+    if (SCL_UNLIKELY(n == 0 || n_components == 0)) return;
 
-    bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+    detail::KernelParams params(bandwidth, kernel_type);
+    const Size total = N * n_comp;
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    Size total = static_cast<Size>(n) * static_cast<Size>(n_components);
     Real* Q = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
     Real* Q_new = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
 
@@ -577,79 +878,119 @@ void nystrom_approximation(
         Q[i] = std::sin(static_cast<Real>(i) * Real(0.1)) + Real(0.5);
     }
 
-    for (Index iter = 0; iter < 50; ++iter) {
+    for (Index iter = 0; iter < config::NYSTROM_MAX_ITER; ++iter) {
         // Apply kernel matrix
-        for (Index i = 0; i < n; ++i) {
-            auto indices = landmark_distances.primary_indices(i);
-            auto values = landmark_distances.primary_values(i);
-            const Index len = landmark_distances.primary_length(i);
+        if (use_parallel) {
+            scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+                auto indices = landmark_distances.primary_indices(static_cast<Index>(i));
+                auto values = landmark_distances.primary_values(static_cast<Index>(i));
+                const Index len = landmark_distances.primary_length(static_cast<Index>(i));
 
-            for (Index c = 0; c < n_components; ++c) {
-                Real sum = Real(0);
+                Real* qi_new = Q_new + i * n_comp;
 
-                for (Index k = 0; k < len; ++k) {
-                    Index j = indices[k];
-                    Real d = static_cast<Real>(values[k]);
-                    Real kval = detail::apply_kernel(d * d, bandwidth, kernel_type);
-                    sum += kval * Q[static_cast<Size>(j) * n_components + c];
+                for (Index c = 0; c < n_components; ++c) {
+                    Real sum = Real(0);
+                    for (Index k = 0; k < len; ++k) {
+                        Index j = indices[k];
+                        Real d = static_cast<Real>(values[k]);
+                        Real kval = detail::apply_kernel(d * d, params);
+                        sum += kval * Q[static_cast<Size>(j) * n_comp + c];
+                    }
+                    qi_new[c] = sum;
                 }
+            });
+        } else {
+            for (Index i = 0; i < n; ++i) {
+                auto indices = landmark_distances.primary_indices(i);
+                auto values = landmark_distances.primary_values(i);
+                const Index len = landmark_distances.primary_length(i);
 
-                Q_new[static_cast<Size>(i) * n_components + c] = sum;
+                Real* qi_new = Q_new + static_cast<Size>(i) * n_comp;
+
+                for (Index c = 0; c < n_components; ++c) {
+                    Real sum = Real(0);
+                    for (Index k = 0; k < len; ++k) {
+                        Index j = indices[k];
+                        Real d = static_cast<Real>(values[k]);
+                        Real kval = detail::apply_kernel(d * d, params);
+                        sum += kval * Q[static_cast<Size>(j) * n_comp + c];
+                    }
+                    qi_new[c] = sum;
+                }
             }
         }
 
-        // Orthogonalize (Gram-Schmidt)
+        // Orthogonalize (Gram-Schmidt) - sequential for correctness
         for (Index c = 0; c < n_components; ++c) {
+            // Subtract projections onto previous components
             for (Index p = 0; p < c; ++p) {
                 Real dot = Real(0), norm_p = Real(0);
-                for (Index i = 0; i < n; ++i) {
-                    Size ic = static_cast<Size>(i) * n_components + c;
-                    Size ip = static_cast<Size>(i) * n_components + p;
+
+                // SIMD dot product
+                namespace s = scl::simd;
+                using SimdTag = s::SimdTagFor<Real>;
+                const SimdTag d;
+                const size_t lanes = s::Lanes(d);
+                auto v_dot = s::Zero(d);
+                auto v_norm = s::Zero(d);
+                Size i = 0;
+
+                for (; i + lanes <= N; i += lanes) {
+                    auto vc = s::LoadU(d, Q_new + i * n_comp + c);
+                    auto vp = s::LoadU(d, Q_new + i * n_comp + p);
+                    v_dot = s::MulAdd(vc, vp, v_dot);
+                    v_norm = s::MulAdd(vp, vp, v_norm);
+                }
+
+                dot = s::GetLane(s::SumOfLanes(d, v_dot));
+                norm_p = s::GetLane(s::SumOfLanes(d, v_norm));
+
+                // Scalar remainder
+                for (; i < N; ++i) {
+                    Size ic = i * n_comp + c;
+                    Size ip = i * n_comp + p;
                     dot += Q_new[ic] * Q_new[ip];
                     norm_p += Q_new[ip] * Q_new[ip];
                 }
-                if (norm_p > Real(1e-15)) {
+
+                if (SCL_LIKELY(norm_p > Real(1e-15))) {
                     Real coeff = dot / norm_p;
-                    for (Index i = 0; i < n; ++i) {
-                        Size ic = static_cast<Size>(i) * n_components + c;
-                        Size ip = static_cast<Size>(i) * n_components + p;
-                        Q_new[ic] -= coeff * Q_new[ip];
+                    for (Size i = 0; i < N; ++i) {
+                        Q_new[i * n_comp + c] -= coeff * Q_new[i * n_comp + p];
                     }
                 }
             }
 
-            // Normalize
+            // Normalize component c
             Real norm = Real(0);
-            for (Index i = 0; i < n; ++i) {
-                Size ic = static_cast<Size>(i) * n_components + c;
-                norm += Q_new[ic] * Q_new[ic];
+            for (Size i = 0; i < N; ++i) {
+                Real v = Q_new[i * n_comp + c];
+                norm += v * v;
             }
-            if (norm > Real(1e-15)) {
+
+            if (SCL_LIKELY(norm > Real(1e-15))) {
                 Real inv_norm = Real(1) / std::sqrt(norm);
-                for (Index i = 0; i < n; ++i) {
-                    Size ic = static_cast<Size>(i) * n_components + c;
-                    Q_new[ic] *= inv_norm;
+                for (Size i = 0; i < N; ++i) {
+                    Q_new[i * n_comp + c] *= inv_norm;
                 }
             }
         }
 
-        // Swap
+        // Swap buffers
         Real* tmp = Q;
         Q = Q_new;
         Q_new = tmp;
     }
 
     // Copy to output
-    for (Size i = 0; i < total; ++i) {
-        embedding[i] = Q[i];
-    }
+    std::memcpy(embedding.ptr, Q, total * sizeof(Real));
 
     scl::memory::aligned_free(Q_new, SCL_ALIGNMENT);
     scl::memory::aligned_free(Q, SCL_ALIGNMENT);
 }
 
 // =============================================================================
-// Mean Shift Step (Single Iteration)
+// Mean Shift Step (Single Iteration) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -662,14 +1003,16 @@ void mean_shift_step(
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = distances.primary_dim();
+    const Size N = static_cast<Size>(n);
     const Size stride = static_cast<Size>(n_dims);
 
-    SCL_CHECK_DIM(new_positions.len >= static_cast<Size>(n) * stride,
-                  "MeanShift: output buffer too small");
+    SCL_CHECK_DIM(new_positions.len >= N * stride, "MeanShift: output buffer too small");
 
-    bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+    detail::KernelParams params(bandwidth, kernel_type);
+    const Real self_k = detail::self_kernel(params);
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    for (Index i = 0; i < n; ++i) {
+    auto process_node = [&](Index i) {
         auto indices = distances.primary_indices(i);
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
@@ -677,10 +1020,8 @@ void mean_shift_step(
         Real* new_pos = new_positions.ptr + static_cast<Size>(i) * stride;
         const Real* curr_pos = current_positions.ptr + static_cast<Size>(i) * stride;
 
-        // Initialize with zeros
-        for (Index d = 0; d < n_dims; ++d) {
-            new_pos[d] = Real(0);
-        }
+        // Zero initialize
+        std::memset(new_pos, 0, stride * sizeof(Real));
 
         Real weight_sum = Real(0);
 
@@ -688,37 +1029,67 @@ void mean_shift_step(
         for (Index k = 0; k < len; ++k) {
             Index j = indices[k];
             Real dist = static_cast<Real>(values[k]);
-            Real w = detail::apply_kernel(dist * dist, bandwidth, kernel_type);
-
+            Real w = detail::apply_kernel(dist * dist, params);
             const Real* neighbor_pos = current_positions.ptr + static_cast<Size>(j) * stride;
-            for (Index d = 0; d < n_dims; ++d) {
-                new_pos[d] += w * neighbor_pos[d];
+
+            // SIMD accumulation for high dimensions
+            if (stride >= config::SIMD_THRESHOLD) {
+                namespace s = scl::simd;
+                using SimdTag = s::SimdTagFor<Real>;
+                const SimdTag d;
+                const size_t lanes = s::Lanes(d);
+                auto v_w = s::Set(d, w);
+                Index dim = 0;
+
+                for (; dim + static_cast<Index>(lanes) <= n_dims; dim += static_cast<Index>(lanes)) {
+                    auto v_pos = s::Load(d, new_pos + dim);
+                    auto v_neighbor = s::Load(d, neighbor_pos + dim);
+                    s::Store(s::MulAdd(v_w, v_neighbor, v_pos), d, new_pos + dim);
+                }
+
+                for (; dim < n_dims; ++dim) {
+                    new_pos[dim] += w * neighbor_pos[dim];
+                }
+            } else {
+                for (Index dim = 0; dim < n_dims; ++dim) {
+                    new_pos[dim] += w * neighbor_pos[dim];
+                }
             }
+
             weight_sum += w;
         }
 
-        // Add self contribution
-        Real self_w = detail::apply_kernel(Real(0), bandwidth, kernel_type);
-        for (Index d = 0; d < n_dims; ++d) {
-            new_pos[d] += self_w * curr_pos[d];
+        // Self contribution
+        for (Index dim = 0; dim < n_dims; ++dim) {
+            new_pos[dim] += self_k * curr_pos[dim];
         }
-        weight_sum += self_w;
+
+        weight_sum += self_k;
 
         // Normalize
-        if (weight_sum > Real(1e-15)) {
-            for (Index d = 0; d < n_dims; ++d) {
-                new_pos[d] /= weight_sum;
+        if (SCL_LIKELY(weight_sum > Real(1e-15))) {
+            Real inv_weight = Real(1) / weight_sum;
+            for (Index dim = 0; dim < n_dims; ++dim) {
+                new_pos[dim] *= inv_weight;
             }
         } else {
-            for (Index d = 0; d < n_dims; ++d) {
-                new_pos[d] = curr_pos[d];
-            }
+            std::memcpy(new_pos, curr_pos, stride * sizeof(Real));
+        }
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
         }
     }
 }
 
 // =============================================================================
-// Kernel Entropy Estimation
+// Kernel Entropy Estimation - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -729,54 +1100,66 @@ void kernel_entropy(
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = distances.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    SCL_CHECK_DIM(entropy.len >= static_cast<Size>(n),
-                  "Entropy: output buffer too small");
+    SCL_CHECK_DIM(entropy.len >= N, "Entropy: output buffer too small");
 
-    bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+    detail::KernelParams params(bandwidth, kernel_type);
+    const Real self_k = detail::self_kernel(params);
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    for (Index i = 0; i < n; ++i) {
-        auto indices = distances.primary_indices(i);
+    auto process_node = [&](Index i) {
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
 
-        // Compute kernel probabilities
-        Real sum = Real(0);
+        // First pass: compute normalization sum
+        Real sum = self_k;
         for (Index k = 0; k < len; ++k) {
             Real d = static_cast<Real>(values[k]);
-            sum += detail::apply_kernel(d * d, bandwidth, kernel_type);
+            sum += detail::apply_kernel(d * d, params);
         }
-        sum += detail::apply_kernel(Real(0), bandwidth, kernel_type);  // Self
 
-        if (sum <= Real(1e-15)) {
+        if (SCL_UNLIKELY(sum <= Real(1e-15))) {
             entropy[i] = Real(0);
-            continue;
+            return;
         }
 
-        // Compute entropy: -sum(p * log(p))
+        Real inv_sum = Real(1) / sum;
+
+        // Second pass: compute entropy
         Real H = Real(0);
         for (Index k = 0; k < len; ++k) {
             Real d = static_cast<Real>(values[k]);
-            Real kval = detail::apply_kernel(d * d, bandwidth, kernel_type);
-            Real p = kval / sum;
-            if (p > config::LOG_MIN) {
+            Real kval = detail::apply_kernel(d * d, params);
+            Real p = kval * inv_sum;
+
+            if (SCL_LIKELY(p > config::LOG_MIN)) {
                 H -= p * std::log(p);
             }
         }
 
         // Self contribution
-        Real self_kval = detail::apply_kernel(Real(0), bandwidth, kernel_type);
-        Real self_p = self_kval / sum;
-        if (self_p > config::LOG_MIN) {
+        Real self_p = self_k * inv_sum;
+        if (SCL_LIKELY(self_p > config::LOG_MIN)) {
             H -= self_p * std::log(self_p);
         }
 
         entropy[i] = H;
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
+        }
     }
 }
 
 // =============================================================================
-// Perplexity-Based Bandwidth Search (for t-SNE style applications)
+// Perplexity-Based Bandwidth Search (for t-SNE style applications) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -788,70 +1171,86 @@ void find_bandwidth_for_perplexity(
     Real tol = Real(1e-4)
 ) {
     const Index n = distances.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    SCL_CHECK_DIM(bandwidths.len >= static_cast<Size>(n),
-                  "Perplexity: bandwidths buffer too small");
+    SCL_CHECK_DIM(bandwidths.len >= N, "Perplexity: bandwidths buffer too small");
 
-    Real target_entropy = std::log(target_perplexity);
+    const Real target_entropy = std::log(target_perplexity);
+    const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    for (Index i = 0; i < n; ++i) {
+    auto process_node = [&](Index i) {
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
 
-        if (len == 0) {
+        if (SCL_UNLIKELY(len == 0)) {
             bandwidths[i] = config::DEFAULT_BANDWIDTH;
-            continue;
+            return;
         }
 
-        // Binary search for bandwidth
+        // Binary search for bandwidth (beta = 1/(2*sigma^2))
         Real lo = config::MIN_BANDWIDTH;
         Real hi = Real(1e10);
-        Real beta = Real(1);  // 1 / (2 * sigma^2)
+        Real beta = Real(1);
 
         for (Index iter = 0; iter < max_iter; ++iter) {
-            // Compute probabilities and entropy for current beta
+            // Compute probabilities and entropy
             Real sum_p = Real(0);
+
+            // Fast exponential sum
             for (Index k = 0; k < len; ++k) {
                 Real d = static_cast<Real>(values[k]);
                 sum_p += std::exp(-beta * d * d);
             }
 
-            if (sum_p < Real(1e-300)) {
-                beta /= Real(2);
+            if (SCL_UNLIKELY(sum_p < Real(1e-300))) {
+                beta *= Real(0.5);
                 continue;
             }
 
+            Real inv_sum = Real(1) / sum_p;
             Real H = Real(0);
+
             for (Index k = 0; k < len; ++k) {
                 Real d = static_cast<Real>(values[k]);
-                Real p = std::exp(-beta * d * d) / sum_p;
-                if (p > config::LOG_MIN) {
+                Real p = std::exp(-beta * d * d) * inv_sum;
+
+                if (SCL_LIKELY(p > config::LOG_MIN)) {
                     H -= p * std::log(p);
                 }
             }
 
             Real diff = H - target_entropy;
-
             if (std::abs(diff) < tol) break;
 
             if (diff > Real(0)) {
                 // Entropy too high, increase beta
                 lo = beta;
-                beta = (hi > Real(1e9)) ? beta * Real(2) : (lo + hi) / Real(2);
+                beta = (hi > Real(1e9)) ? beta * Real(2) : (lo + hi) * Real(0.5);
             } else {
                 // Entropy too low, decrease beta
                 hi = beta;
-                beta = (lo + hi) / Real(2);
+                beta = (lo + hi) * Real(0.5);
             }
         }
 
         // Convert beta to bandwidth
-        bandwidths[i] = (beta > Real(1e-15)) ? Real(1) / std::sqrt(Real(2) * beta) : config::DEFAULT_BANDWIDTH;
+        bandwidths[i] = (beta > Real(1e-15)) ?
+            Real(1) / std::sqrt(Real(2) * beta) : config::DEFAULT_BANDWIDTH;
+    };
+
+    if (use_parallel) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            process_node(static_cast<Index>(i));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            process_node(i);
+        }
     }
 }
 
 // =============================================================================
-// Kernel Two-Sample Test Statistic (MMD Approximation)
+// Kernel Two-Sample Test Statistic (MMD Approximation) - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -862,8 +1261,8 @@ Real kernel_mmd_from_groups(
     KernelType kernel_type = KernelType::Gaussian
 ) {
     const Index n = distances.primary_dim();
-
-    bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
+    detail::KernelParams params(bandwidth, kernel_type);
+    const Real self_k = detail::self_kernel(params);
 
     // Count samples in each group
     Size n_A = 0, n_B = 0;
@@ -872,9 +1271,9 @@ Real kernel_mmd_from_groups(
         else ++n_B;
     }
 
-    if (n_A == 0 || n_B == 0) return Real(0);
+    if (SCL_UNLIKELY(n_A == 0 || n_B == 0)) return Real(0);
 
-    // Compute kernel sums
+    // Compute kernel sums (could parallelize with reduction)
     Real k_AA = Real(0);
     Real k_BB = Real(0);
     Real k_AB = Real(0);
@@ -883,14 +1282,12 @@ Real kernel_mmd_from_groups(
         auto indices = distances.primary_indices(i);
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
-
         bool in_A = group_labels[i];
 
         for (Index k = 0; k < len; ++k) {
             Index j = indices[k];
             Real d = static_cast<Real>(values[k]);
-            Real kval = detail::apply_kernel(d * d, bandwidth, kernel_type);
-
+            Real kval = detail::apply_kernel(d * d, params);
             bool j_in_A = group_labels[j];
 
             if (in_A && j_in_A) {
@@ -903,15 +1300,16 @@ Real kernel_mmd_from_groups(
         }
 
         // Self-kernel contribution
-        Real self_k = detail::apply_kernel(Real(0), bandwidth, kernel_type);
         if (in_A) k_AA += self_k;
         else k_BB += self_k;
     }
 
     // MMD^2 = E[K(X,X')] + E[K(Y,Y')] - 2*E[K(X,Y)]
-    Real mmd_sq = k_AA / (static_cast<Real>(n_A) * static_cast<Real>(n_A))
-                + k_BB / (static_cast<Real>(n_B) * static_cast<Real>(n_B))
-                - Real(2) * k_AB / (static_cast<Real>(n_A) * static_cast<Real>(n_B));
+    Real n_A_r = static_cast<Real>(n_A);
+    Real n_B_r = static_cast<Real>(n_B);
+    Real mmd_sq = k_AA / (n_A_r * n_A_r)
+                + k_BB / (n_B_r * n_B_r)
+                - Real(2) * k_AB / (n_A_r * n_B_r);
 
     return (mmd_sq > Real(0)) ? std::sqrt(mmd_sq) : Real(0);
 }
@@ -925,7 +1323,8 @@ inline Real evaluate_kernel(
     Real distance,
     Real bandwidth
 ) {
-    return detail::apply_kernel(distance * distance, bandwidth, type);
+    detail::KernelParams params(bandwidth, type);
+    return detail::apply_kernel(distance * distance, params);
 }
 
 // =============================================================================
@@ -937,16 +1336,12 @@ inline Real kernel_normalization(
     Index dimension
 ) {
     constexpr Real pi = Real(3.14159265358979323846);
-
     switch (type) {
         case KernelType::Gaussian: {
-            // (2 * pi)^(-d/2)
-            return std::pow(Real(2) * pi, -static_cast<Real>(dimension) / Real(2));
+            return std::pow(Real(2) * pi, -static_cast<Real>(dimension) * Real(0.5));
         }
         case KernelType::Epanechnikov: {
-            // 3/(4) for d=1, more complex for higher d
-            if (dimension == 1) return Real(0.75);
-            return Real(0.75);  // Simplified
+            return Real(0.75);
         }
         case KernelType::Uniform: {
             return Real(0.5);
@@ -967,38 +1362,52 @@ template <typename T, bool IsCSR>
 void rbf_sparse(
     const Sparse<T, IsCSR>& distances,
     Real bandwidth,
-    Real* kernel_values
+    Real* SCL_RESTRICT kernel_values
 ) {
     compute_kernel_matrix(distances, kernel_values, bandwidth, KernelType::Gaussian);
 }
 
 // =============================================================================
-// Adaptive RBF Kernel
+// Adaptive RBF Kernel - Optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
 void adaptive_rbf(
     const Sparse<T, IsCSR>& distances,
     Array<const Real> bandwidths,
-    Real* kernel_values
+    Real* SCL_RESTRICT kernel_values
 ) {
     const Index n = distances.primary_dim();
-
     Size val_idx = 0;
+
     for (Index i = 0; i < n; ++i) {
         auto indices = distances.primary_indices(i);
         auto values = distances.primary_values(i);
         const Index len = distances.primary_length(i);
 
         Real h_i = scl::algo::max2(bandwidths[i], config::MIN_BANDWIDTH);
+        Real h_i_sq = h_i * h_i;
 
-        for (Index k = 0; k < len; ++k) {
+        Index k = 0;
+        for (; k + 4 <= len; k += 4) {
+            for (int off = 0; off < 4; ++off) {
+                Index j = indices[k + off];
+                Real h_j = scl::algo::max2(bandwidths[j], config::MIN_BANDWIDTH);
+                Real h_sq = h_i_sq * h_j * h_j;  // (h_i * h_j)^2 for geometric mean squared
+                Real h = std::sqrt(std::sqrt(h_sq));  // sqrt(h_i * h_j)
+                Real d = static_cast<Real>(values[k + off]);
+                Real inv_2h2 = Real(0.5) / (h * h);
+                kernel_values[val_idx++] = std::exp(-d * d * inv_2h2);
+            }
+        }
+
+        for (; k < len; ++k) {
             Index j = indices[k];
             Real h_j = scl::algo::max2(bandwidths[j], config::MIN_BANDWIDTH);
             Real h = std::sqrt(h_i * h_j);
-
             Real d = static_cast<Real>(values[k]);
-            kernel_values[val_idx++] = detail::gaussian_kernel(d * d, h);
+            Real inv_2h2 = Real(0.5) / (h * h);
+            kernel_values[val_idx++] = std::exp(-d * d * inv_2h2);
         }
     }
 }

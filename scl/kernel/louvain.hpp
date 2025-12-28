@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <atomic>
 
 // =============================================================================
 // FILE: scl/kernel/louvain.hpp
@@ -48,27 +49,129 @@ struct CommunityInfo {
 };
 
 // =============================================================================
-// Helper: Compute total graph weight
+// Neighbor Hash Table: O(1) community weight lookup with Fibonacci hashing
+// =============================================================================
+
+struct NeighborHashTable {
+    static constexpr Index EMPTY = -1;
+
+    Index* keys;
+    Real* values;
+    Size capacity;
+    Size size;
+
+    void init(Size max_size) {
+        // Round up to power of 2 for efficient masking
+        capacity = 1;
+        while (capacity < max_size * 2) capacity <<= 1;
+
+        keys = scl::memory::aligned_alloc<Index>(capacity, SCL_ALIGNMENT);
+        values = scl::memory::aligned_alloc<Real>(capacity, SCL_ALIGNMENT);
+        clear();
+    }
+
+    void destroy() {
+        if (keys) scl::memory::aligned_free(keys, SCL_ALIGNMENT);
+        if (values) scl::memory::aligned_free(values, SCL_ALIGNMENT);
+        keys = nullptr;
+        values = nullptr;
+    }
+
+    SCL_FORCE_INLINE void clear() noexcept {
+        for (Size i = 0; i < capacity; ++i) {
+            keys[i] = EMPTY;
+        }
+        size = 0;
+    }
+
+    SCL_FORCE_INLINE Size hash(Index key) const noexcept {
+        // Fibonacci hashing for better distribution
+        uint32_t h = static_cast<uint32_t>(key) * 2654435769u;
+        return static_cast<Size>(h) & (capacity - 1);
+    }
+
+    SCL_FORCE_INLINE void insert_or_add(Index key, Real value) noexcept {
+        Size idx = hash(key);
+
+        while (true) {
+            if (keys[idx] == key) {
+                values[idx] += value;
+                return;
+            }
+            if (keys[idx] == EMPTY) {
+                keys[idx] = key;
+                values[idx] = value;
+                ++size;
+                return;
+            }
+            idx = (idx + 1) & (capacity - 1);
+        }
+    }
+
+    SCL_FORCE_INLINE Real get(Index key) const noexcept {
+        Size idx = hash(key);
+
+        while (keys[idx] != EMPTY) {
+            if (keys[idx] == key) {
+                return values[idx];
+            }
+            idx = (idx + 1) & (capacity - 1);
+        }
+        return Real(0);
+    }
+
+    // Iterator for non-empty entries
+    template <typename Func>
+    SCL_FORCE_INLINE void for_each(Func&& func) const {
+        for (Size i = 0; i < capacity; ++i) {
+            if (keys[i] != EMPTY) {
+                func(keys[i], values[i]);
+            }
+        }
+    }
+};
+
+// =============================================================================
+// Helper: Compute total graph weight - SIMD and parallel optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
 SCL_FORCE_INLINE Real compute_total_weight(const Sparse<T, IsCSR>& adj) {
     const Index n = adj.primary_dim();
-    Real total = Real(0);
+    const Size N = static_cast<Size>(n);
 
+    if (N >= config::PARALLEL_THRESHOLD) {
+        std::atomic<int64_t> atomic_total{0};
+        constexpr int64_t SCALE = 1000000;
+
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            auto values = adj.primary_values(static_cast<Index>(i));
+            const Size len = static_cast<Size>(adj.primary_length(static_cast<Index>(i)));
+
+            Real row_sum = scl::vectorize::sum(Array<const Real>(
+                reinterpret_cast<const Real*>(values.ptr), len));
+
+            atomic_total.fetch_add(static_cast<int64_t>(row_sum * SCALE),
+                                   std::memory_order_relaxed);
+        });
+
+        return static_cast<Real>(atomic_total.load()) / (SCALE * Real(2));
+    }
+
+    // Sequential path with SIMD
+    Real total = Real(0);
     for (Index i = 0; i < n; ++i) {
         auto values = adj.primary_values(i);
-        const Index len = adj.primary_length(i);
-        for (Index k = 0; k < len; ++k) {
-            total += static_cast<Real>(values[k]);
-        }
+        const Size len = static_cast<Size>(adj.primary_length(i));
+        total += scl::vectorize::sum(Array<const Real>(
+            reinterpret_cast<const Real*>(values.ptr), len));
     }
 
     return total / Real(2);  // Each edge counted twice in undirected graph
 }
 
 // =============================================================================
-// Helper: Compute node degrees (weighted)
+// Helper: Compute node degrees (weighted) - SIMD and parallel optimized
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -77,17 +180,22 @@ void compute_node_degrees(
     Real* degrees
 ) {
     const Index n = adj.primary_dim();
+    const Size N = static_cast<Size>(n);
 
-    for (Index i = 0; i < n; ++i) {
-        auto values = adj.primary_values(i);
-        const Index len = adj.primary_length(i);
-        Real deg = Real(0);
-
-        for (Index k = 0; k < len; ++k) {
-            deg += static_cast<Real>(values[k]);
+    if (N >= config::PARALLEL_THRESHOLD) {
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+            auto values = adj.primary_values(static_cast<Index>(i));
+            const Size len = static_cast<Size>(adj.primary_length(static_cast<Index>(i)));
+            degrees[i] = scl::vectorize::sum(Array<const Real>(
+                reinterpret_cast<const Real*>(values.ptr), len));
+        });
+    } else {
+        for (Index i = 0; i < n; ++i) {
+            auto values = adj.primary_values(i);
+            const Size len = static_cast<Size>(adj.primary_length(i));
+            degrees[i] = scl::vectorize::sum(Array<const Real>(
+                reinterpret_cast<const Real*>(values.ptr), len));
         }
-
-        degrees[i] = deg;
     }
 }
 
@@ -153,6 +261,7 @@ SCL_FORCE_INLINE Real modularity_gain(
 
 // =============================================================================
 // Local Moving Phase: Try moving each node to best neighbor community
+// Uses NeighborHashTable for O(1) community weight lookup
 // =============================================================================
 
 template <typename T, bool IsCSR>
@@ -162,8 +271,7 @@ bool local_moving_phase(
     CommunityInfo& info,
     Real total_weight,
     Real resolution,
-    Index* neighbor_comms,   // Workspace: unique neighbor communities
-    Real* k_i_to_comm        // Workspace: weight to each neighbor comm
+    NeighborHashTable& hash_table  // Workspace: hash table for neighbor communities
 ) {
     const Index n = static_cast<Index>(info.n_nodes);
     const Real m = total_weight;
@@ -185,8 +293,8 @@ bool local_moving_phase(
             auto values = adj.primary_values(i);
             const Index len = adj.primary_length(i);
 
-            // Reset workspace
-            Index n_neighbor_comms = 0;
+            // Clear hash table for this node
+            hash_table.clear();
 
             // Compute weight to current community and collect neighbor communities
             Real k_i_current = Real(0);
@@ -200,21 +308,8 @@ bool local_moving_phase(
                     k_i_current += w;
                 }
 
-                // Check if we've seen this community
-                bool found = false;
-                for (Index c = 0; c < n_neighbor_comms; ++c) {
-                    if (neighbor_comms[c] == comm_j) {
-                        k_i_to_comm[c] += w;
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
-                    neighbor_comms[n_neighbor_comms] = comm_j;
-                    k_i_to_comm[n_neighbor_comms] = w;
-                    ++n_neighbor_comms;
-                }
+                // O(1) hash table insert/update
+                hash_table.insert_or_add(comm_j, w);
             }
 
             // Find best community to move to
@@ -227,12 +322,11 @@ bool local_moving_phase(
             // Modularity loss from leaving current community
             Real loss = modularity_gain(k_i, k_i_current, sigma_current_without, m, resolution);
 
-            for (Index c = 0; c < n_neighbor_comms; ++c) {
-                Index target_comm = neighbor_comms[c];
-                if (target_comm == current_comm) continue;
+            // Iterate over neighbor communities using hash table
+            hash_table.for_each([&](Index target_comm, Real k_i_target) {
+                if (target_comm == current_comm) return;
 
                 Real sigma_target = info.sigma_tot[target_comm];
-                Real k_i_target = k_i_to_comm[c];
 
                 // Modularity gain from joining target community
                 Real gain = modularity_gain(k_i, k_i_target, sigma_target, m, resolution);
@@ -242,7 +336,7 @@ bool local_moving_phase(
                     best_gain = delta_q;
                     best_comm = target_comm;
                 }
-            }
+            });
 
             // Move node if beneficial
             if (best_comm != current_comm) {
@@ -255,11 +349,6 @@ bool local_moving_phase(
 
                 improved = true;
                 any_move = true;
-            }
-
-            // Reset k_i_to_comm for next iteration
-            for (Index c = 0; c < n_neighbor_comms; ++c) {
-                k_i_to_comm[c] = Real(0);
             }
         }
     }
@@ -406,9 +495,11 @@ void cluster(
     Real* sigma_tot = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
     Index* comm_size = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
     Index* node_to_comm = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Index* neighbor_comms = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* k_i_to_comm = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
     Index* old_to_new = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+    // Initialize hash table for neighbor community lookup
+    detail::NeighborHashTable hash_table;
+    hash_table.init(static_cast<Size>(n));
 
     // Compute node degrees
     detail::compute_node_degrees(adjacency, degrees);
@@ -420,13 +511,10 @@ void cluster(
     info.node_to_comm = node_to_comm;
     detail::init_communities(info, degrees, n);
 
-    // Initialize k_i_to_comm workspace
-    scl::algo::zero(k_i_to_comm, static_cast<Size>(n));
-
     // First level: operate on original graph
     bool improved = detail::local_moving_phase(
         adjacency, degrees, info, total_weight, resolution,
-        neighbor_comms, k_i_to_comm
+        hash_table
     );
 
     // Relabel communities
@@ -486,12 +574,10 @@ void cluster(
             agg_info.n_nodes = current_n;
             detail::init_communities(agg_info, agg_degrees, current_n);
 
-            scl::algo::zero(k_i_to_comm, static_cast<Size>(current_n));
-
             // Local moving on aggregated graph
             improved = detail::local_moving_phase(
                 agg_adj, agg_degrees, agg_info, total_weight, resolution,
-                neighbor_comms, k_i_to_comm
+                hash_table
             );
 
             scl::memory::aligned_free(agg_degrees, SCL_ALIGNMENT);
@@ -529,9 +615,8 @@ void cluster(
     }
 
     // Cleanup
+    hash_table.destroy();
     scl::memory::aligned_free(old_to_new, SCL_ALIGNMENT);
-    scl::memory::aligned_free(k_i_to_comm, SCL_ALIGNMENT);
-    scl::memory::aligned_free(neighbor_comms, SCL_ALIGNMENT);
     scl::memory::aligned_free(node_to_comm, SCL_ALIGNMENT);
     scl::memory::aligned_free(comm_size, SCL_ALIGNMENT);
     scl::memory::aligned_free(sigma_tot, SCL_ALIGNMENT);

@@ -7,8 +7,9 @@
 #include "scl/core/macros.hpp"
 #include "scl/threading/parallel_for.hpp"
 
+#include "scl/core/algo.hpp"
+
 #include <cmath>
-#include <algorithm>
 
 // =============================================================================
 // FILE: scl/kernel/feature.hpp
@@ -148,7 +149,7 @@ SCL_FORCE_INLINE void compute_clipped_sum_sq_simd(
     Real sq_sum = s::GetLane(s::SumOfLanes(d, v_sq));
 
     for (; k < len; ++k) {
-        Real v = std::min(static_cast<Real>(vals[k]), clip);
+        Real v = scl::algo::min2(static_cast<Real>(vals[k]), clip);
         sum += v;
         sq_sum += v * v;
     }

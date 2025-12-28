@@ -6,6 +6,8 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/vectorize.hpp"
+#include "scl/core/algo.hpp"
+#include "scl/core/macros.hpp"
 #include "scl/threading/parallel_for.hpp"
 #include "scl/threading/workspace.hpp"
 
@@ -27,6 +29,8 @@ namespace config {
     constexpr double INV_SQRT2 = 0.7071067811865475244;
     constexpr double EPS = 1e-9;
     constexpr double SIGMA_MIN = 1e-12;
+    constexpr Size PREFETCH_DISTANCE = 16;
+    constexpr Size BINARY_SEARCH_THRESHOLD = 32;
 }
 
 // =============================================================================
@@ -35,8 +39,92 @@ namespace config {
 
 namespace detail {
 
+// =============================================================================
+// Helper: Find negative boundary using adaptive strategy
+// =============================================================================
+
 template <typename T>
-SCL_FORCE_INLINE void compute_rank_sum_sparse(
+SCL_FORCE_INLINE SCL_HOT Size find_negative_boundary(const T* SCL_RESTRICT arr, Size n) {
+    if (SCL_UNLIKELY(n == 0)) return 0;
+
+    // Fast path: check endpoints first
+    if (SCL_LIKELY(arr[0] >= T(0))) return 0;
+    if (SCL_UNLIKELY(arr[n - 1] < T(0))) return n;
+
+    if (n >= config::BINARY_SEARCH_THRESHOLD) {
+        // Binary search for large arrays: find first element >= 0
+        const T* result = scl::algo::lower_bound(arr, arr + n, T(0));
+        return static_cast<Size>(result - arr);
+    } else {
+        // 4-way unrolled linear scan for small arrays
+        Size k = 0;
+        for (; k + 4 <= n; k += 4) {
+            if (arr[k + 0] >= T(0)) return k + 0;
+            if (arr[k + 1] >= T(0)) return k + 1;
+            if (arr[k + 2] >= T(0)) return k + 2;
+            if (arr[k + 3] >= T(0)) return k + 3;
+        }
+
+        for (; k < n; ++k) {
+            if (arr[k] >= T(0)) return k;
+        }
+
+        return n;
+    }
+}
+
+// =============================================================================
+// Helper: Merge with tie handling and prefetch
+// =============================================================================
+
+template <typename T>
+SCL_FORCE_INLINE void merge_with_ties(
+    const T* SCL_RESTRICT a, Size& pa, Size pa_end,
+    const T* SCL_RESTRICT b, Size& pb, Size pb_end,
+    Size& rank,
+    double& R1,
+    double& tie_sum
+) {
+    while (pa < pa_end || pb < pb_end) {
+        // Prefetch ahead
+        if (SCL_LIKELY(pa + config::PREFETCH_DISTANCE < pa_end)) {
+            SCL_PREFETCH_READ(&a[pa + config::PREFETCH_DISTANCE], 0);
+        }
+        if (SCL_LIKELY(pb + config::PREFETCH_DISTANCE < pb_end)) {
+            SCL_PREFETCH_READ(&b[pb + config::PREFETCH_DISTANCE], 0);
+        }
+
+        T v1 = (pa < pa_end) ? a[pa] : std::numeric_limits<T>::max();
+        T v2 = (pb < pb_end) ? b[pb] : std::numeric_limits<T>::max();
+        T val = (v1 < v2) ? v1 : v2;
+
+        Size count1 = 0;
+        while (pa < pa_end && a[pa] == val) { count1++; pa++; }
+
+        Size count2 = 0;
+        while (pb < pb_end && b[pb] == val) { count2++; pb++; }
+
+        Size t = count1 + count2;
+        double avg_rank = static_cast<double>(rank) + static_cast<double>(t - 1) * 0.5;
+
+        R1 += static_cast<double>(count1) * avg_rank;
+
+        if (SCL_UNLIKELY(t > 1)) {
+            double td = static_cast<double>(t);
+            // Optimized: t^3 - t = t * (t^2 - 1)
+            tie_sum += td * (td * td - 1.0);
+        }
+
+        rank += t;
+    }
+}
+
+// =============================================================================
+// Main rank sum computation
+// =============================================================================
+
+template <typename T>
+SCL_FORCE_INLINE SCL_HOT void compute_rank_sum_sparse(
     const T* SCL_RESTRICT a, Size na_nz, Size n1_total,
     const T* SCL_RESTRICT b, Size nb_nz, Size n2_total,
     double& out_R1,
@@ -49,78 +137,34 @@ SCL_FORCE_INLINE void compute_rank_sum_sparse(
     Size b_zeros = n2_total - nb_nz;
     Size total_zeros = a_zeros + b_zeros;
 
-    Size na_neg = 0;
-    while (na_neg < na_nz && a[na_neg] < T(0)) na_neg++;
-
-    Size nb_neg = 0;
-    while (nb_neg < nb_nz && b[nb_neg] < T(0)) nb_neg++;
+    // Use binary search for negative boundary (O(log n) instead of O(n))
+    Size na_neg = find_negative_boundary(a, na_nz);
+    Size nb_neg = find_negative_boundary(b, nb_nz);
 
     Size rank = 1;
-
     Size p1 = 0, p2 = 0;
 
-    while (p1 < na_neg || p2 < nb_neg) {
-        T v1 = (p1 < na_neg) ? a[p1] : std::numeric_limits<T>::max();
-        T v2 = (p2 < nb_neg) ? b[p2] : std::numeric_limits<T>::max();
-        T val = (v1 < v2) ? v1 : v2;
+    // Merge negative values
+    merge_with_ties(a, p1, na_neg, b, p2, nb_neg, rank, R1, tie_sum);
 
-        Size count1 = 0;
-        while (p1 < na_neg && a[p1] == val) { count1++; p1++; }
-
-        Size count2 = 0;
-        while (p2 < nb_neg && b[p2] == val) { count2++; p2++; }
-
-        Size t = count1 + count2;
-        double avg_rank = static_cast<double>(rank) + static_cast<double>(t - 1) * 0.5;
-
-        R1 += static_cast<double>(count1) * avg_rank;
-
-        if (t > 1) {
-            double td = static_cast<double>(t);
-            tie_sum += (td * td * td - td);
-        }
-
-        rank += t;
-    }
-
-    if (total_zeros > 0) {
+    // Handle zeros
+    if (SCL_UNLIKELY(total_zeros > 0)) {
         double avg_rank = static_cast<double>(rank) + static_cast<double>(total_zeros - 1) * 0.5;
         R1 += static_cast<double>(a_zeros) * avg_rank;
 
-        if (total_zeros > 1) {
+        if (SCL_UNLIKELY(total_zeros > 1)) {
             double tz = static_cast<double>(total_zeros);
-            tie_sum += (tz * tz * tz - tz);
+            // Optimized: t^3 - t = t * (t^2 - 1)
+            tie_sum += tz * (tz * tz - 1.0);
         }
 
         rank += total_zeros;
     }
 
+    // Continue merging positive values
     p1 = na_neg;
     p2 = nb_neg;
-
-    while (p1 < na_nz || p2 < nb_nz) {
-        T v1 = (p1 < na_nz) ? a[p1] : std::numeric_limits<T>::max();
-        T v2 = (p2 < nb_nz) ? b[p2] : std::numeric_limits<T>::max();
-        T val = (v1 < v2) ? v1 : v2;
-
-        Size count1 = 0;
-        while (p1 < na_nz && a[p1] == val) { count1++; p1++; }
-
-        Size count2 = 0;
-        while (p2 < nb_nz && b[p2] == val) { count2++; p2++; }
-
-        Size t = count1 + count2;
-        double avg_rank = static_cast<double>(rank) + static_cast<double>(t - 1) * 0.5;
-
-        R1 += static_cast<double>(count1) * avg_rank;
-
-        if (t > 1) {
-            double td = static_cast<double>(t);
-            tie_sum += (td * td * td - td);
-        }
-
-        rank += t;
-    }
+    merge_with_ties(a, p1, na_nz, b, p2, nb_nz, rank, R1, tie_sum);
 
     out_R1 = R1;
     out_tie_sum = tie_sum;
@@ -135,6 +179,7 @@ struct MWUConstants {
     double var_base;
     double N_p1;
     double N_Nm1;
+    double inv_N_Nm1;  // Precomputed reciprocal for division optimization
 
     MWUConstants(Size n1_total, Size n2_total)
         : n1d(static_cast<double>(n1_total))
@@ -145,10 +190,11 @@ struct MWUConstants {
         , var_base(n1d * n2d / 12.0)
         , N_p1(N + 1.0)
         , N_Nm1(N * (N - 1.0))
+        , inv_N_Nm1((N_Nm1 > config::EPS) ? (1.0 / N_Nm1) : 0.0)
     {}
 };
 
-SCL_FORCE_INLINE void compute_u_and_pvalue(
+SCL_FORCE_INLINE SCL_HOT void compute_u_and_pvalue(
     double R1,
     double tie_sum,
     const MWUConstants& c,
@@ -157,13 +203,14 @@ SCL_FORCE_INLINE void compute_u_and_pvalue(
 ) {
     double U = R1 - c.half_n1_n1p1;
 
-    double tie_term = (c.N_Nm1 > config::EPS) ? (tie_sum / c.N_Nm1) : 0.0;
+    // Use precomputed reciprocal: multiplication is 10-20x faster than division
+    double tie_term = tie_sum * c.inv_N_Nm1;
     double var = c.var_base * (c.N_p1 - tie_term);
-    double sigma = (var > 0.0) ? std::sqrt(var) : 0.0;
+    double sigma = SCL_LIKELY(var > 0.0) ? std::sqrt(var) : 0.0;
 
     out_u = static_cast<Real>(U);
 
-    if (sigma <= config::SIGMA_MIN) {
+    if (SCL_UNLIKELY(sigma <= config::SIGMA_MIN)) {
         out_pval = Real(1);
     } else {
         double z_numer = U - c.half_n1_n2;
@@ -243,19 +290,25 @@ void mwu_test(
 
         double sum1 = 0.0, sum2 = 0.0;
 
-        // Partition values by group - 4-way unroll
+        // Partition values by group - 4-way unroll with prefetch
         Size k = 0;
         for (; k + 4 <= len_sz; k += 4) {
+            // Prefetch ahead for indirect group_ids access
+            if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len_sz)) {
+                SCL_PREFETCH_READ(&group_ids[indices.ptr[k + config::PREFETCH_DISTANCE]], 0);
+                SCL_PREFETCH_READ(&values.ptr[k + config::PREFETCH_DISTANCE], 0);
+            }
+
             SCL_UNROLL_FULL
             for (Size j = 0; j < 4; ++j) {
                 Index sec_idx = indices.ptr[k + j];
                 int32_t g = group_ids[sec_idx];
                 T val = values.ptr[k + j];
 
-                if (g == 0) {
+                if (SCL_LIKELY(g == 0)) {
                     buf1[n1++] = val;
                     sum1 += static_cast<double>(val);
-                } else if (g == 1) {
+                } else if (SCL_LIKELY(g == 1)) {
                     buf2[n2++] = val;
                     sum2 += static_cast<double>(val);
                 }
@@ -267,10 +320,10 @@ void mwu_test(
             int32_t g = group_ids[sec_idx];
             T val = values.ptr[k];
 
-            if (g == 0) {
+            if (SCL_LIKELY(g == 0)) {
                 buf1[n1++] = val;
                 sum1 += static_cast<double>(val);
-            } else if (g == 1) {
+            } else if (SCL_LIKELY(g == 1)) {
                 buf2[n2++] = val;
                 sum2 += static_cast<double>(val);
             }
@@ -280,17 +333,17 @@ void mwu_test(
         double mean2 = sum2 / c.n2d;
         out_log2_fc[p] = static_cast<Real>(std::log2((mean2 + config::EPS) / (mean1 + config::EPS)));
 
-        if (n1 == 0 && n2 == 0) {
+        if (SCL_UNLIKELY(n1 == 0 && n2 == 0)) {
             out_u_stats[p] = Real(0);
             out_p_values[p] = Real(1);
             return;
         }
 
         // Sort using Highway VQSort (SIMD-optimized, single-threaded)
-        if (n1 > 1) {
+        if (SCL_UNLIKELY(n1 > 1)) {
             scl::sort::sort(Array<T>(buf1, n1));
         }
-        if (n2 > 1) {
+        if (SCL_UNLIKELY(n2 > 1)) {
             scl::sort::sort(Array<T>(buf2, n2));
         }
 

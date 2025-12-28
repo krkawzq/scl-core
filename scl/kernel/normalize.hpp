@@ -9,6 +9,7 @@
 #include "scl/threading/parallel_for.hpp"
 
 #include <algorithm>
+#include <atomic>
 
 // =============================================================================
 // FILE: scl/kernel/normalize.hpp
@@ -63,24 +64,50 @@ SCL_FORCE_INLINE void scale_simd(T* SCL_RESTRICT vals, Size len, T scale) {
 }
 
 template <typename T>
-SCL_FORCE_INLINE T sum_masked_simd(
+SCL_FORCE_INLINE SCL_HOT T sum_masked_simd(
     const T* SCL_RESTRICT vals,
     const Index* SCL_RESTRICT indices,
     Size len,
     const Byte* SCL_RESTRICT mask
 ) {
-    T sum = T(0);
+    // Multi-accumulator pattern to hide latency
+    T sum0 = T(0), sum1 = T(0);
 
     Size k = 0;
 
-    for (; k + 4 <= len; k += 4) {
+    for (; k + 8 <= len; k += 8) {
+        // Prefetch ahead for indirect mask access
+        if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len)) {
+            SCL_PREFETCH_READ(&mask[indices[k + config::PREFETCH_DISTANCE]], 0);
+            SCL_PREFETCH_READ(&mask[indices[k + config::PREFETCH_DISTANCE + 4]], 0);
+        }
+
+        T v0 = (mask[indices[k + 0]] == 0) ? vals[k + 0] : T(0);
+        T v1 = (mask[indices[k + 1]] == 0) ? vals[k + 1] : T(0);
+        T v2 = (mask[indices[k + 2]] == 0) ? vals[k + 2] : T(0);
+        T v3 = (mask[indices[k + 3]] == 0) ? vals[k + 3] : T(0);
+        T v4 = (mask[indices[k + 4]] == 0) ? vals[k + 4] : T(0);
+        T v5 = (mask[indices[k + 5]] == 0) ? vals[k + 5] : T(0);
+        T v6 = (mask[indices[k + 6]] == 0) ? vals[k + 6] : T(0);
+        T v7 = (mask[indices[k + 7]] == 0) ? vals[k + 7] : T(0);
+
+        sum0 += v0 + v1 + v2 + v3;
+        sum1 += v4 + v5 + v6 + v7;
+    }
+
+    T sum = sum0 + sum1;
+
+    // Handle remaining 4-element chunk
+    if (k + 4 <= len) {
         T v0 = (mask[indices[k + 0]] == 0) ? vals[k + 0] : T(0);
         T v1 = (mask[indices[k + 1]] == 0) ? vals[k + 1] : T(0);
         T v2 = (mask[indices[k + 2]] == 0) ? vals[k + 2] : T(0);
         T v3 = (mask[indices[k + 3]] == 0) ? vals[k + 3] : T(0);
         sum += v0 + v1 + v2 + v3;
+        k += 4;
     }
 
+    // Scalar cleanup
     for (; k < len; ++k) {
         if (mask[indices[k]] == 0) {
             sum += vals[k];
@@ -110,7 +137,7 @@ void compute_row_sums(
         const Index len = matrix.primary_length(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        if (len_sz == 0) {
+        if (SCL_UNLIKELY(len_sz == 0)) {
             output[p] = T(0);
             return;
         }
@@ -157,7 +184,7 @@ void primary_sums_masked(
         const Index len = matrix.primary_length(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        if (len_sz == 0) {
+        if (SCL_UNLIKELY(len_sz == 0)) {
             output[p] = Real(0);
             return;
         }
@@ -185,9 +212,12 @@ void detect_highly_expressed(
 
     scl::memory::zero(out_mask);
 
+    // Cast to atomic for thread-safe writes
+    std::atomic<Byte>* atomic_mask = reinterpret_cast<std::atomic<Byte>*>(out_mask.ptr);
+
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         Real total = row_sums[p];
-        if (total <= Real(0)) return;
+        if (SCL_UNLIKELY(total <= Real(0))) return;
 
         Real threshold = total * max_fraction;
 
@@ -195,30 +225,35 @@ void detect_highly_expressed(
         const Index len = matrix.primary_length(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        if (len_sz == 0) return;
+        if (SCL_UNLIKELY(len_sz == 0)) return;
 
         auto values = matrix.primary_values(idx);
         auto indices = matrix.primary_indices(idx);
 
         Size k = 0;
         for (; k + 4 <= len_sz; k += 4) {
+            // Prefetch ahead for indirect mask write
+            if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len_sz)) {
+                SCL_PREFETCH_WRITE(&out_mask.ptr[indices.ptr[k + config::PREFETCH_DISTANCE]], 0);
+            }
+
             if (static_cast<Real>(values.ptr[k + 0]) > threshold) {
-                __atomic_store_n(&out_mask.ptr[indices.ptr[k + 0]], 1, __ATOMIC_RELAXED);
+                atomic_mask[indices.ptr[k + 0]].store(1, std::memory_order_relaxed);
             }
             if (static_cast<Real>(values.ptr[k + 1]) > threshold) {
-                __atomic_store_n(&out_mask.ptr[indices.ptr[k + 1]], 1, __ATOMIC_RELAXED);
+                atomic_mask[indices.ptr[k + 1]].store(1, std::memory_order_relaxed);
             }
             if (static_cast<Real>(values.ptr[k + 2]) > threshold) {
-                __atomic_store_n(&out_mask.ptr[indices.ptr[k + 2]], 1, __ATOMIC_RELAXED);
+                atomic_mask[indices.ptr[k + 2]].store(1, std::memory_order_relaxed);
             }
             if (static_cast<Real>(values.ptr[k + 3]) > threshold) {
-                __atomic_store_n(&out_mask.ptr[indices.ptr[k + 3]], 1, __ATOMIC_RELAXED);
+                atomic_mask[indices.ptr[k + 3]].store(1, std::memory_order_relaxed);
             }
         }
 
         for (; k < len_sz; ++k) {
             if (static_cast<Real>(values.ptr[k]) > threshold) {
-                __atomic_store_n(&out_mask.ptr[indices.ptr[k]], 1, __ATOMIC_RELAXED);
+                atomic_mask[indices.ptr[k]].store(1, std::memory_order_relaxed);
             }
         }
     });

@@ -650,12 +650,201 @@ void my_operation(
 
 ---
 
-## 9. Performance Checklist
+## 9. Zero-Overhead Custom Operators (CRITICAL: No std:: in Hot Paths)
+
+### 9.1 Mandatory Rule: Use Custom Operators Instead of std::
+
+**CRITICAL**: All hot-path code MUST use SCL custom operators instead of standard library functions. This ensures:
+- Zero-overhead abstractions
+- SIMD optimization where applicable
+- Cache-aligned memory access
+- Parallel-friendly implementations
+
+### 9.2 Memory Operations
+
+**NEVER use**:
+- `std::memcpy`, `std::memset`, `std::memmove`
+- `std::vector`, `std::array`
+- `new[]` / `delete[]` (use aligned allocation)
+
+**ALWAYS use**:
+```cpp
+// Memory allocation
+T* buffer = scl::memory::aligned_alloc<T>(count, SCL_ALIGNMENT);
+scl::memory::aligned_free(buffer, SCL_ALIGNMENT);
+
+// Memory operations
+scl::memory::copy_fast(src, dst);        // Fast copy (no overlap)
+scl::memory::copy(src, dst);             // Safe copy (handles overlap)
+scl::memory::zero(Array<T>(ptr, len));   // SIMD-optimized zero
+scl::memory::fill(Array<T>(ptr, len), value);  // SIMD-optimized fill
+
+// Or use algo namespace for unchecked operations
+scl::algo::copy(src_ptr, dst_ptr, n);    // Unchecked fast copy
+scl::algo::fill(dst_ptr, n, value);      // Unchecked fill
+scl::algo::zero(dst_ptr, n);             // Unchecked zero
+```
+
+### 9.3 Sorting Operations
+
+**NEVER use**:
+- `std::sort`, `std::stable_sort`, `std::partial_sort`
+- `std::nth_element`
+- `std::sort` with custom comparators
+
+**ALWAYS use**:
+```cpp
+// Single array sorting (VQSort - SIMD-optimized, parallel)
+scl::sort::sort(Array<Real>(data, n));                    // Ascending
+scl::sort::sort_descending(Array<Real>(data, n));          // Descending
+
+// Key-value pair sorting (for argsort-like operations)
+scl::sort::sort_pairs(
+    Array<Real>(keys, n),
+    Array<Index>(values, n)
+);  // Sort by keys, values follow
+
+scl::sort::sort_pairs_descending(
+    Array<Real>(keys, n),
+    Array<Index>(values, n)
+);  // Descending order
+
+// Convenience functions
+scl::sort::sort_real(Array<Real>(data, n));
+scl::sort::sort_index(Array<Index>(data, n));
+```
+
+**Performance**: VQSort uses SIMD-optimized sorting with automatic parallelization, typically 2-5x faster than `std::sort`.
+
+### 9.4 Mathematical Operations
+
+**NEVER use**:
+- `std::exp`, `std::log`, `std::sqrt` in loops (use SIMD versions)
+- `std::min`, `std::max` in hot loops
+- `std::abs` in vectorized code
+
+**ALWAYS use**:
+```cpp
+// SIMD transcendental functions
+namespace s = scl::simd;
+const s::Tag d;
+auto v_result = s::Exp(d, v_input);      // Vectorized exp
+auto v_result = s::Log(d, v_input);      // Vectorized log
+auto v_result = s::Sqrt(d, v_input);      // Vectorized sqrt
+
+// For scalar operations in non-hot paths, use std:: versions
+// But prefer SIMD when processing arrays
+
+// Min/Max operations
+scl::algo::min2(a, b);                   // Fast min of two values
+scl::algo::max2(a, b);                   // Fast max of two values
+scl::algo::min(data, n);                 // SIMD min reduction
+scl::algo::max(data, n);                 // SIMD max reduction
+
+// Vectorized operations
+scl::vectorize::sum(Array<const Real>(data, n));         // SIMD sum
+scl::vectorize::dot(a, b);                               // SIMD dot product
+scl::vectorize::scale(Array<Real>(data, n), factor);     // SIMD scale
+```
+
+### 9.5 Reduction Operations
+
+**NEVER use**:
+- Manual loops for sum/max/min (unless SIMD-optimized)
+- `std::accumulate`
+
+**ALWAYS use**:
+```cpp
+// SIMD-optimized reductions
+Real total = scl::vectorize::sum(Array<const Real>(data, n));
+Real max_val = scl::algo::max(data, n);
+Real min_val = scl::algo::min(data, n);
+
+// Or use algo namespace for unchecked operations
+Real total = scl::algo::sum(data, n);
+```
+
+### 9.6 Search Operations
+
+**NEVER use**:
+- `std::lower_bound`, `std::upper_bound` (unless in cold paths)
+
+**ALWAYS use**:
+```cpp
+// Unchecked binary search (faster, caller must verify preconditions)
+const Index* pos = scl::algo::lower_bound(first, last, target);
+const Index* pos = scl::algo::upper_bound(first, last, target);
+```
+
+### 9.7 Partial Sorting / Selection
+
+**NEVER use**:
+- `std::partial_sort`, `std::nth_element`
+- Insertion sort for large arrays
+
+**ALWAYS use**:
+```cpp
+// Partial sort (top-k elements)
+scl::algo::partial_sort(data, k, n, [](const T& a, const T& b) {
+    return a < b;
+});
+
+// Nth element (quickselect)
+scl::algo::nth_element(data, nth, last);
+```
+
+### 9.8 Container Operations
+
+**NEVER use**:
+- `std::vector` in hot paths
+- `std::array` (use stack arrays or aligned allocation)
+- `std::unordered_map`, `std::map` in hot paths
+
+**ALWAYS use**:
+```cpp
+// Stack allocation for small buffers
+SCL_STACK_ARRAY(Real, local_buffer, 256);
+
+// Heap allocation for larger buffers
+Real* buffer = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+// ... use buffer ...
+scl::memory::aligned_free(buffer, SCL_ALIGNMENT);
+
+// Or use AlignedBuffer for RAII
+scl::memory::AlignedBuffer<Real> buffer(n);
+Real* ptr = buffer.get();
+```
+
+### 9.9 Complete Replacement Table
+
+| std:: Function | SCL Replacement | Location |
+|---------------|----------------|----------|
+| `std::sort` | `scl::sort::sort` | `scl/core/sort.hpp` |
+| `std::partial_sort` | `scl::algo::partial_sort` | `scl/core/algo.hpp` |
+| `std::nth_element` | `scl::algo::nth_element` | `scl/core/algo.hpp` |
+| `std::lower_bound` | `scl::algo::lower_bound` | `scl/core/algo.hpp` |
+| `std::upper_bound` | `scl::algo::upper_bound` | `scl/core/algo.hpp` |
+| `std::min` / `std::max` | `scl::algo::min2` / `scl::algo::max2` | `scl/core/algo.hpp` |
+| `std::memcpy` | `scl::memory::copy_fast` or `scl::algo::copy` | `scl/core/memory.hpp` / `algo.hpp` |
+| `std::memset` | `scl::memory::zero` or `scl::algo::zero` | `scl/core/memory.hpp` / `algo.hpp` |
+| `std::exp` (in loops) | `scl::simd::Exp` | `scl/core/simd.hpp` |
+| `std::log` (in loops) | `scl::simd::Log` | `scl/core/simd.hpp` |
+| `std::sqrt` (in loops) | `scl::simd::Sqrt` | `scl/core/simd.hpp` |
+| `std::accumulate` | `scl::vectorize::sum` | `scl/core/vectorize.hpp` |
+| `new[]` / `delete[]` | `scl::memory::aligned_alloc` / `aligned_free` | `scl/core/memory.hpp` |
+| `std::vector` | `scl::memory::aligned_alloc` + manual management | `scl/core/memory.hpp` |
+
+---
+
+## 10. Performance Checklist
 
 Before finalizing any kernel implementation, verify:
 
+- [ ] **CRITICAL**: No `std::` functions in hot paths (use SCL custom operators)
 - [ ] No `std::vector` in hot paths (use `scl::memory::aligned_alloc`)
 - [ ] No `std::sort`, `std::min`, `std::max` (use `scl::algo::*` or `scl::sort::*`)
+- [ ] No `std::exp`, `std::log`, `std::sqrt` in loops (use `scl::simd::*`)
+- [ ] No `std::memcpy`, `std::memset` (use `scl::memory::*` or `scl::algo::*`)
 - [ ] SIMD used for vectorizable loops with multi-accumulator pattern
 - [ ] Prefetch hints for sequential memory access
 - [ ] Early exit conditions for edge cases

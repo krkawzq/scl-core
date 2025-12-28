@@ -17,23 +17,42 @@
 
 namespace scl::kernel::resample {
 
+// =============================================================================
+// Configuration
+// =============================================================================
+
+namespace config {
+    constexpr Size PREFETCH_DISTANCE = 16;
+}
+
 namespace detail {
 
 template <typename T>
-SCL_FORCE_INLINE Real sum_simd_4way(const T* SCL_RESTRICT vals, Size len) {
+SCL_FORCE_INLINE SCL_HOT Real sum_simd_4way(const T* SCL_RESTRICT vals, Size len) {
     if constexpr (std::is_same_v<T, Real>) {
         return scl::vectorize::sum(Array<const Real>(vals, len));
     } else {
-        Real sum = Real(0);
+        // For non-Real types, still use vectorize::sum but convert results
+        // Multi-accumulator pattern with cast-as-you-go approach
+        Real sum0 = Real(0), sum1 = Real(0);
+        Real sum2 = Real(0), sum3 = Real(0);
         Size k = 0;
 
-        for (; k + 4 <= len; k += 4) {
-            sum += static_cast<Real>(vals[k + 0]);
-            sum += static_cast<Real>(vals[k + 1]);
-            sum += static_cast<Real>(vals[k + 2]);
-            sum += static_cast<Real>(vals[k + 3]);
+        // 8-way unroll with 4 independent accumulators for ILP
+        for (; k + 8 <= len; k += 8) {
+            sum0 += static_cast<Real>(vals[k + 0]);
+            sum1 += static_cast<Real>(vals[k + 1]);
+            sum2 += static_cast<Real>(vals[k + 2]);
+            sum3 += static_cast<Real>(vals[k + 3]);
+            sum0 += static_cast<Real>(vals[k + 4]);
+            sum1 += static_cast<Real>(vals[k + 5]);
+            sum2 += static_cast<Real>(vals[k + 6]);
+            sum3 += static_cast<Real>(vals[k + 7]);
         }
 
+        Real sum = sum0 + sum1 + sum2 + sum3;
+
+        // Scalar cleanup
         for (; k < len; ++k) {
             sum += static_cast<Real>(vals[k]);
         }
@@ -214,24 +233,29 @@ void downsample(
         const Index len = matrix.primary_length(idx);
         const Size len_sz = static_cast<Size>(len);
         
-        if (len_sz == 0) return;
+        if (SCL_UNLIKELY(len_sz == 0)) return;
         
         auto values = matrix.primary_values(idx);
         
         Real current_sum = detail::sum_simd_4way(values.ptr, len_sz);
         
-        if (current_sum <= target_sum || current_sum <= Real(0)) return;
+        if (SCL_UNLIKELY(current_sum <= target_sum || current_sum <= Real(0))) return;
         
         Real remaining_total = current_sum;
         Real remaining_target = target_sum;
-        
+
         for (Size k = 0; k < len_sz && remaining_target > Real(0); ++k) {
+            // Prefetch ahead for better cache behavior
+            if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len_sz)) {
+                SCL_PREFETCH_READ(&values.ptr[k + config::PREFETCH_DISTANCE], 0);
+            }
+
             Real count = static_cast<Real>(values[k]);
-            if (count <= Real(0)) continue;
-            
+            if (SCL_UNLIKELY(count <= Real(0))) continue;
+
             Real p_select = remaining_target / remaining_total;
             Index sampled = detail::FastBinomial::sample(rng, static_cast<Index>(count), p_select);
-            
+
             values.ptr[k] = static_cast<T>(sampled);
             remaining_target -= static_cast<Real>(sampled);
             remaining_total -= count;
@@ -256,25 +280,30 @@ void downsample_variable(
         const Index len = matrix.primary_length(idx);
         const Size len_sz = static_cast<Size>(len);
         
-        if (len_sz == 0) return;
+        if (SCL_UNLIKELY(len_sz == 0)) return;
         
         auto values = matrix.primary_values(idx);
         
         Real current_sum = detail::sum_simd_4way(values.ptr, len_sz);
         Real target = target_counts[p];
         
-        if (current_sum <= target || current_sum <= Real(0)) return;
+        if (SCL_UNLIKELY(current_sum <= target || current_sum <= Real(0))) return;
         
         Real remaining_total = current_sum;
         Real remaining_target = target;
-        
+
         for (Size k = 0; k < len_sz && remaining_target > Real(0); ++k) {
+            // Prefetch ahead for better cache behavior
+            if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len_sz)) {
+                SCL_PREFETCH_READ(&values.ptr[k + config::PREFETCH_DISTANCE], 0);
+            }
+
             Real count = static_cast<Real>(values[k]);
-            if (count <= Real(0)) continue;
-            
+            if (SCL_UNLIKELY(count <= Real(0))) continue;
+
             Real p_select = remaining_target / remaining_total;
             Index sampled = detail::FastBinomial::sample(rng, static_cast<Index>(count), p_select);
-            
+
             values.ptr[k] = static_cast<T>(sampled);
             remaining_target -= static_cast<Real>(sampled);
             remaining_total -= count;
@@ -297,13 +326,16 @@ void binomial_resample(
         const Index len = matrix.primary_length(idx);
         const Size len_sz = static_cast<Size>(len);
         
-        if (len_sz == 0) return;
+        if (SCL_UNLIKELY(len_sz == 0)) return;
         
         auto values = matrix.primary_values(idx);
         
         for (Size k = 0; k < len_sz; ++k) {
+            if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len_sz)) {
+                SCL_PREFETCH_READ(&values.ptr[k + config::PREFETCH_DISTANCE], 0);
+            }
             Index count = static_cast<Index>(values[k]);
-            if (count > 0) {
+            if (SCL_LIKELY(count > 0)) {
                 values.ptr[k] = static_cast<T>(detail::FastBinomial::sample(rng, count, p));
             }
         }
@@ -325,13 +357,16 @@ void poisson_resample(
         const Index len = matrix.primary_length(idx);
         const Size len_sz = static_cast<Size>(len);
         
-        if (len_sz == 0) return;
+        if (SCL_UNLIKELY(len_sz == 0)) return;
         
         auto values = matrix.primary_values(idx);
         
         for (Size k = 0; k < len_sz; ++k) {
+            if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len_sz)) {
+                SCL_PREFETCH_READ(&values.ptr[k + config::PREFETCH_DISTANCE], 0);
+            }
             Real count = static_cast<Real>(values[k]);
-            if (count > Real(0)) {
+            if (SCL_LIKELY(count > Real(0))) {
                 values.ptr[k] = static_cast<T>(detail::FastPoisson::sample(rng, count * lambda));
             }
         }
