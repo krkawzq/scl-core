@@ -1,17 +1,19 @@
 #pragma once
 
-#include "scl/core/type.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 
 #include <string>
+#include <string_view>
 #include <vector>
+#include <span>
 #include <array>
 #include <optional>
 #include <functional>
 #include <memory>
 #include <variant>
 #include <exception>
+#include <concepts>
 
 #ifdef SCL_HAS_HDF5
 #include <hdf5.h>
@@ -36,9 +38,23 @@ class PropertyList;
 
 namespace detail {
 
+// Concept for HDF5-supported types
+template <typename T>
+concept HDF5NativeType = std::is_same_v<T, float> ||
+                         std::is_same_v<T, double> ||
+                         std::is_same_v<T, int8_t> ||
+                         std::is_same_v<T, int16_t> ||
+                         std::is_same_v<T, int32_t> ||
+                         std::is_same_v<T, int64_t> ||
+                         std::is_same_v<T, uint8_t> ||
+                         std::is_same_v<T, uint16_t> ||
+                         std::is_same_v<T, uint32_t> ||
+                         std::is_same_v<T, uint64_t> ||
+                         std::is_same_v<T, bool>;
+
 // Map C++ types to HDF5 native types
 template <typename T>
-inline hid_t native_type() {
+consteval hid_t native_type() {
     if constexpr (std::is_same_v<T, float>)        return H5T_NATIVE_FLOAT;
     else if constexpr (std::is_same_v<T, double>)  return H5T_NATIVE_DOUBLE;
     else if constexpr (std::is_same_v<T, int8_t>)  return H5T_NATIVE_INT8;
@@ -54,12 +70,13 @@ inline hid_t native_type() {
         return H5T_NATIVE_HBOOL;
     }
     else {
-        throw TypeError("Unsupported HDF5 type");
+        static_assert(!std::is_same_v<T, T>, "Unsupported HDF5 type");
+        return H5I_INVALID_HID;
     }
 }
 
 inline void check_h5(herr_t err, const char* context) {
-    if (err < 0) {
+    if (SCL_UNLIKELY(err < 0)) {
         std::string msg = std::string("HDF5: ") + context;
         
         // Get HDF5 error stack
@@ -77,7 +94,7 @@ inline void check_h5(herr_t err, const char* context) {
             }, &walker);
         
         // If error walk failed, at least we have the context message
-        if (walk_err < 0) {
+        if (SCL_UNLIKELY(walk_err < 0)) {
             msg += " (failed to retrieve error details)";
         }
         
@@ -86,7 +103,7 @@ inline void check_h5(herr_t err, const char* context) {
 }
 
 inline void check_id(hid_t id, const char* context) {
-    if (id < 0) {
+    if (SCL_UNLIKELY(id < 0)) {
         throw IOError(std::string("HDF5 invalid ID: ") + context);
     }
 }
@@ -177,9 +194,9 @@ public:
     Object(const Object&) = delete;
     Object& operator=(const Object&) = delete;
 
-    SCL_NODISCARD hid_t id() const noexcept { return _id; }
+    SCL_NODISCARD constexpr hid_t id() const noexcept { return _id; }
 
-    SCL_NODISCARD bool is_valid() const noexcept {
+    SCL_NODISCARD constexpr bool is_valid() const noexcept {
         return _id >= 0 && _id != H5I_INVALID_HID;
     }
 
@@ -192,25 +209,25 @@ public:
         return id;
     }
 
-    SCL_NODISCARD int get_ref_count() const {
-        if (!is_valid()) return 0;
+    SCL_NODISCARD int get_ref_count() const noexcept(false) {
+        if (SCL_UNLIKELY(!is_valid())) return 0;
         return H5Iget_ref(_id);
     }
 
-    void inc_ref() {
-        if (is_valid()) {
+    void inc_ref() noexcept(false) {
+        if (SCL_LIKELY(is_valid())) {
             detail::check_h5(H5Iinc_ref(_id), "H5Iinc_ref");
         }
     }
 
-    void dec_ref() {
-        if (is_valid()) {
+    void dec_ref() noexcept(false) {
+        if (SCL_LIKELY(is_valid())) {
             detail::check_h5(H5Idec_ref(_id), "H5Idec_ref");
         }
     }
 
-    SCL_NODISCARD H5I_type_t get_type() const {
-        if (!is_valid()) return H5I_BADID;
+    SCL_NODISCARD H5I_type_t get_type() const noexcept {
+        if (SCL_UNLIKELY(!is_valid())) return H5I_BADID;
         return H5Iget_type(_id);
     }
 };
@@ -221,14 +238,19 @@ public:
 
 class Dataspace : public Object {
 public:
-    explicit Dataspace(const std::vector<hsize_t>& dims,
-                      const std::vector<hsize_t>& maxdims = {})
+    explicit Dataspace(std::span<const hsize_t> dims,
+                      std::span<const hsize_t> maxdims = {})
         : Object(H5Screate_simple(static_cast<int>(dims.size()), dims.data(),
                                  maxdims.empty() ? nullptr : maxdims.data()),
                 H5Sclose)
     {
         detail::check_id(_id, "H5Screate_simple");
     }
+    
+    explicit Dataspace(const std::vector<hsize_t>& dims,
+                      const std::vector<hsize_t>& maxdims = {})
+        : Dataspace(std::span<const hsize_t>(dims), 
+                   maxdims.empty() ? std::span<const hsize_t>{} : std::span<const hsize_t>(maxdims)) {}
 
     explicit Dataspace(hid_t space_id)
         : Object(space_id, H5Sclose) {}
@@ -245,39 +267,39 @@ public:
         return Dataspace(id);
     }
 
-    SCL_NODISCARD int get_rank() const {
+    SCL_NODISCARD int get_rank() const noexcept(false) {
         return H5Sget_simple_extent_ndims(_id);
     }
 
-    std::vector<hsize_t> get_dims() const {
+    SCL_NODISCARD std::vector<hsize_t> get_dims() const noexcept(false) {
         int rank = get_rank();
-        if (rank < 0) return {};
+        if (SCL_UNLIKELY(rank < 0)) return {};
         std::vector<hsize_t> dims(rank);
         H5Sget_simple_extent_dims(_id, dims.data(), nullptr);
         return dims;
     }
 
-    std::vector<hsize_t> get_max_dims() const {
+    SCL_NODISCARD std::vector<hsize_t> get_max_dims() const noexcept(false) {
         int rank = get_rank();
-        if (rank < 0) return {};
+        if (SCL_UNLIKELY(rank < 0)) return {};
         std::vector<hsize_t> maxdims(rank);
         H5Sget_simple_extent_dims(_id, nullptr, maxdims.data());
         return maxdims;
     }
 
-    SCL_NODISCARD hssize_t get_num_elements() const {
+    SCL_NODISCARD hssize_t get_num_elements() const noexcept(false) {
         return H5Sget_simple_extent_npoints(_id);
     }
 
-    SCL_NODISCARD bool is_simple() const {
+    SCL_NODISCARD bool is_simple() const noexcept(false) {
         return H5Sis_simple(_id) > 0;
     }
 
     void select_hyperslab(
-        const std::vector<hsize_t>& start,
-        const std::vector<hsize_t>& count,
-        const std::vector<hsize_t>& stride = {},
-        const std::vector<hsize_t>& block = {},
+        std::span<const hsize_t> start,
+        std::span<const hsize_t> count,
+        std::span<const hsize_t> stride = {},
+        std::span<const hsize_t> block = {},
         H5S_seloper_t op = H5S_SELECT_SET
     ) {
         detail::check_h5(
@@ -289,6 +311,22 @@ public:
                 block.empty() ? nullptr : block.data()
             ),
             "H5Sselect_hyperslab"
+        );
+    }
+    
+    void select_hyperslab(
+        const std::vector<hsize_t>& start,
+        const std::vector<hsize_t>& count,
+        const std::vector<hsize_t>& stride = {},
+        const std::vector<hsize_t>& block = {},
+        H5S_seloper_t op = H5S_SELECT_SET
+    ) {
+        select_hyperslab(
+            std::span<const hsize_t>(start),
+            std::span<const hsize_t>(count),
+            stride.empty() ? std::span<const hsize_t>{} : std::span<const hsize_t>(stride),
+            block.empty() ? std::span<const hsize_t>{} : std::span<const hsize_t>(block),
+            op
         );
     }
 
@@ -324,7 +362,7 @@ public:
         detail::check_id(_id, "H5Tcopy");
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     static Datatype native() {
         return Datatype(detail::native_type<T>());
     }
@@ -347,15 +385,15 @@ public:
         return Datatype(type_id, no_copy_tag{});
     }
 
-    SCL_NODISCARD size_t get_size() const {
+    SCL_NODISCARD size_t get_size() const noexcept(false) {
         return H5Tget_size(_id);
     }
 
-    SCL_NODISCARD H5T_class_t get_class() const {
+    SCL_NODISCARD H5T_class_t get_class() const noexcept(false) {
         return H5Tget_class(_id);
     }
 
-    SCL_NODISCARD bool equals(const Datatype& other) const {
+    SCL_NODISCARD bool equals(const Datatype& other) const noexcept(false) {
         return H5Tequal(_id, other._id) > 0;
     }
 
@@ -373,45 +411,60 @@ protected:
 
 class Attribute : public Object {
 public:
-    Attribute(hid_t loc_id, const std::string& name)
-        : Object(H5Aopen(loc_id, name.c_str(), H5P_DEFAULT), H5Aclose)
+    Attribute(hid_t loc_id, std::string_view name)
+        : Object(H5Aopen(loc_id, std::string(name).c_str(), H5P_DEFAULT), H5Aclose)
     {
-        detail::check_id(_id, ("H5Aopen: " + name).c_str());
+        detail::check_id(_id, "H5Aopen");
     }
+    
+    Attribute(hid_t loc_id, const std::string& name)
+        : Attribute(loc_id, std::string_view(name)) {}
 
+    static Attribute create(
+        hid_t loc_id,
+        std::string_view name,
+        hid_t type_id,
+        const Dataspace& space
+    ) {
+        std::string name_str(name);
+        hid_t id = H5Acreate(loc_id, name_str.c_str(), type_id, space.id(),
+                            H5P_DEFAULT, H5P_DEFAULT);
+        detail::check_id(id, "H5Acreate");
+        // NOLINTNEXTLINE(cppcoreguidelines-slicing)
+        // Intentional: private constructor with bool tag for factory pattern
+        return {id, false};
+    }
+    
     static Attribute create(
         hid_t loc_id,
         const std::string& name,
         hid_t type_id,
         const Dataspace& space
     ) {
-        hid_t id = H5Acreate(loc_id, name.c_str(), type_id, space.id(),
-                            H5P_DEFAULT, H5P_DEFAULT);
-        detail::check_id(id, ("H5Acreate: " + name).c_str());
-        return Attribute(id, false);
+        return create(loc_id, std::string_view(name), type_id, space);
     }
 
-    Dataspace get_space() const {
+    SCL_NODISCARD Dataspace get_space() const {
         hid_t space_id = H5Aget_space(_id);
         detail::check_id(space_id, "H5Aget_space");
         return Dataspace(space_id);
     }
 
-    Datatype get_type() const {
+    SCL_NODISCARD Datatype get_type() const {
         hid_t type_id = H5Aget_type(_id);
         detail::check_id(type_id, "H5Aget_type");
         return Datatype::from_id(type_id);
     }
 
-    std::string get_name() const {
+    SCL_NODISCARD std::string get_name() const {
         ssize_t size = H5Aget_name(_id, 0, nullptr);
-        if (size < 0) return "";
+        if (SCL_UNLIKELY(size < 0)) return "";
         std::string name(size, '\0');
         H5Aget_name(_id, size + 1, name.data());
         return name;
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     void read(T* buffer) const {
         detail::check_h5(
             H5Aread(_id, detail::native_type<T>(), buffer),
@@ -419,7 +472,7 @@ public:
         );
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     void write(const T* buffer) {
         detail::check_h5(
             H5Awrite(_id, detail::native_type<T>(), buffer),
@@ -427,19 +480,19 @@ public:
         );
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     T read_scalar() const {
         T value;
         read(&value);
         return value;
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     void write_scalar(const T& value) {
         write(&value);
     }
 
-    std::string read_string() const {
+    SCL_NODISCARD std::string read_string() const {
         Datatype dtype = get_type();
         
         if (H5Tis_variable_str(dtype.id()) > 0) {
@@ -516,10 +569,10 @@ protected:
         : Object(id, closer) {}
 
 public:
-    PropertyList copy() const {
+    SCL_NODISCARD PropertyList copy() const {
         hid_t new_id = H5Pcopy(_id);
         detail::check_id(new_id, "H5Pcopy");
-        return PropertyList(new_id, H5Pclose);
+        return {new_id, H5Pclose};
     }
 };
 
@@ -533,13 +586,13 @@ protected:
     friend class File;
 
 public:
-    FileAccessProps copy() const {
+    SCL_NODISCARD FileAccessProps copy() const {
         hid_t new_id = H5Pcopy(_id);
         detail::check_id(new_id, "H5Pcopy");
-        return FileAccessProps(new_id, H5Pclose);
+        return {new_id, H5Pclose};
     }
     
-    FileAccessProps& cache(size_t nslots, size_t nbytes, double preemption) {
+    FileAccessProps& cache(size_t nslots, size_t nbytes, double preemption) noexcept(false) {
         detail::check_h5(
             H5Pset_cache(_id, 0, nslots, nbytes, preemption),
             "H5Pset_cache"
@@ -547,7 +600,7 @@ public:
         return *this;
     }
 
-    FileAccessProps& alignment(hsize_t threshold, hsize_t alignment) {
+    FileAccessProps& alignment(hsize_t threshold, hsize_t alignment) noexcept(false) {
         detail::check_h5(
             H5Pset_alignment(_id, threshold, alignment),
             "H5Pset_alignment"
@@ -566,10 +619,10 @@ protected:
     friend class File;
 
 public:
-    FileCreateProps copy() const {
+    SCL_NODISCARD FileCreateProps copy() const {
         hid_t new_id = H5Pcopy(_id);
         detail::check_id(new_id, "H5Pcopy");
-        return FileCreateProps(new_id, H5Pclose);
+        return {new_id, H5Pclose};
     }
 };
 
@@ -583,10 +636,10 @@ protected:
     friend class Dataset;
 
 public:
-    DatasetAccessProps copy() const {
+    SCL_NODISCARD DatasetAccessProps copy() const {
         hid_t new_id = H5Pcopy(_id);
         detail::check_id(new_id, "H5Pcopy");
-        return DatasetAccessProps(new_id, H5Pclose);
+        return {new_id, H5Pclose};
     }
     
     DatasetAccessProps& chunk_cache(size_t nslots, size_t nbytes, double preemption) {
@@ -602,12 +655,16 @@ class DatasetCreateProps : public PropertyList {
 public:
     DatasetCreateProps() : PropertyList(H5P_DATASET_CREATE) {}
 
-    DatasetCreateProps& chunked(const std::vector<hsize_t>& chunk_dims) {
+    DatasetCreateProps& chunked(std::span<const hsize_t> chunk_dims) noexcept(false) {
         detail::check_h5(
             H5Pset_chunk(_id, static_cast<int>(chunk_dims.size()), chunk_dims.data()),
             "H5Pset_chunk"
         );
         return *this;
+    }
+    
+    DatasetCreateProps& chunked(const std::vector<hsize_t>& chunk_dims) {
+        return chunked(std::span<const hsize_t>(chunk_dims));
     }
 
     DatasetCreateProps& deflate(unsigned level = 6) {
@@ -620,8 +677,8 @@ public:
         return *this;
     }
 
-    template <typename T>
-    DatasetCreateProps& fill_value(const T& value) {
+    template <detail::HDF5NativeType T>
+    DatasetCreateProps& fill_value(const T& value) noexcept(false) {
         detail::check_h5(
             H5Pset_fill_value(_id, detail::native_type<T>(), &value),
             "H5Pset_fill_value"
@@ -643,10 +700,10 @@ protected:
     friend class Dataset;
 
 public:
-    DatasetCreateProps copy() const {
+    SCL_NODISCARD DatasetCreateProps copy() const {
         hid_t new_id = H5Pcopy(_id);
         detail::check_id(new_id, "H5Pcopy");
-        return DatasetCreateProps(new_id, H5Pclose);
+        return {new_id, H5Pclose};
     }
 };
 
@@ -667,17 +724,28 @@ protected:
 public:
     // Existence and Type Queries
 
+    SCL_NODISCARD bool exists(std::string_view name) const {
+        std::string name_str(name);
+        return H5Lexists(_id, name_str.c_str(), H5P_DEFAULT) > 0;
+    }
+    
     SCL_NODISCARD bool exists(const std::string& name) const {
-        return H5Lexists(_id, name.c_str(), H5P_DEFAULT) > 0;
+        return exists(std::string_view(name));
     }
 
+    SCL_NODISCARD bool has_attr(std::string_view name) const {
+        std::string name_str(name);
+        return H5Aexists(_id, name_str.c_str()) > 0;
+    }
+    
     SCL_NODISCARD bool has_attr(const std::string& name) const {
-        return H5Aexists(_id, name.c_str()) > 0;
+        return has_attr(std::string_view(name));
     }
 
-    SCL_NODISCARD ObjectType get_object_type(const std::string& name) const {
+    SCL_NODISCARD ObjectType get_object_type(std::string_view name) const {
+        std::string name_str(name);
         H5O_info_t info;
-        if (H5Oget_info_by_name(_id, name.c_str(), &info, H5P_DEFAULT) < 0) {
+        if (SCL_UNLIKELY(H5Oget_info_by_name(_id, name_str.c_str(), &info, H5P_DEFAULT) < 0)) {
             return ObjectType::Unknown;
         }
 
@@ -688,10 +756,15 @@ public:
             default: return ObjectType::Unknown;
         }
     }
+    
+    SCL_NODISCARD ObjectType get_object_type(const std::string& name) const {
+        return get_object_type(std::string_view(name));
+    }
 
-    SCL_NODISCARD LinkType get_link_type(const std::string& name) const {
+    SCL_NODISCARD LinkType get_link_type(std::string_view name) const {
+        std::string name_str(name);
         H5L_info_t info;
-        if (H5Lget_info(_id, name.c_str(), &info, H5P_DEFAULT) < 0) {
+        if (SCL_UNLIKELY(H5Lget_info(_id, name_str.c_str(), &info, H5P_DEFAULT) < 0)) {
             return LinkType::Error;
         }
 
@@ -702,13 +775,18 @@ public:
             default: return LinkType::Error;
         }
     }
+    
+    SCL_NODISCARD LinkType get_link_type(const std::string& name) const {
+        return get_link_type(std::string_view(name));
+    }
 
     // Object Information
 
-    ObjectInfo get_info(const std::string& name = ".") const {
+    SCL_NODISCARD ObjectInfo get_info(std::string_view name = ".") const {
+        std::string name_str(name);
         H5O_info_t h5info;
         detail::check_h5(
-            H5Oget_info_by_name(_id, name.c_str(), &h5info, H5P_DEFAULT),
+            H5Oget_info_by_name(_id, name_str.c_str(), &h5info, H5P_DEFAULT),
             "H5Oget_info_by_name"
         );
 
@@ -729,8 +807,12 @@ public:
 
         return info;
     }
+    
+    SCL_NODISCARD ObjectInfo get_info(const std::string& name) const {
+        return get_info(std::string_view(name));
+    }
 
-    SCL_NODISCARD hsize_t get_num_objs() const {
+    SCL_NODISCARD hsize_t get_num_objs() const noexcept(false) {
         H5G_info_t info;
         detail::check_h5(
             H5Gget_info(_id, &info),
@@ -739,15 +821,15 @@ public:
         return info.nlinks;
     }
 
-    std::string get_objname_by_idx(hsize_t idx) const {
+    SCL_NODISCARD std::string get_objname_by_idx(hsize_t idx) const {
         ssize_t size = H5Lget_name_by_idx(_id, ".", H5_INDEX_NAME, H5_ITER_INC, idx, nullptr, 0, H5P_DEFAULT);
-        if (size < 0) return "";
+        if (SCL_UNLIKELY(size < 0)) return "";
         std::string name(size, '\0');
         H5Lget_name_by_idx(_id, ".", H5_INDEX_NAME, H5_ITER_INC, idx, name.data(), size + 1, H5P_DEFAULT);
         return name;
     }
 
-    std::vector<std::string> list_objects() const {
+    SCL_NODISCARD std::vector<std::string> list_objects() const {
         hsize_t num = get_num_objs();
         std::vector<std::string> names;
         names.reserve(num);
@@ -787,44 +869,73 @@ public:
 
     // Link Operations
 
-    void unlink(const std::string& name) {
+    void unlink(std::string_view name) {
+        std::string name_str(name);
         detail::check_h5(
-            H5Ldelete(_id, name.c_str(), H5P_DEFAULT),
+            H5Ldelete(_id, name_str.c_str(), H5P_DEFAULT),
             "H5Ldelete"
         );
     }
+    
+    void unlink(const std::string& name) {
+        unlink(std::string_view(name));
+    }
 
-    void link_soft(const std::string& target, const std::string& link_name) {
+    void link_soft(std::string_view target, std::string_view link_name) {
+        std::string target_str(target);
+        std::string link_name_str(link_name);
         detail::check_h5(
-            H5Lcreate_soft(target.c_str(), _id, link_name.c_str(), H5P_DEFAULT, H5P_DEFAULT),
+            H5Lcreate_soft(target_str.c_str(), _id, link_name_str.c_str(), H5P_DEFAULT, H5P_DEFAULT),
             "H5Lcreate_soft"
         );
     }
+    
+    void link_soft(const std::string& target, const std::string& link_name) {
+        link_soft(std::string_view(target), std::string_view(link_name));
+    }
 
-    void link_hard(const std::string& target, const std::string& link_name) {
+    void link_hard(std::string_view target, std::string_view link_name) {
+        std::string target_str(target);
+        std::string link_name_str(link_name);
         detail::check_h5(
-            H5Lcreate_hard(_id, target.c_str(), _id, link_name.c_str(), H5P_DEFAULT, H5P_DEFAULT),
+            H5Lcreate_hard(_id, target_str.c_str(), _id, link_name_str.c_str(), H5P_DEFAULT, H5P_DEFAULT),
             "H5Lcreate_hard"
         );
     }
+    
+    void link_hard(const std::string& target, const std::string& link_name) {
+        link_hard(std::string_view(target), std::string_view(link_name));
+    }
 
-    void move_link(const std::string& src, const std::string& dst) {
+    void move_link(std::string_view src, std::string_view dst) {
+        std::string src_str(src);
+        std::string dst_str(dst);
         detail::check_h5(
-            H5Lmove(_id, src.c_str(), _id, dst.c_str(), H5P_DEFAULT, H5P_DEFAULT),
+            H5Lmove(_id, src_str.c_str(), _id, dst_str.c_str(), H5P_DEFAULT, H5P_DEFAULT),
             "H5Lmove"
         );
     }
+    
+    void move_link(const std::string& src, const std::string& dst) {
+        move_link(std::string_view(src), std::string_view(dst));
+    }
 
-    void copy_link(const std::string& src, const std::string& dst) {
+    void copy_link(std::string_view src, std::string_view dst) {
+        std::string src_str(src);
+        std::string dst_str(dst);
         detail::check_h5(
-            H5Lcopy(_id, src.c_str(), _id, dst.c_str(), H5P_DEFAULT, H5P_DEFAULT),
+            H5Lcopy(_id, src_str.c_str(), _id, dst_str.c_str(), H5P_DEFAULT, H5P_DEFAULT),
             "H5Lcopy"
         );
+    }
+    
+    void copy_link(const std::string& src, const std::string& dst) {
+        copy_link(std::string_view(src), std::string_view(dst));
     }
 
     // Attribute Operations
 
-    SCL_NODISCARD int get_num_attrs() const {
+    SCL_NODISCARD int get_num_attrs() const noexcept(false) {
         H5O_info_t info;
         detail::check_h5(
             H5Oget_info(_id, &info),
@@ -833,40 +944,65 @@ public:
         return static_cast<int>(info.num_attrs);
     }
 
-    Attribute open_attr(const std::string& name) const {
-        return Attribute(_id, name);
+    SCL_NODISCARD Attribute open_attr(std::string_view name) const {
+        return {_id, name};
+    }
+    
+    SCL_NODISCARD Attribute open_attr(const std::string& name) const {
+        return open_attr(std::string_view(name));
     }
 
-    template <typename T>
-    Attribute create_attr(const std::string& name, const std::vector<hsize_t>& dims = {}) {
+    template <detail::HDF5NativeType T>
+    Attribute create_attr(std::string_view name, std::span<const hsize_t> dims = {}) {
         Dataspace space = dims.empty() ? Dataspace::scalar() : Dataspace(dims);
         return Attribute::create(_id, name, detail::native_type<T>(), space);
     }
+    
+    template <detail::HDF5NativeType T>
+    Attribute create_attr(const std::string& name, const std::vector<hsize_t>& dims = {}) {
+        return create_attr<T>(std::string_view(name), 
+                             dims.empty() ? std::span<const hsize_t>{} : std::span<const hsize_t>(dims));
+    }
 
-    void delete_attr(const std::string& name) {
+    void delete_attr(std::string_view name) {
+        std::string name_str(name);
         detail::check_h5(
-            H5Adelete(_id, name.c_str()),
+            H5Adelete(_id, name_str.c_str()),
             "H5Adelete"
         );
     }
+    
+    void delete_attr(const std::string& name) {
+        delete_attr(std::string_view(name));
+    }
 
-    template <typename T>
-    T read_attr(const std::string& name) const {
+    template <detail::HDF5NativeType T>
+    T read_attr(std::string_view name) const {
         Attribute attr = open_attr(name);
         return attr.read_scalar<T>();
     }
+    
+    template <detail::HDF5NativeType T>
+    T read_attr(const std::string& name) const {
+        return read_attr<T>(std::string_view(name));
+    }
 
-    template <typename T>
-    void write_attr(const std::string& name, const T& value) {
+    template <detail::HDF5NativeType T>
+    void write_attr(std::string_view name, const T& value) {
         if (!has_attr(name)) {
             create_attr<T>(name).write_scalar(value);
         } else {
             open_attr(name).write_scalar(value);
         }
     }
+    
+    template <detail::HDF5NativeType T>
+    void write_attr(const std::string& name, const T& value) {
+        write_attr<T>(std::string_view(name), value);
+    }
 
-    template <typename T>
-    std::vector<T> read_attr_array(const std::string& name) const {
+    template <detail::HDF5NativeType T>
+    std::vector<T> read_attr_array(std::string_view name) const {
         Attribute attr = open_attr(name);
         Dataspace space = attr.get_space();
         hssize_t npoints = space.get_num_elements();
@@ -874,23 +1010,37 @@ public:
         attr.read(data.data());
         return data;
     }
+    
+    template <detail::HDF5NativeType T>
+    std::vector<T> read_attr_array(const std::string& name) const {
+        return read_attr_array<T>(std::string_view(name));
+    }
 
-    template <typename T>
-    void write_attr_array(const std::string& name, const std::vector<T>& data) {
+    template <detail::HDF5NativeType T>
+    void write_attr_array(std::string_view name, const std::vector<T>& data) {
         if (has_attr(name)) {
             delete_attr(name);  // Delete old attribute to avoid dimension mismatch
         }
         
         std::vector<hsize_t> dims = {data.size()};
-        Attribute attr = create_attr<T>(name, dims);
+        Attribute attr = create_attr<T>(name, std::span<const hsize_t>(dims));
         attr.write(data.data());
     }
-
-    std::string read_attr_string(const std::string& name) const {
-        return open_attr(name).read_string();
+    
+    template <detail::HDF5NativeType T>
+    void write_attr_array(const std::string& name, const std::vector<T>& data) {
+        write_attr_array<T>(std::string_view(name), data);
     }
 
-    void write_attr_string(const std::string& name, const std::string& value) {
+    SCL_NODISCARD std::string read_attr_string(std::string_view name) const {
+        return open_attr(name).read_string();
+    }
+    
+    SCL_NODISCARD std::string read_attr_string(const std::string& name) const {
+        return read_attr_string(std::string_view(name));
+    }
+
+    void write_attr_string(std::string_view name, const std::string& value) {
         if (has_attr(name)) {
             delete_attr(name);  // Delete old attribute to avoid size mismatch
         }
@@ -900,6 +1050,10 @@ public:
             Datatype::string_fixed(value.size() + 1).id(), space);  // +1 for null terminator
         attr.write_string(value);
     }
+    
+    void write_attr_string(const std::string& name, const std::string& value) {
+        write_attr_string(std::string_view(name), value);
+    }
 };
 
 // =============================================================================
@@ -908,13 +1062,35 @@ public:
 
 class Dataset : public Object {
 public:
+    Dataset(hid_t loc_id, std::string_view name,
+            hid_t dapl = H5P_DEFAULT)
+        : Object(H5Dopen(loc_id, std::string(name).c_str(), dapl), H5Dclose)
+    {
+        detail::check_id(_id, "H5Dopen");
+    }
+    
     Dataset(hid_t loc_id, const std::string& name,
             hid_t dapl = H5P_DEFAULT)
-        : Object(H5Dopen(loc_id, name.c_str(), dapl), H5Dclose)
-    {
-        detail::check_id(_id, ("H5Dopen: " + name).c_str());
-    }
+        : Dataset(loc_id, std::string_view(name), dapl) {}
 
+    static Dataset create(
+        hid_t loc_id,
+        std::string_view name,
+        hid_t type_id,
+        const Dataspace& space,
+        hid_t lcpl = H5P_DEFAULT,
+        hid_t dcpl = H5P_DEFAULT,
+        hid_t dapl = H5P_DEFAULT
+    ) {
+        std::string name_str(name);
+        hid_t id = H5Dcreate(loc_id, name_str.c_str(), type_id, space.id(),
+                            lcpl, dcpl, dapl);
+        detail::check_id(id, "H5Dcreate");
+        // NOLINTNEXTLINE(cppcoreguidelines-slicing)
+        // Intentional: private constructor with bool tag for factory pattern
+        return {id, false};
+    }
+    
     static Dataset create(
         hid_t loc_id,
         const std::string& name,
@@ -924,83 +1100,91 @@ public:
         hid_t dcpl = H5P_DEFAULT,
         hid_t dapl = H5P_DEFAULT
     ) {
-        hid_t id = H5Dcreate(loc_id, name.c_str(), type_id, space.id(),
-                            lcpl, dcpl, dapl);
-        detail::check_id(id, ("H5Dcreate: " + name).c_str());
-        return Dataset(id, false);
+        return create(loc_id, std::string_view(name), type_id, space, lcpl, dcpl, dapl);
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     static Dataset create(
         hid_t loc_id,
-        const std::string& name,
-        const std::vector<hsize_t>& dims,
+        std::string_view name,
+        std::span<const hsize_t> dims,
         const DatasetCreateProps& props = DatasetCreateProps()
     ) {
         Dataspace space(dims);
         return create(loc_id, name, detail::native_type<T>(), space,
                      H5P_DEFAULT, props.id(), H5P_DEFAULT);
     }
+    
+    template <detail::HDF5NativeType T>
+    static Dataset create(
+        hid_t loc_id,
+        const std::string& name,
+        const std::vector<hsize_t>& dims,
+        const DatasetCreateProps& props = DatasetCreateProps()
+    ) {
+        return create<T>(loc_id, std::string_view(name), 
+                        std::span<const hsize_t>(dims), props);
+    }
 
     // Metadata Queries
 
-    Dataspace get_space() const {
+    SCL_NODISCARD Dataspace get_space() const {
         hid_t space_id = H5Dget_space(_id);
         detail::check_id(space_id, "H5Dget_space");
         return Dataspace(space_id);
     }
 
-    Datatype get_type() const {
+    SCL_NODISCARD Datatype get_type() const {
         hid_t type_id = H5Dget_type(_id);
         detail::check_id(type_id, "H5Dget_type");
         return Datatype::from_id(type_id);
     }
 
-    DatasetCreateProps get_create_plist() const {
+    SCL_NODISCARD DatasetCreateProps get_create_plist() const {
         hid_t plist_id = H5Dget_create_plist(_id);
         detail::check_id(plist_id, "H5Dget_create_plist");
-        return DatasetCreateProps(plist_id, H5Pclose);
+        return {plist_id, H5Pclose};
     }
 
-    DatasetAccessProps get_access_plist() const {
+    SCL_NODISCARD DatasetAccessProps get_access_plist() const {
         hid_t plist_id = H5Dget_access_plist(_id);
         detail::check_id(plist_id, "H5Dget_access_plist");
-        return DatasetAccessProps(plist_id, H5Pclose);
+        return {plist_id, H5Pclose};
     }
 
-    std::vector<hsize_t> get_dims() const {
+    SCL_NODISCARD std::vector<hsize_t> get_dims() const {
         return get_space().get_dims();
     }
 
-    SCL_NODISCARD int get_rank() const {
+    SCL_NODISCARD int get_rank() const noexcept(false) {
         return get_space().get_rank();
     }
 
-    SCL_NODISCARD hsize_t get_num_elements() const {
+    SCL_NODISCARD hsize_t get_num_elements() const noexcept(false) {
         return static_cast<hsize_t>(get_space().get_num_elements());
     }
 
-    SCL_NODISCARD hsize_t get_storage_size() const {
+    SCL_NODISCARD hsize_t get_storage_size() const noexcept(false) {
         return H5Dget_storage_size(_id);
     }
 
     // Layout and Chunking
 
-    SCL_NODISCARD H5D_layout_t get_layout() const {
+    SCL_NODISCARD H5D_layout_t get_layout() const noexcept(false) {
         DatasetCreateProps props = get_create_plist();
         return H5Pget_layout(props.id());
     }
 
-    SCL_NODISCARD bool is_chunked() const {
+    SCL_NODISCARD bool is_chunked() const noexcept(false) {
         return get_layout() == H5D_CHUNKED;
     }
 
-    std::optional<std::vector<hsize_t>> get_chunk_dims() const {
-        if (!is_chunked()) return std::nullopt;
+    SCL_NODISCARD std::optional<std::vector<hsize_t>> get_chunk_dims() const noexcept(false) {
+        if (SCL_UNLIKELY(!is_chunked())) return std::nullopt;
 
         DatasetCreateProps props = get_create_plist();
         int rank = H5Pget_chunk(props.id(), 0, nullptr);
-        if (rank < 0) return std::nullopt;
+        if (SCL_UNLIKELY(rank < 0)) return std::nullopt;
 
         std::vector<hsize_t> dims(rank);
         H5Pget_chunk(props.id(), rank, dims.data());
@@ -1009,7 +1193,7 @@ public:
 
     // I/O Operations
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     void read(T* buffer, hid_t xfer_plist = H5P_DEFAULT) const {
         detail::check_h5(
             H5Dread(_id, detail::native_type<T>(),
@@ -1018,7 +1202,7 @@ public:
         );
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     void read(T* buffer,
              const Dataspace& mem_space,
              const Dataspace& file_space,
@@ -1030,7 +1214,7 @@ public:
         );
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     void write(const T* buffer, hid_t xfer_plist = H5P_DEFAULT) {
         detail::check_h5(
             H5Dwrite(_id, detail::native_type<T>(),
@@ -1039,7 +1223,7 @@ public:
         );
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     void write(const T* buffer,
               const Dataspace& mem_space,
               const Dataspace& file_space,
@@ -1051,7 +1235,7 @@ public:
         );
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     std::vector<T> read_vector() const {
         hsize_t size = get_num_elements();
         std::vector<T> data(size);
@@ -1059,20 +1243,20 @@ public:
         return data;
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     void write_vector(const std::vector<T>& data) {
         write(data.data());
     }
 
     // Partial I/O
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
     void read_hyperslab(
         T* buffer,
-        const std::vector<hsize_t>& start,
-        const std::vector<hsize_t>& count,
-        const std::vector<hsize_t>& stride = {},
-        const std::vector<hsize_t>& block = {}
+        std::span<const hsize_t> start,
+        std::span<const hsize_t> count,
+        std::span<const hsize_t> stride = {},
+        std::span<const hsize_t> block = {}
     ) const {
         Dataspace file_space = get_space();
         file_space.select_hyperslab(start, count, stride, block);
@@ -1080,14 +1264,29 @@ public:
         Dataspace mem_space(count);
         read(buffer, mem_space, file_space);
     }
-
-    template <typename T>
-    void write_hyperslab(
-        const T* buffer,
+    
+    template <detail::HDF5NativeType T>
+    void read_hyperslab(
+        T* buffer,
         const std::vector<hsize_t>& start,
         const std::vector<hsize_t>& count,
         const std::vector<hsize_t>& stride = {},
         const std::vector<hsize_t>& block = {}
+    ) const {
+        read_hyperslab(buffer,
+                      std::span<const hsize_t>(start),
+                      std::span<const hsize_t>(count),
+                      stride.empty() ? std::span<const hsize_t>{} : std::span<const hsize_t>(stride),
+                      block.empty() ? std::span<const hsize_t>{} : std::span<const hsize_t>(block));
+    }
+
+    template <detail::HDF5NativeType T>
+    void write_hyperslab(
+        const T* buffer,
+        std::span<const hsize_t> start,
+        std::span<const hsize_t> count,
+        std::span<const hsize_t> stride = {},
+        std::span<const hsize_t> block = {}
     ) {
         Dataspace file_space = get_space();
         file_space.select_hyperslab(start, count, stride, block);
@@ -1095,24 +1294,52 @@ public:
         Dataspace mem_space(count);
         write(buffer, mem_space, file_space);
     }
+    
+    template <detail::HDF5NativeType T>
+    void write_hyperslab(
+        const T* buffer,
+        const std::vector<hsize_t>& start,
+        const std::vector<hsize_t>& count,
+        const std::vector<hsize_t>& stride = {},
+        const std::vector<hsize_t>& block = {}
+    ) {
+        write_hyperslab(buffer,
+                       std::span<const hsize_t>(start),
+                       std::span<const hsize_t>(count),
+                       stride.empty() ? std::span<const hsize_t>{} : std::span<const hsize_t>(stride),
+                       block.empty() ? std::span<const hsize_t>{} : std::span<const hsize_t>(block));
+    }
 
     // Extension
 
-    void extend(const std::vector<hsize_t>& size) {
+    void extend(std::span<const hsize_t> size) {
         detail::check_h5(
             H5Dset_extent(_id, size.data()),
             "H5Dset_extent"
         );
     }
+    
+    void extend(const std::vector<hsize_t>& size) {
+        extend(std::span<const hsize_t>(size));
+    }
 
     // Attribute Operations
 
+    SCL_NODISCARD bool has_attr(std::string_view name) const {
+        std::string name_str(name);
+        return H5Aexists(_id, name_str.c_str()) > 0;
+    }
+    
     SCL_NODISCARD bool has_attr(const std::string& name) const {
-        return H5Aexists(_id, name.c_str()) > 0;
+        return has_attr(std::string_view(name));
     }
 
-    Attribute open_attr(const std::string& name) const {
-        return Attribute(_id, name);
+    SCL_NODISCARD Attribute open_attr(std::string_view name) const {
+        return {_id, name};
+    }
+    
+    SCL_NODISCARD Attribute open_attr(const std::string& name) const {
+        return open_attr(std::string_view(name));
     }
 
 private:
@@ -1125,15 +1352,36 @@ private:
 
 class Group : public Location {
 public:
-    Group(hid_t loc_id, const std::string& name,
+    Group(hid_t loc_id, std::string_view name,
           hid_t gapl = H5P_DEFAULT)
+        // Intentional: explicit base initialization required for member initialization order
         : Location()
     {
-        _id = H5Gopen(loc_id, name.c_str(), gapl);
+        std::string name_str(name);
+        _id = H5Gopen(loc_id, name_str.c_str(), gapl);
         _closer = H5Gclose;
-        detail::check_id(_id, ("H5Gopen: " + name).c_str());
+        detail::check_id(_id, "H5Gopen");
     }
+    
+    Group(hid_t loc_id, const std::string& name,
+          hid_t gapl = H5P_DEFAULT)
+        : Group(loc_id, std::string_view(name), gapl) {}
 
+    static Group create(
+        hid_t loc_id,
+        std::string_view name,
+        hid_t lcpl = H5P_DEFAULT,
+        hid_t gcpl = H5P_DEFAULT,
+        hid_t gapl = H5P_DEFAULT
+    ) {
+        std::string name_str(name);
+        hid_t id = H5Gcreate(loc_id, name_str.c_str(), lcpl, gcpl, gapl);
+        detail::check_id(id, "H5Gcreate");
+        // NOLINTNEXTLINE(cppcoreguidelines-slicing)
+        // Intentional: private constructor with bool tag for factory pattern
+        return {id, false};
+    }
+    
     static Group create(
         hid_t loc_id,
         const std::string& name,
@@ -1141,32 +1389,50 @@ public:
         hid_t gcpl = H5P_DEFAULT,
         hid_t gapl = H5P_DEFAULT
     ) {
-        hid_t id = H5Gcreate(loc_id, name.c_str(), lcpl, gcpl, gapl);
-        detail::check_id(id, ("H5Gcreate: " + name).c_str());
-        return Group(id, false);
+        return create(loc_id, std::string_view(name), lcpl, gcpl, gapl);
     }
 
     // Object Creation
 
-    Group create_group(const std::string& name) {
+    Group create_group(std::string_view name) {
         return Group::create(_id, name);
     }
-
-    Group open_group(const std::string& name) {
-        return Group(_id, name);
+    
+    Group create_group(const std::string& name) {
+        return create_group(std::string_view(name));
     }
 
-    template <typename T>
+    Group open_group(std::string_view name) {
+        // NOLINTNEXTLINE(cppcoreguidelines-slicing)
+        // Intentional: constructor creates proper Group object
+        return {_id, name};
+    }
+    
+    Group open_group(const std::string& name) {
+        return open_group(std::string_view(name));
+    }
+
+    template <detail::HDF5NativeType T>
+    Dataset create_dataset(
+        std::string_view name,
+        std::span<const hsize_t> dims,
+        const DatasetCreateProps& props = DatasetCreateProps()
+    ) {
+        return Dataset::create<T>(_id, name, dims, props);
+    }
+    
+    template <detail::HDF5NativeType T>
     Dataset create_dataset(
         const std::string& name,
         const std::vector<hsize_t>& dims,
         const DatasetCreateProps& props = DatasetCreateProps()
     ) {
-        return Dataset::create<T>(_id, name, dims, props);
+        return create_dataset<T>(std::string_view(name), 
+                                 std::span<const hsize_t>(dims), props);
     }
 
     Dataset create_dataset(
-        const std::string& name,
+        std::string_view name,
         hid_t type_id,
         const Dataspace& space,
         const DatasetCreateProps& props = DatasetCreateProps()
@@ -1174,45 +1440,86 @@ public:
         return Dataset::create(_id, name, type_id, space,
                               H5P_DEFAULT, props.id(), H5P_DEFAULT);
     }
+    
+    Dataset create_dataset(
+        const std::string& name,
+        hid_t type_id,
+        const Dataspace& space,
+        const DatasetCreateProps& props = DatasetCreateProps()
+    ) {
+        return create_dataset(std::string_view(name), type_id, space, props);
+    }
 
+    Dataset open_dataset(std::string_view name) {
+        // NOLINTNEXTLINE(cppcoreguidelines-slicing)
+        // Intentional: constructor creates proper Dataset object
+        return {_id, name};
+    }
+    
     Dataset open_dataset(const std::string& name) {
-        return Dataset(_id, name);
+        return open_dataset(std::string_view(name));
     }
 
     // Convenience I/O
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
+    void write_dataset(
+        std::string_view name,
+        const T* data,
+        std::span<const hsize_t> dims,
+        const DatasetCreateProps& props = DatasetCreateProps()
+    ) {
+        Dataset dset = create_dataset<T>(name, dims, props);
+        dset.write(data);
+    }
+    
+    template <detail::HDF5NativeType T>
     void write_dataset(
         const std::string& name,
         const T* data,
         const std::vector<hsize_t>& dims,
         const DatasetCreateProps& props = DatasetCreateProps()
     ) {
-        Dataset dset = create_dataset<T>(name, dims, props);
-        dset.write(data);
+        write_dataset(std::string_view(name), data, std::span<const hsize_t>(dims), props);
     }
 
-    template <typename T>
+    template <detail::HDF5NativeType T>
+    void write_dataset(
+        std::string_view name,
+        const std::vector<T>& data,
+        const DatasetCreateProps& props = DatasetCreateProps()
+    ) {
+        std::vector<hsize_t> dims = {data.size()};
+        write_dataset(name, data.data(), std::span<const hsize_t>(dims), props);
+    }
+    
+    template <detail::HDF5NativeType T>
     void write_dataset(
         const std::string& name,
         const std::vector<T>& data,
         const DatasetCreateProps& props = DatasetCreateProps()
     ) {
-        std::vector<hsize_t> dims = {data.size()};
-        write_dataset(name, data.data(), dims, props);
+        write_dataset(std::string_view(name), data, props);
     }
 
-    template <typename T>
-    std::vector<T> read_dataset(const std::string& name) {
+    template <detail::HDF5NativeType T>
+    std::vector<T> read_dataset(std::string_view name) {
         Dataset dset = open_dataset(name);
         return dset.read_vector<T>();
+    }
+    
+    template <detail::HDF5NativeType T>
+    std::vector<T> read_dataset(const std::string& name) {
+        return read_dataset<T>(std::string_view(name));
     }
 
 protected:
     Group() = default;
 
 private:
-    Group(hid_t id, bool) : Location() {
+    Group(hid_t id, bool)
+        // Intentional: explicit base initialization required for member initialization order
+        : Location() {
         _id = id;
         _closer = H5Gclose;
     }
@@ -1224,61 +1531,78 @@ private:
 
 class File : public Location {
 public:
+    explicit File(std::string_view path,
+                 unsigned flags = H5F_ACC_RDONLY,
+                 hid_t fapl = H5P_DEFAULT)
+    {
+        std::string path_str(path);
+        _id = H5Fopen(path_str.c_str(), flags, fapl);
+        _closer = H5Fclose;
+        detail::check_id(_id, "H5Fopen");
+    }
+    
     explicit File(const std::string& path,
                  unsigned flags = H5F_ACC_RDONLY,
                  hid_t fapl = H5P_DEFAULT)
-        : Location()
-    {
-        _id = H5Fopen(path.c_str(), flags, fapl);
-        _closer = H5Fclose;
-        detail::check_id(_id, ("H5Fopen: " + path).c_str());
-    }
+        : File(std::string_view(path), flags, fapl) {}
 
+    static File create(
+        std::string_view path,
+        unsigned flags = H5F_ACC_TRUNC,
+        hid_t fcpl = H5P_DEFAULT,
+        hid_t fapl = H5P_DEFAULT
+    ) {
+        std::string path_str(path);
+        hid_t id = H5Fcreate(path_str.c_str(), flags, fcpl, fapl);
+        detail::check_id(id, "H5Fcreate");
+        // NOLINTNEXTLINE(cppcoreguidelines-slicing)
+        // Intentional: private constructor with bool tag for factory pattern
+        return {id, false};
+    }
+    
     static File create(
         const std::string& path,
         unsigned flags = H5F_ACC_TRUNC,
         hid_t fcpl = H5P_DEFAULT,
         hid_t fapl = H5P_DEFAULT
     ) {
-        hid_t id = H5Fcreate(path.c_str(), flags, fcpl, fapl);
-        detail::check_id(id, ("H5Fcreate: " + path).c_str());
-        return File(id, false);
+        return create(std::string_view(path), flags, fcpl, fapl);
     }
 
     // File Operations
 
-    void flush(H5F_scope_t scope = H5F_SCOPE_GLOBAL) {
+    void flush(H5F_scope_t scope = H5F_SCOPE_GLOBAL) noexcept(false) {
         detail::check_h5(H5Fflush(_id, scope), "H5Fflush");
     }
 
-    SCL_NODISCARD hsize_t get_file_size() const {
+    SCL_NODISCARD hsize_t get_file_size() const noexcept(false) {
         hsize_t size = 0;
         detail::check_h5(H5Fget_filesize(_id, &size), "H5Fget_filesize");
         return size;
     }
 
-    std::string get_name() const {
+    SCL_NODISCARD std::string get_name() const noexcept(false) {
         ssize_t size = H5Fget_name(_id, nullptr, 0);
-        if (size < 0) return "";
+        if (SCL_UNLIKELY(size < 0)) return "";
         std::string name(size, '\0');
         H5Fget_name(_id, name.data(), size + 1);
         return name;
     }
 
-    SCL_NODISCARD hssize_t get_freespace() const {
+    SCL_NODISCARD hssize_t get_freespace() const noexcept(false) {
         return H5Fget_freespace(_id);
     }
 
-    FileCreateProps get_create_plist() const {
+    SCL_NODISCARD FileCreateProps get_create_plist() const {
         hid_t plist_id = H5Fget_create_plist(_id);
         detail::check_id(plist_id, "H5Fget_create_plist");
-        return FileCreateProps(plist_id, H5Pclose);
+        return {plist_id, H5Pclose};
     }
 
-    FileAccessProps get_access_plist() const {
+    SCL_NODISCARD FileAccessProps get_access_plist() const {
         hid_t plist_id = H5Fget_access_plist(_id);
         detail::check_id(plist_id, "H5Fget_access_plist");
-        return FileAccessProps(plist_id, H5Pclose);
+        return {plist_id, H5Pclose};
     }
 
     SCL_NODISCARD ssize_t get_obj_count(unsigned types = H5F_OBJ_ALL) const {
@@ -1287,32 +1611,61 @@ public:
 
     // Root Group Access
 
-    Group create_group(const std::string& name) {
+    Group create_group(std::string_view name) {
         return Group::create(_id, name);
     }
-
-    Group open_group(const std::string& name) {
-        return Group(_id, name);
+    
+    Group create_group(const std::string& name) {
+        return create_group(std::string_view(name));
     }
 
-    template <typename T>
+    Group open_group(std::string_view name) {
+        // NOLINTNEXTLINE(cppcoreguidelines-slicing)
+        // Intentional: constructor creates proper Group object
+        return {_id, name};
+    }
+    
+    Group open_group(const std::string& name) {
+        return open_group(std::string_view(name));
+    }
+
+    template <detail::HDF5NativeType T>
+    Dataset create_dataset(
+        std::string_view name,
+        std::span<const hsize_t> dims,
+        const DatasetCreateProps& props = DatasetCreateProps()
+    ) {
+        return Dataset::create<T>(_id, name, dims, props);
+    }
+    
+    template <detail::HDF5NativeType T>
     Dataset create_dataset(
         const std::string& name,
         const std::vector<hsize_t>& dims,
         const DatasetCreateProps& props = DatasetCreateProps()
     ) {
-        return Dataset::create<T>(_id, name, dims, props);
+        return create_dataset<T>(std::string_view(name), 
+                                std::span<const hsize_t>(dims), props);
     }
 
+    Dataset open_dataset(std::string_view name) {
+        // NOLINTNEXTLINE(cppcoreguidelines-slicing)
+        // Intentional: constructor creates proper Dataset object
+        return {_id, name};
+    }
+    
     Dataset open_dataset(const std::string& name) {
-        return Dataset(_id, name);
+        return open_dataset(std::string_view(name));
     }
 
 protected:
     File() = default;
 
 private:
-    File(hid_t id, bool) : Location() {
+    File(hid_t id, bool)
+        // NOLINTNEXTLINE(readability-redundant-member-init)
+        // Intentional: explicit base initialization required for member initialization order
+        : Location() {
         _id = id;
         _closer = H5Fclose;
     }
