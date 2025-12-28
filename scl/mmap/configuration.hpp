@@ -69,6 +69,19 @@ inline constexpr std::size_t kMaxPageSize = SCL_MMAP_MAX_PAGE_SIZE;
 inline constexpr std::size_t kMinPageSize = 4096;
 
 // =============================================================================
+// Runtime Constants
+// =============================================================================
+
+// Threshold for auto-selecting mmap vs pread mode (1GB)
+inline constexpr std::size_t kAutoMmapThreshold = 1024ULL * 1024ULL * 1024ULL;
+
+// Default priority for prefetched pages (lower = more likely to evict)
+inline constexpr int kPrefetchPagePriority = -64;
+
+// Maximum wait time for eviction when page is pinned
+inline constexpr std::size_t kEvictionWaitTimeoutMs = 100;
+
+// =============================================================================
 // Compile-Time Validation
 // =============================================================================
 

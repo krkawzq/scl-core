@@ -151,7 +151,7 @@ public:
     void load(std::size_t page_idx, Page* dest) {
         if (page_idx >= num_pages_) {
 #ifndef NDEBUG
-            std::fprintf(stderr, "ERROR: PageStore::load page_idx=%zu >= num_pages_=%zu\n", 
+            std::fprintf(stderr, "ERROR: PageStore::load page_idx=%zu >= num_pages_=%zu\n",
                         page_idx, num_pages_);
 #endif
             return;
@@ -162,19 +162,21 @@ public:
 #endif
             return;
         }
-        if (!load_cb_) {
+        // Copy callback to local variable for thread safety
+        auto cb = load_cb_;
+        if (!cb) {
 #ifndef NDEBUG
             std::fprintf(stderr, "ERROR: PageStore::load null callback\n");
 #endif
             return;
         }
-        load_cb_(page_idx, dest->data);
+        cb(page_idx, dest->data);
     }
-    
+
     void write(std::size_t page_idx, const Page* src) {
         if (page_idx >= num_pages_) {
 #ifndef NDEBUG
-            std::fprintf(stderr, "ERROR: PageStore::write page_idx=%zu >= num_pages_=%zu\n", 
+            std::fprintf(stderr, "ERROR: PageStore::write page_idx=%zu >= num_pages_=%zu\n",
                         page_idx, num_pages_);
 #endif
             return;
@@ -185,8 +187,10 @@ public:
 #endif
             return;
         }
-        if (write_cb_) {
-            write_cb_(page_idx, src->data);
+        // Copy callback to local variable for thread safety
+        auto cb = write_cb_;
+        if (cb) {
+            cb(page_idx, src->data);
         }
     }
     
@@ -194,9 +198,12 @@ public:
     PageStore& operator=(PageStore&&) noexcept = default;
 };
 
-inline std::size_t generate_file_id() {
+inline std::size_t generate_file_id() noexcept {
     static std::atomic<std::size_t> counter{1};
-    return counter.fetch_add(1, std::memory_order_relaxed);
+    // Mix counter with thread ID hash to improve uniqueness and reduce collision risk
+    std::size_t id = counter.fetch_add(1, std::memory_order_relaxed);
+    std::size_t thread_hash = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    return id ^ (thread_hash << 16) ^ (thread_hash >> 48);
 }
 
 // =============================================================================
@@ -205,7 +212,7 @@ inline std::size_t generate_file_id() {
 
 namespace detail {
 
-inline std::size_t get_page_shard_count() {
+inline std::size_t get_page_shard_count() noexcept {
     std::size_t n = std::thread::hardware_concurrency();
     if (n == 0) n = 16;
     if (n < 8) return 8;
@@ -387,6 +394,9 @@ public:
         return size_.load(std::memory_order_relaxed);
     }
     
+    // Note: clear() does NOT release/free the V pointers.
+    // Ownership of pointed-to objects must be managed externally.
+    // In GlobalPagePool, Pages are owned by page_chunks_, not this map.
     void clear() {
         std::unique_lock lock(rehash_mutex_);
         K empty = KeyTraits<K>::empty();
@@ -506,15 +516,32 @@ public:
             }
             
             if (old_count == 1) {
-                PageKey key{page->file_id, page->page_offset};
+                // Read page identity before acquiring lock
+                std::size_t file_id = page->file_id;
+                std::size_t page_offset = page->page_offset;
+
+                // Validate page hasn't been freed (file_id=0 indicates freed page)
+                if (file_id == 0) {
+#ifndef NDEBUG
+                    std::fprintf(stderr, "ERROR: Releasing already-freed page\n");
+#endif
+                    return;
+                }
+
+                PageKey key{file_id, page_offset};
                 auto& shard = shard_for(key);
                 std::lock_guard<std::mutex> lock(shard.mutex);
-                
+
+                // Re-validate page identity after acquiring lock (ABA protection)
+                if (page->file_id != file_id || page->page_offset != page_offset) {
+                    continue;
+                }
+
                 std::uint32_t current = page->refcount.load(std::memory_order_acquire);
                 if (current != old_count) {
                     continue;
                 }
-                
+
                 if (page->refcount.compare_exchange_strong(old_count, 0,
                         std::memory_order_acq_rel, std::memory_order_acquire)) {
                     shard.page_map.erase(key);

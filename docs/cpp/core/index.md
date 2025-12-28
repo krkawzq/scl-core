@@ -21,9 +21,12 @@ Core modules provide:
 | [Sparse Matrix](/cpp/core/sparse) | Sparse matrix infrastructure | `Sparse<T, IsCSR>` |
 | [Registry](/cpp/core/registry) | Memory lifetime tracking | `Registry`, `BufferID` |
 | [SIMD](/cpp/core/simd) | SIMD abstraction | `Tag`, `Vec`, SIMD ops |
-| [Error Handling](/cpp/core/error) | Assertions and exceptions | `SCL_ASSERT`, `SCL_CHECK_*` |
 | [Memory](/cpp/core/memory) | Aligned allocation | `aligned_alloc`, `aligned_free` |
 | [Vectorize](/cpp/core/vectorize) | Vectorized operations | `dot`, `norm`, `sum` |
+| [Sort](/cpp/core/sort) | High-performance sorting | `sort`, `sort_key_value` |
+| [Argsort](/cpp/core/argsort) | Argument sorting | `argsort_inplace`, `argsort_indirect` |
+| [Error Handling](/cpp/core/error) | Assertions and exceptions | `SCL_ASSERT`, `SCL_CHECK_*` |
+| [Macros](/cpp/core/macros) | Compiler macros | Platform detection, optimization hints |
 
 ## Dependency Graph
 
@@ -291,9 +294,12 @@ Explore each core module in detail:
 - [Sparse Matrix](/cpp/core/sparse) - Sparse matrix infrastructure
 - [Registry](/cpp/core/registry) - Memory lifetime tracking
 - [SIMD](/cpp/core/simd) - SIMD abstraction
-- [Error Handling](/cpp/core/error) - Assertions and exceptions
 - [Memory](/cpp/core/memory) - Aligned allocation
 - [Vectorize](/cpp/core/vectorize) - Vectorized operations
+- [Sort](/cpp/core/sort) - High-performance sorting
+- [Argsort](/cpp/core/argsort) - Argument sorting (indices)
+- [Error Handling](/cpp/core/error) - Assertions and exceptions
+- [Macros](/cpp/core/macros) - Compiler macros and platform detection
 
 ---
 

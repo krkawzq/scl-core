@@ -749,62 +749,71 @@ public:
     
     void unregister_aliases(std::span<void* const> alias_ptrs) {
         if (alias_ptrs.empty()) return;
-        
-        std::vector<std::vector<void*>> shard_ptrs(num_shards_);
+
+        // Step 1: Look up buffer IDs WITHOUT removing aliases yet
+        // Group aliases by buffer_id for efficient processing
+        std::unordered_map<BufferID, std::vector<void*>> buffer_to_aliases;
+        buffer_to_aliases.reserve(alias_ptrs.size());
+
         for (void* ptr : alias_ptrs) {
-            if (ptr) {
-                shard_ptrs[shard_index(ptr)].push_back(ptr);
+            if (!ptr) continue;
+            BufferID id = get_buffer_id(ptr);  // Lookup only, don't erase
+            if (id != 0) {
+                buffer_to_aliases[id].push_back(ptr);
             }
         }
-        
-        std::unordered_map<BufferID, std::uint32_t> buffer_decrements;
-        buffer_decrements.reserve(alias_ptrs.size());
-        
-        for (std::size_t i = 0; i < num_shards_; ++i) {
-            if (shard_ptrs[i].empty()) continue;
-            
-            auto& shard = alias_shards_[i];
-            for (void* ptr : shard_ptrs[i]) {
-                BufferID id;
-                if (shard.aliases.erase_and_get(ptr, id)) {
-                    ++buffer_decrements[id];
-                }
-            }
-        }
-        
+
+        if (buffer_to_aliases.empty()) return;
+
+        // Step 2: Decrement refcounts and identify buffers to free
         std::vector<std::pair<void*, Deleter>> to_delete;
-        to_delete.reserve(buffer_decrements.size());
-        
+        std::vector<BufferID> buffers_to_cleanup;
+        to_delete.reserve(buffer_to_aliases.size());
+        buffers_to_cleanup.reserve(buffer_to_aliases.size());
+
         std::size_t freed_buffers = 0;
         std::size_t freed_bytes = 0;
-        
-        for (const auto& [buffer_id, decrement] : buffer_decrements) {
+
+        for (const auto& [buffer_id, aliases] : buffer_to_aliases) {
+            std::uint32_t decrement = static_cast<std::uint32_t>(aliases.size());
             auto& buf_shard = buf_shards_[shard_index(buffer_id)];
-            
+
             buf_shard.buffers.access_and_maybe_erase(buffer_id,
                 [&](std::unique_ptr<RefCountedBuffer>& buffer_ptr) -> bool {
                     if (!buffer_ptr) return false;
-                    
+
                     std::uint32_t old_refcount = buffer_ptr->refcount.fetch_sub(
                         decrement, std::memory_order_acq_rel);
-                    
+
                     if (old_refcount == decrement) {
+                        // Last reference - prepare to delete and mark for alias cleanup
                         to_delete.emplace_back(
                             buffer_ptr->info.real_ptr,
                             get_deleter(buffer_ptr->info.type, buffer_ptr->info.custom_deleter));
                         freed_bytes += buffer_ptr->info.byte_size;
                         ++freed_buffers;
-                        return true;
+                        buffers_to_cleanup.push_back(buffer_id);
+                        return true;  // Remove buffer record
                     }
                     return false;
                 });
         }
-        
+
+        // Step 3: Remove alias mappings ONLY for buffers that were freed
+        for (BufferID freed_id : buffers_to_cleanup) {
+            const auto& aliases = buffer_to_aliases[freed_id];
+            for (void* ptr : aliases) {
+                auto& alias_shard = alias_shards_[shard_index(ptr)];
+                alias_shard.aliases.erase(ptr);
+            }
+        }
+
         if (freed_buffers > 0) {
             total_buffers_.fetch_sub(freed_buffers, std::memory_order_relaxed);
             total_buffer_bytes_.fetch_sub(freed_bytes, std::memory_order_relaxed);
         }
-        
+
+        // Step 4: Actually free the memory
         for (auto& [ptr, deleter] : to_delete) {
             if (deleter) deleter(ptr);
         }
@@ -880,6 +889,89 @@ public:
         for (const auto& [buffer_id, increment] : increments) {
             increment_buffer_refcount(buffer_id, increment);
         }
+    }
+
+    /// @brief Decrement buffer reference counts without removing alias mappings
+    /// @note Used by views that share pointers with original matrices
+    /// @note Alias mappings are only removed when buffer is actually freed
+    /// @param alias_ptrs Pointers to look up and decrement
+    void decrement_buffer_refcounts(std::span<void* const> alias_ptrs) {
+        if (alias_ptrs.empty()) return;
+
+        // Step 1: Look up buffer IDs WITHOUT removing aliases yet
+        std::unordered_map<BufferID, std::vector<void*>> buffer_to_aliases;
+        buffer_to_aliases.reserve(alias_ptrs.size());
+
+        for (void* ptr : alias_ptrs) {
+            if (!ptr) continue;
+            BufferID id = get_buffer_id(ptr);  // Only lookup, don't erase
+            if (id != 0) {
+                buffer_to_aliases[id].push_back(ptr);
+            }
+        }
+
+        if (buffer_to_aliases.empty()) return;
+
+        // Step 2: Decrement reference counts and identify buffers to free
+        std::vector<std::pair<void*, Deleter>> to_delete;
+        std::vector<BufferID> buffers_to_cleanup;
+        to_delete.reserve(buffer_to_aliases.size());
+        buffers_to_cleanup.reserve(buffer_to_aliases.size());
+
+        std::size_t freed_buffers = 0;
+        std::size_t freed_bytes = 0;
+
+        for (const auto& [buffer_id, aliases] : buffer_to_aliases) {
+            std::uint32_t decrement = static_cast<std::uint32_t>(aliases.size());
+            auto& buf_shard = buf_shards_[shard_index(buffer_id)];
+
+            buf_shard.buffers.access_and_maybe_erase(buffer_id,
+                [&](std::unique_ptr<RefCountedBuffer>& buffer_ptr) -> bool {
+                    if (!buffer_ptr) return false;
+
+                    std::uint32_t old_refcount = buffer_ptr->refcount.fetch_sub(
+                        decrement, std::memory_order_acq_rel);
+
+                    if (old_refcount == decrement) {
+                        // Last reference - prepare to delete
+                        to_delete.emplace_back(
+                            buffer_ptr->info.real_ptr,
+                            get_deleter(buffer_ptr->info.type, buffer_ptr->info.custom_deleter));
+                        freed_bytes += buffer_ptr->info.byte_size;
+                        ++freed_buffers;
+                        buffers_to_cleanup.push_back(buffer_id);
+                        return true;  // Remove buffer record
+                    }
+                    return false;
+                });
+        }
+
+        // Step 3: Remove alias mappings ONLY for buffers that were freed
+        for (BufferID freed_id : buffers_to_cleanup) {
+            const auto& aliases = buffer_to_aliases[freed_id];
+            for (void* ptr : aliases) {
+                auto& alias_shard = alias_shards_[shard_index(ptr)];
+                alias_shard.aliases.erase(ptr);
+            }
+        }
+
+        if (freed_buffers > 0) {
+            total_buffers_.fetch_sub(freed_buffers, std::memory_order_relaxed);
+            total_buffer_bytes_.fetch_sub(freed_bytes, std::memory_order_relaxed);
+        }
+
+        // Step 4: Actually free the memory
+        for (auto& [ptr, deleter] : to_delete) {
+            if (deleter) deleter(ptr);
+        }
+    }
+
+    /// @brief Remove alias mappings and decrement buffer refcounts for owner matrices
+    /// @note Used when the original owner matrix (not a view) is destroyed
+    /// @param alias_ptrs Pointers to remove from alias table and decrement
+    void unregister_aliases_as_owner(std::span<void* const> alias_ptrs) {
+        // This is the same as unregister_aliases - keeping for semantic clarity
+        unregister_aliases(alias_ptrs);
     }
     
     SCL_NODISCARD std::size_t ptr_count() const noexcept {

@@ -114,9 +114,21 @@ struct CompressedBackend::DecompressContext {
 #if SCL_HAS_ZSTD
             if (c == CompressionCodec::Zstd && !zstd_ctx) {
                 zstd_ctx = ZSTD_createDCtx();
+                if (!zstd_ctx) {
+                    throw RuntimeError("Failed to create ZSTD decompression context");
+                }
             }
 #endif
         }
+    }
+
+    bool has_valid_codec() const noexcept {
+#if SCL_HAS_ZSTD
+        if (codec == CompressionCodec::Zstd) {
+            return zstd_ctx != nullptr;
+        }
+#endif
+        return true;
     }
 
     void ensure_buffer(std::size_t size) {
@@ -186,29 +198,35 @@ CompressedBackend& CompressedBackend::operator=(CompressedBackend&& other) noexc
 void CompressedBackend::load_index() {
     if (!underlying_) return;
 
-    // Read header
-    std::array<std::byte, 32> header{};
-    if (underlying_->load_page_impl(0, header.data()) == 0) {
+    // Read header page (must use full page buffer to avoid overflow)
+    std::vector<std::byte> header_page(kPageSize);
+    if (underlying_->load_page_impl(0, header_page.data()) == 0) {
         SCL_CHECK_IO(false, "Failed to read compressed file header");
     }
 
-    // Parse header
+    // Parse header (first 32 bytes)
     std::uint64_t magic = 0;
-    std::memcpy(&magic, header.data(), 8);
+    std::memcpy(&magic, header_page.data(), 8);
     SCL_CHECK_IO(magic == CompressedPageIndex::kMagic,
         "Invalid compressed file magic number");
 
     std::uint32_t version = 0;
-    std::memcpy(&version, header.data() + 8, 4);
+    std::memcpy(&version, header_page.data() + 8, 4);
     SCL_CHECK_IO(version == CompressedPageIndex::kVersion,
         "Unsupported compressed file version");
 
-    std::memcpy(&index_.num_pages, header.data() + 12, 8);
+    std::memcpy(&index_.num_pages, header_page.data() + 12, 8);
+
+    // Validate num_pages to prevent OOM attack
+    constexpr std::size_t kMaxPages = 1ULL << 30;  // ~4PB at 4KB pages
+    SCL_CHECK_IO(index_.num_pages <= kMaxPages,
+        "num_pages exceeds maximum allowed value");
+
     std::uint32_t codec_val = 0;
-    std::memcpy(&codec_val, header.data() + 20, 4);
+    std::memcpy(&codec_val, header_page.data() + 20, 4);
     index_.codec = static_cast<CompressionCodec>(codec_val);
-    std::memcpy(&index_.flags, header.data() + 24, 4);
-    std::memcpy(&index_.original_size, header.data() + 28, 8);
+    std::memcpy(&index_.flags, header_page.data() + 24, 4);
+    std::memcpy(&index_.original_size, header_page.data() + 28, 8);
 
     // Read page index
     index_.entries.resize(index_.num_pages);
@@ -263,6 +281,10 @@ std::size_t CompressedBackend::decompress_page(
             if (ZSTD_isError(result)) {
                 return 0;
             }
+            // Verify decompressed size matches expected page size
+            if (result != kPageSize) {
+                return 0;
+            }
             return kPageSize;
         }
 #endif
@@ -277,6 +299,10 @@ std::size_t CompressedBackend::decompress_page(
                 static_cast<int>(kPageSize)
             );
             if (result < 0) {
+                return 0;
+            }
+            // Verify decompressed size matches expected page size
+            if (static_cast<std::size_t>(result) != kPageSize) {
                 return 0;
             }
             return kPageSize;
@@ -333,6 +359,15 @@ std::size_t CompressedBackend::load_page_impl(
     }
 
     const auto& entry = index_.entries[page_idx];
+
+    // Validate compressed entry size to prevent DoS and buffer issues
+    // Reasonable limit: compressed data should not exceed 2x page size
+    // (compression should make data smaller, not larger)
+    constexpr std::size_t kMaxCompressedSize = kPageSize * 2;
+    if (entry.size == 0 || entry.size > kMaxCompressedSize) {
+        std::memset(dest, 0, kPageSize);
+        return 0;
+    }
 
     // Read compressed data
     auto& ctx = get_decomp_context();

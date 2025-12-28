@@ -100,122 +100,59 @@
 
 .parameter-table th,
 .parameter-table td {
-  padding: 12px;
+  padding: var(--scl-spacing-xs) var(--scl-spacing-sm);
+  border: 1px solid var(--vp-c-divider);
   text-align: left;
-  border-bottom: 1px solid var(--vp-c-divider);
 }
 
 .parameter-table th {
   background: var(--vp-c-bg-soft);
   font-weight: 600;
-  color: var(--vp-c-text-1);
 }
 
-.parameter-table code {
-  font-size: 13px;
-  padding: 2px 6px;
-  border-radius: 4px;
-}
+/* =============================================================================
+ * Source Code Info Header
+ * Simple header that appears above VitePress native code blocks
+ * ============================================================================= */
 
-/* Complexity badge styling */
-.complexity-badge {
-  display: inline-flex;
+.source-code-info {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: 16px;
-  font-size: 13px;
-  font-weight: 500;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.6rem 1rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0;
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  font-size: 0.875rem;
+}
+
+.source-code-info + div[class*="language-"] {
+  margin-top: 0 !important;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+}
+
+.source-code-title {
+  font-weight: 600;
+  color: var(--vp-c-brand-1);
+}
+
+.source-code-meta {
   font-family: var(--vp-font-family-mono);
+  font-size: 0.8rem;
+  color: var(--vp-c-text-2);
 }
 
-.complexity-badge.time {
-  background: rgba(59, 130, 246, 0.1);
-  color: var(--scl-c-info);
-  border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.complexity-badge.space {
-  background: rgba(16, 185, 129, 0.1);
-  color: var(--scl-c-accent);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
-/* Code comparison layout */
-.code-compare {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--scl-spacing-md);
-  margin: var(--scl-spacing-md) 0;
-}
-
-@media (max-width: 768px) {
-  .code-compare {
-    grid-template-columns: 1fr;
+/* Responsive */
+@media (max-width: 640px) {
+  .source-code-info {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
   }
 }
-
-/* Enhanced code blocks */
-.vp-doc div[class*='language-'] {
-  border-radius: 8px;
-  margin: var(--scl-spacing-md) 0;
-}
-
-.vp-doc div[class*='language-'] > button.copy {
-  opacity: 0;
-  transition: opacity 0.3s;
-}
-
-.vp-doc div[class*='language-']:hover > button.copy {
-  opacity: 1;
-}
-
-/* Math block styling */
-.math-block {
-  padding: var(--scl-spacing-md);
-  background: var(--vp-c-bg-soft);
-  border-radius: 8px;
-  margin: var(--scl-spacing-md) 0;
-  overflow-x: auto;
-}
-
-/* Responsive tables */
-.vp-doc table {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
-}
-
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--vp-c-bg-soft);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--vp-c-divider);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--vp-c-text-3);
-}
-
-/* Print styles */
-@media print {
-  .VPNav,
-  .VPSidebar,
-  .VPFooter {
-    display: none !important;
-  }
-  
-  .VPContent {
-    margin: 0 !important;
-    padding: 0 !important;
-  }
-}
-

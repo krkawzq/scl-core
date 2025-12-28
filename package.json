@@ -27,6 +27,9 @@
   },
   "homepage": "https://github.com/krkawzq/scl-core#readme",
   "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^22.19.3",
+    "markdown-it-container": "^4.0.0",
     "vitepress": "^1.6.4",
     "vue": "^3.5.26"
   }

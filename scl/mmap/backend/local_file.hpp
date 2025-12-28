@@ -97,7 +97,7 @@ LocalFileBackend::LocalFileBackend(
     // Determine I/O mode
     if (config_.mode == LocalFileMode::Auto) {
         // Use mmap for large files with sequential access
-        use_mmap_ = (file_size_ > 1024 * 1024 * 1024);  // > 1GB
+        use_mmap_ = (file_size_ > kAutoMmapThreshold);
     } else {
         use_mmap_ = (config_.mode == LocalFileMode::MMap);
     }
@@ -129,7 +129,7 @@ LocalFileBackend::LocalFileBackend(
     SCL_CHECK_ARG(fd >= 0, "Invalid file descriptor");
 
     if (config_.mode == LocalFileMode::Auto) {
-        use_mmap_ = (file_size_ > 1024 * 1024 * 1024);
+        use_mmap_ = (file_size_ > kAutoMmapThreshold);
     } else {
         use_mmap_ = (config_.mode == LocalFileMode::MMap);
     }

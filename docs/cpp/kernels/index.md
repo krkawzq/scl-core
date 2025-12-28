@@ -59,6 +59,26 @@ scl::kernel::normalize::normalize_rows_inplace(matrix, NormMode::L2);
 scl::kernel::normalize::scale(matrix, factor);
 ```
 
+### Softmax
+
+Softmax normalization with temperature scaling:
+
+```cpp
+#include "scl/kernel/softmax.hpp"
+
+// Standard softmax
+scl::kernel::softmax::softmax_inplace(values, len);
+
+// With temperature
+scl::kernel::softmax::softmax_inplace(values, len, 0.5);
+
+// Log-softmax
+scl::kernel::softmax::log_softmax_inplace(values, len);
+
+// Sparse matrix
+scl::kernel::softmax::softmax_inplace(matrix);
+```
+
 ### Statistics
 
 Statistical tests and metrics:
@@ -68,10 +88,44 @@ Statistical tests and metrics:
 #include "scl/kernel/mwu.hpp"
 
 // T-test
-auto result = scl::kernel::ttest::ttest(group1, group2);
+scl::kernel::ttest::ttest(matrix, group_ids, t_stats, p_values, log2_fc);
 
 // Mann-Whitney U test
-auto result = scl::kernel::mwu::mann_whitney_u(group1, group2);
+scl::kernel::mwu::mwu_test(matrix, group_ids, u_stats, p_values, log2_fc);
+```
+
+### Group Aggregation
+
+Per-group statistics:
+
+```cpp
+#include "scl/kernel/group.hpp"
+
+// Compute group means and variances
+scl::kernel::group::group_stats(
+    matrix, group_ids, n_groups, group_sizes, means, vars
+);
+```
+
+### Matrix Operations
+
+Merging and slicing:
+
+```cpp
+#include "scl/kernel/merge.hpp"
+#include "scl/kernel/slice.hpp"
+
+// Vertical stack
+auto result = scl::kernel::merge::vstack(matrix1, matrix2);
+
+// Horizontal stack
+auto result = scl::kernel::merge::hstack(matrix1, matrix2);
+
+// Slice rows
+auto sliced = scl::kernel::slice::slice_primary(matrix, keep_indices);
+
+// Filter columns
+auto filtered = scl::kernel::slice::filter_secondary(matrix, mask);
 ```
 
 ### Neighbors
@@ -81,11 +135,38 @@ K-nearest neighbors:
 ```cpp
 #include "scl/kernel/neighbors.hpp"
 
-// Compute KNN
-scl::kernel::neighbors::knn(data, k, indices, distances);
+// Pre-compute norms
+scl::kernel::neighbors::compute_norms(matrix, norms_sq);
 
-// Batch-balanced KNN
-scl::kernel::neighbors::bbknn(data, batch_labels, k, indices, distances);
+// Compute KNN
+scl::kernel::neighbors::knn(matrix, norms_sq, k, indices, distances);
+```
+
+### Batch Balanced KNN
+
+Batch-aware KNN for integrating data across batches:
+
+```cpp
+#include "scl/kernel/bbknn.hpp"
+
+// Pre-compute norms (optional)
+scl::kernel::bbknn::compute_norms(matrix, norms_sq);
+
+// Compute BBKNN (k neighbors from each batch)
+scl::kernel::bbknn::bbknn(
+    matrix, batch_labels, n_batches, k, indices, distances, norms_sq
+);
+```
+
+### MMD
+
+Maximum Mean Discrepancy for distribution comparison:
+
+```cpp
+#include "scl/kernel/mmd.hpp"
+
+// Compare two distributions
+scl::kernel::mmd::mmd_rbf(mat_x, mat_y, output, gamma);
 ```
 
 ### Clustering
@@ -174,8 +255,16 @@ Explore specific kernel categories:
 
 - [Sparse Tools](/cpp/kernels/sparse-tools) - Matrix utilities
 - [Normalization](/cpp/kernels/normalization) - Normalization and scaling
-- [Statistics](/cpp/kernels/statistics) - Statistical tests
+- [Softmax](/cpp/kernels/softmax) - Softmax normalization with temperature scaling
+- [Mann-Whitney U](/cpp/kernels/mwu) - Non-parametric statistical test
+- [T-test](/cpp/kernels/ttest) - Parametric statistical test
 - [Neighbors](/cpp/kernels/neighbors) - KNN algorithms
+- [BBKNN](/cpp/kernels/bbknn) - Batch Balanced KNN for batch integration
+- [MMD](/cpp/kernels/mmd) - Maximum Mean Discrepancy for distribution comparison
+- [Merge](/cpp/kernels/merge) - Matrix merging operations
+- [Slice](/cpp/kernels/slice) - Matrix slicing operations
+- [Group](/cpp/kernels/group) - Group aggregation statistics
+- [Statistics](/cpp/kernels/statistics) - Statistical tests
 - [Clustering](/cpp/kernels/clustering) - Community detection
 
 ---

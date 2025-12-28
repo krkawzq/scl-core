@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <unordered_map>
 #include <queue>
+#include <list>
 #include <atomic>
 #include <thread>
 #include <cstring>
@@ -31,6 +32,48 @@
 #endif
 
 namespace scl::mmap::backend {
+
+// =============================================================================
+// Curl Global Initialization Manager (Thread-Safe Singleton)
+// =============================================================================
+
+#if SCL_HAS_CURL
+namespace detail {
+
+// Thread-safe curl global init/cleanup using reference counting
+class CurlGlobalManager {
+public:
+    static void acquire() {
+        std::call_once(init_flag_, []() {
+            curl_global_init(CURL_GLOBAL_DEFAULT);
+        });
+        ref_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    static void release() {
+        if (ref_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            // Last user - cleanup
+            std::lock_guard<std::mutex> lock(cleanup_mutex_);
+            // Double-check after acquiring lock
+            if (ref_count_.load(std::memory_order_acquire) == 0) {
+                curl_global_cleanup();
+            }
+        }
+    }
+
+private:
+    static std::once_flag init_flag_;
+    static std::atomic<int> ref_count_;
+    static std::mutex cleanup_mutex_;
+};
+
+// Static member definitions
+inline std::once_flag CurlGlobalManager::init_flag_;
+inline std::atomic<int> CurlGlobalManager::ref_count_{0};
+inline std::mutex CurlGlobalManager::cleanup_mutex_;
+
+} // namespace detail
+#endif // SCL_HAS_CURL
 
 // =============================================================================
 // S3Credentials Implementation
@@ -153,6 +196,7 @@ struct CacheEntry {
     std::vector<std::byte> data;
     std::chrono::steady_clock::time_point last_access;
     std::size_t access_count;
+    std::list<std::size_t>::iterator lru_it;  // Iterator into LRU list for O(1) removal
 };
 
 // =============================================================================
@@ -168,8 +212,9 @@ struct NetworkBackend::Impl {
     std::size_t file_id;
     std::size_t num_pages_;
 
-    // Local cache
+    // Local cache with O(1) LRU eviction
     std::unordered_map<std::size_t, CacheEntry> cache;
+    std::list<std::size_t> lru_order;  // Front = most recently used, Back = least recently used
     std::size_t max_cache_pages = 64;
     mutable std::shared_mutex cache_mutex;
 
@@ -215,7 +260,7 @@ struct NetworkBackend::Impl {
 
     void init_curl() {
 #if SCL_HAS_CURL
-        curl_global_init(CURL_GLOBAL_DEFAULT);
+        detail::CurlGlobalManager::acquire();
         multi_handle = curl_multi_init();
 
         // Pre-create some handles
@@ -240,6 +285,8 @@ struct NetworkBackend::Impl {
             curl_multi_cleanup(multi_handle);
             multi_handle = nullptr;
         }
+
+        detail::CurlGlobalManager::release();
 #endif
     }
 
@@ -327,22 +374,48 @@ struct NetworkBackend::Impl {
                 auto* h = static_cast<HeaderData*>(userdata);
                 std::string_view line(buffer, total);
 
-                if (line.starts_with("Content-Length:") || line.starts_with("content-length:")) {
-                    h->content_length = std::stoull(std::string(line.substr(16)));
-                } else if (line.starts_with("ETag:") || line.starts_with("etag:")) {
-                    h->etag = std::string(line.substr(6));
-                    // Trim whitespace and quotes
-                    while (!h->etag.empty() && (h->etag.front() == ' ' || h->etag.front() == '"')) {
+                // Helper to extract header value after colon, handling optional whitespace
+                auto extract_value = [](std::string_view line, std::size_t header_len) -> std::string_view {
+                    if (line.size() <= header_len) return {};
+                    std::string_view value = line.substr(header_len);
+                    // Skip leading whitespace
+                    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+                        value.remove_prefix(1);
+                    }
+                    // Trim trailing CRLF
+                    while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) {
+                        value.remove_suffix(1);
+                    }
+                    return value;
+                };
+
+                // Case-insensitive header matching with proper length handling
+                // "Content-Length:" = 15 chars, "ETag:" = 5 chars, "Content-Type:" = 13 chars
+                if (line.size() > 15 &&
+                    (line.substr(0, 15) == "Content-Length:" || line.substr(0, 15) == "content-length:")) {
+                    auto value = extract_value(line, 15);
+                    if (!value.empty()) {
+                        try {
+                            h->content_length = std::stoull(std::string(value));
+                        } catch (...) {
+                            // Malformed Content-Length, ignore
+                        }
+                    }
+                } else if (line.size() > 5 &&
+                           (line.substr(0, 5) == "ETag:" || line.substr(0, 5) == "etag:")) {
+                    auto value = extract_value(line, 5);
+                    h->etag = std::string(value);
+                    // Trim surrounding quotes
+                    while (!h->etag.empty() && h->etag.front() == '"') {
                         h->etag.erase(0, 1);
                     }
-                    while (!h->etag.empty() && (h->etag.back() == '\r' || h->etag.back() == '\n' || h->etag.back() == '"')) {
+                    while (!h->etag.empty() && h->etag.back() == '"') {
                         h->etag.pop_back();
                     }
-                } else if (line.starts_with("Content-Type:") || line.starts_with("content-type:")) {
-                    h->content_type = std::string(line.substr(14));
-                    while (!h->content_type.empty() && (h->content_type.back() == '\r' || h->content_type.back() == '\n')) {
-                        h->content_type.pop_back();
-                    }
+                } else if (line.size() > 13 &&
+                           (line.substr(0, 13) == "Content-Type:" || line.substr(0, 13) == "content-type:")) {
+                    auto value = extract_value(line, 13);
+                    h->content_type = std::string(value);
                 }
                 return total;
             });
@@ -377,10 +450,16 @@ struct NetworkBackend::Impl {
     }
 
     bool check_cache(std::size_t page_idx, std::byte* dest) {
-        std::shared_lock lock(cache_mutex);
+        std::unique_lock lock(cache_mutex);  // Need unique_lock for LRU update
         auto it = cache.find(page_idx);
         if (it != cache.end()) {
             std::memcpy(dest, it->second.data.data(), kPageSize);
+            // Move to front of LRU (most recently used)
+            lru_order.erase(it->second.lru_it);
+            lru_order.push_front(page_idx);
+            it->second.lru_it = lru_order.begin();
+            it->second.last_access = std::chrono::steady_clock::now();
+            it->second.access_count++;
             cache_hits.fetch_add(1);
             return true;
         }
@@ -391,23 +470,35 @@ struct NetworkBackend::Impl {
     void update_cache(std::size_t page_idx, const std::byte* data) {
         std::unique_lock lock(cache_mutex);
 
-        // Evict if at capacity
-        while (cache.size() >= max_cache_pages && !cache.empty()) {
-            // Simple LRU: find oldest entry
-            auto oldest = cache.begin();
-            for (auto it = cache.begin(); it != cache.end(); ++it) {
-                if (it->second.last_access < oldest->second.last_access) {
-                    oldest = it;
-                }
-            }
-            cache.erase(oldest);
+        // Check if already cached (update in place)
+        auto existing = cache.find(page_idx);
+        if (existing != cache.end()) {
+            std::memcpy(existing->second.data.data(), data, kPageSize);
+            // Move to front of LRU
+            lru_order.erase(existing->second.lru_it);
+            lru_order.push_front(page_idx);
+            existing->second.lru_it = lru_order.begin();
+            existing->second.last_access = std::chrono::steady_clock::now();
+            return;
         }
 
+        // Evict if at capacity - O(1) eviction from back of LRU list
+        while (cache.size() >= max_cache_pages && !lru_order.empty()) {
+            std::size_t evict_page = lru_order.back();
+            lru_order.pop_back();
+            cache.erase(evict_page);
+        }
+
+        // Insert new entry
         CacheEntry entry;
         entry.data.resize(kPageSize);
         std::memcpy(entry.data.data(), data, kPageSize);
         entry.last_access = std::chrono::steady_clock::now();
         entry.access_count = 1;
+
+        // Add to front of LRU (most recently used)
+        lru_order.push_front(page_idx);
+        entry.lru_it = lru_order.begin();
 
         cache[page_idx] = std::move(entry);
     }
@@ -683,21 +774,18 @@ bool NetworkBackend::refresh_metadata() {
 void NetworkBackend::clear_cache() {
     std::unique_lock lock(impl_->cache_mutex);
     impl_->cache.clear();
+    impl_->lru_order.clear();
 }
 
 void NetworkBackend::set_cache_size(std::size_t num_pages) {
     impl_->max_cache_pages = num_pages;
 
-    // Evict excess if needed
+    // Evict excess using LRU order (O(1) per eviction)
     std::unique_lock lock(impl_->cache_mutex);
-    while (impl_->cache.size() > num_pages && !impl_->cache.empty()) {
-        auto oldest = impl_->cache.begin();
-        for (auto it = impl_->cache.begin(); it != impl_->cache.end(); ++it) {
-            if (it->second.last_access < oldest->second.last_access) {
-                oldest = it;
-            }
-        }
-        impl_->cache.erase(oldest);
+    while (impl_->cache.size() > num_pages && !impl_->lru_order.empty()) {
+        std::size_t evict_page = impl_->lru_order.back();
+        impl_->lru_order.pop_back();
+        impl_->cache.erase(evict_page);
     }
 }
 

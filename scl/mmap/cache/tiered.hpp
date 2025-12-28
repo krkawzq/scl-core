@@ -117,19 +117,28 @@ constexpr TieredCacheConfig TieredCacheConfig::low_latency() noexcept {
 // CacheStats Implementation
 // =============================================================================
 
+// Statistics relationship:
+// - total_requests = l1_hits + l1_misses
+// - l1_misses = l2_accesses = l2_hits + l2_misses (when L2 enabled)
+// - l2_misses ~= backend_reads (when L2 enabled)
+// - cache_hits = l1_hits + l2_hits
+
 double CacheStats::hit_rate() const noexcept {
+    // Overall cache hit rate: (L1 hits + L2 hits) / total requests
     std::size_t total = l1_hits + l1_misses;
     if (total == 0) return 0.0;
     return static_cast<double>(l1_hits + l2_hits) / static_cast<double>(total);
 }
 
 double CacheStats::l1_hit_rate() const noexcept {
+    // L1 hit rate: L1 hits / total requests
     std::size_t total = l1_hits + l1_misses;
     if (total == 0) return 0.0;
     return static_cast<double>(l1_hits) / static_cast<double>(total);
 }
 
 double CacheStats::l2_hit_rate() const noexcept {
+    // L2 hit rate: L2 hits / L2 accesses (only counts when L2 is actually accessed)
     std::size_t total = l2_hits + l2_misses;
     if (total == 0) return 0.0;
     return static_cast<double>(l2_hits) / static_cast<double>(total);
@@ -263,12 +272,14 @@ struct TieredCache::Impl {
     std::unordered_map<CacheKey, std::size_t, CacheKeyHash> l1_map;
     std::unique_ptr<EvictionTracker> l1_tracker;
     mutable std::shared_mutex l1_mutex;
+    std::condition_variable_any l1_unpin_cv;  // Notified when a page is unpinned
 
     // L2 cache
     std::vector<CacheSlot> l2_slots;
     std::unordered_map<CacheKey, std::size_t, CacheKeyHash> l2_map;
     std::unique_ptr<EvictionTracker> l2_tracker;
     mutable std::shared_mutex l2_mutex;
+    std::condition_variable_any l2_unpin_cv;  // Notified when a page is unpinned
 
     // Statistics
     std::atomic<std::size_t> l1_hits{0};
@@ -339,7 +350,7 @@ struct TieredCache::Impl {
     }
 
     // Try to find page in L1
-    std::size_t find_l1(const CacheKey& key) const {
+    std::size_t find_l1(const CacheKey& key) const noexcept {
         std::shared_lock lock(l1_mutex);
         auto it = l1_map.find(key);
         if (it != l1_map.end() && l1_slots[it->second].is_valid.load()) {
@@ -348,14 +359,43 @@ struct TieredCache::Impl {
         return std::numeric_limits<std::size_t>::max();
     }
 
+    // Find and pin page in L1 atomically (fixes TOCTOU race)
+    // Returns slot index and increments pin_count while holding lock
+    std::size_t find_and_pin_l1(const CacheKey& key) {
+        std::unique_lock lock(l1_mutex);
+        auto it = l1_map.find(key);
+        if (it != l1_map.end() && l1_slots[it->second].is_valid.load()) {
+            std::size_t slot_idx = it->second;
+            l1_slots[slot_idx].pin_count.fetch_add(1, std::memory_order_acquire);
+            l1_tracker->pin(slot_idx);
+            return slot_idx;
+        }
+        return std::numeric_limits<std::size_t>::max();
+    }
+
     // Try to find page in L2
-    std::size_t find_l2(const CacheKey& key) const {
+    std::size_t find_l2(const CacheKey& key) const noexcept {
         if (!config.enable_l2) return std::numeric_limits<std::size_t>::max();
 
         std::shared_lock lock(l2_mutex);
         auto it = l2_map.find(key);
         if (it != l2_map.end() && l2_slots[it->second].is_valid.load()) {
             return it->second;
+        }
+        return std::numeric_limits<std::size_t>::max();
+    }
+
+    // Find and pin page in L2 atomically (fixes TOCTOU race)
+    std::size_t find_and_pin_l2(const CacheKey& key) {
+        if (!config.enable_l2) return std::numeric_limits<std::size_t>::max();
+
+        std::unique_lock lock(l2_mutex);
+        auto it = l2_map.find(key);
+        if (it != l2_map.end() && l2_slots[it->second].is_valid.load()) {
+            std::size_t slot_idx = it->second;
+            l2_slots[slot_idx].pin_count.fetch_add(1, std::memory_order_acquire);
+            l2_tracker->pin(slot_idx);
+            return slot_idx;
         }
         return std::numeric_limits<std::size_t>::max();
     }
@@ -378,11 +418,20 @@ struct TieredCache::Impl {
 
         auto& slot = l1_slots[victim];
 
-        // Wait for pin to release
+        // Wait for pin to release using condition variable with timeout
+        constexpr auto kMaxWait = std::chrono::milliseconds(kEvictionWaitTimeoutMs);
         while (slot.pin_count.load() > 0) {
-            lock.unlock();
-            std::this_thread::yield();
-            lock.lock();
+            if (l1_unpin_cv.wait_for(lock, kMaxWait) == std::cv_status::timeout) {
+                // Timeout - try another victim or return failure
+                std::size_t alt_victim = l1_tracker->select_victim(true);
+                if (alt_victim != victim && alt_victim != std::numeric_limits<std::size_t>::max()) {
+                    if (l1_slots[alt_victim].pin_count.load() == 0) {
+                        victim = alt_victim;
+                        break;
+                    }
+                }
+                // Continue waiting on original victim
+            }
         }
 
         // Demote to L2 if enabled and dirty
@@ -419,11 +468,19 @@ struct TieredCache::Impl {
 
         auto& slot = l2_slots[victim];
 
-        // Wait for pin
+        // Wait for pin using condition variable with timeout
+        constexpr auto kMaxWait = std::chrono::milliseconds(kEvictionWaitTimeoutMs);
         while (slot.pin_count.load() > 0) {
-            lock.unlock();
-            std::this_thread::yield();
-            lock.lock();
+            if (l2_unpin_cv.wait_for(lock, kMaxWait) == std::cv_status::timeout) {
+                // Timeout - try another victim
+                std::size_t alt_victim = l2_tracker->select_victim(true);
+                if (alt_victim != victim && alt_victim != std::numeric_limits<std::size_t>::max()) {
+                    if (l2_slots[alt_victim].pin_count.load() == 0) {
+                        victim = alt_victim;
+                        break;
+                    }
+                }
+            }
         }
 
         // Writeback if dirty
@@ -448,6 +505,10 @@ struct TieredCache::Impl {
         CacheKey key = src.key;
         PageMetadata meta = src.metadata;
 
+        // Copy data while holding lock to avoid data race
+        alignas(64) std::byte temp_buffer[kPageSize];
+        std::memcpy(temp_buffer, src.data, kPageSize);
+
         l1_lock.unlock();
 
         std::size_t l2_slot = get_free_l2_slot();
@@ -460,8 +521,8 @@ struct TieredCache::Impl {
             std::unique_lock l2_lock(l2_mutex);
             auto& dst = l2_slots[l2_slot];
 
-            // Copy data
-            std::memcpy(dst.data, src.data, kPageSize);
+            // Copy from temp buffer (safe, no race)
+            std::memcpy(dst.data, temp_buffer, kPageSize);
             dst.key = key;
             dst.metadata = meta;
             dst.is_valid.store(true);
@@ -485,6 +546,8 @@ struct TieredCache::Impl {
         auto& src = l2_slots[l2_slot];
 
         if (!src.is_valid.load()) {
+            // Return l1_slot to free list (must hold l1_mutex)
+            std::unique_lock l1_lock(l1_mutex);
             l1_free_slots.push(l1_slot);
             return false;
         }
@@ -522,15 +585,23 @@ struct TieredCache::Impl {
             if (is_dirty) {
                 slot.metadata.is_dirty = true;
             }
-            slot.pin_count.fetch_sub(1);
+            int prev_count = slot.pin_count.fetch_sub(1);
             l1_tracker->unpin(slot_idx);
+            // Notify waiting eviction threads if this was the last pin
+            if (prev_count == 1) {
+                l1_unpin_cv.notify_all();
+            }
         } else {
             auto& slot = l2_slots[slot_idx];
             if (is_dirty) {
                 slot.metadata.is_dirty = true;
             }
-            slot.pin_count.fetch_sub(1);
+            int prev_count = slot.pin_count.fetch_sub(1);
             l2_tracker->unpin(slot_idx);
+            // Notify waiting eviction threads if this was the last pin
+            if (prev_count == 1) {
+                l2_unpin_cv.notify_all();
+            }
         }
     }
 
@@ -598,19 +669,17 @@ PageHandle TieredCache::get(std::size_t page_idx, BackendT* backend) {
     CacheKey key{page_idx, backend->file_id()};
     auto now = std::chrono::steady_clock::now();
 
-    // Check L1
+    // Check L1 using atomic find_and_pin (fixes TOCTOU race)
     auto start = std::chrono::steady_clock::now();
-    std::size_t l1_slot = impl_->find_l1(key);
+    std::size_t l1_slot = impl_->find_and_pin_l1(key);
 
     if (l1_slot != std::numeric_limits<std::size_t>::max()) {
-        // L1 hit
+        // L1 hit - slot is already pinned by find_and_pin_l1
         auto& slot = impl_->l1_slots[l1_slot];
-        slot.pin_count.fetch_add(1);
         slot.metadata.access_count++;
         slot.metadata.last_access = now;
 
         impl_->l1_tracker->on_access(l1_slot, slot.metadata, true);
-        impl_->l1_tracker->pin(l1_slot);
 
         auto latency = std::chrono::steady_clock::now() - start;
         impl_->l1_hits.fetch_add(1);
@@ -631,12 +700,12 @@ PageHandle TieredCache::get(std::size_t page_idx, BackendT* backend) {
 
     impl_->l1_misses.fetch_add(1);
 
-    // Check L2
+    // Check L2 using atomic find_and_pin
     if (impl_->config.enable_l2) {
-        std::size_t l2_slot = impl_->find_l2(key);
+        std::size_t l2_slot = impl_->find_and_pin_l2(key);
 
         if (l2_slot != std::numeric_limits<std::size_t>::max()) {
-            // L2 hit
+            // L2 hit - slot is already pinned by find_and_pin_l2
             auto& slot = impl_->l2_slots[l2_slot];
             slot.metadata.access_count++;
             slot.metadata.last_access = now;
@@ -651,13 +720,14 @@ PageHandle TieredCache::get(std::size_t page_idx, BackendT* backend) {
 
             // Check if should promote to L1
             if (slot.metadata.access_count >= impl_->config.promote_threshold) {
+                // Unpin L2 before promotion (promote_to_l1 will handle its own pinning)
+                impl_->unpin_slot(l2_slot, false, false);
+
                 if (impl_->promote_to_l1(l2_slot)) {
-                    // Re-lookup in L1
-                    l1_slot = impl_->find_l1(key);
+                    // Re-lookup in L1 using atomic find_and_pin
+                    l1_slot = impl_->find_and_pin_l1(key);
                     if (l1_slot != std::numeric_limits<std::size_t>::max()) {
                         auto& l1_s = impl_->l1_slots[l1_slot];
-                        l1_s.pin_count.fetch_add(1);
-                        impl_->l1_tracker->pin(l1_slot);
 
                         auto handle_impl = std::make_unique<PageHandle::Impl>();
                         handle_impl->data = l1_s.data;
@@ -670,21 +740,20 @@ PageHandle TieredCache::get(std::size_t page_idx, BackendT* backend) {
                         return PageHandle(std::move(handle_impl));
                     }
                 }
+                // Promotion failed, but we already unpinned L2
+                // Fall through to backend read
+            } else {
+                // Return L2 handle (already pinned)
+                auto handle_impl = std::make_unique<PageHandle::Impl>();
+                handle_impl->data = slot.data;
+                handle_impl->page_idx = page_idx;
+                handle_impl->file_id = backend->file_id();
+                handle_impl->slot_idx = l2_slot;
+                handle_impl->is_l1 = false;
+                handle_impl->cache_impl = impl_.get();
+
+                return PageHandle(std::move(handle_impl));
             }
-
-            // Return L2 handle
-            slot.pin_count.fetch_add(1);
-            impl_->l2_tracker->pin(l2_slot);
-
-            auto handle_impl = std::make_unique<PageHandle::Impl>();
-            handle_impl->data = slot.data;
-            handle_impl->page_idx = page_idx;
-            handle_impl->file_id = backend->file_id();
-            handle_impl->slot_idx = l2_slot;
-            handle_impl->is_l1 = false;
-            handle_impl->cache_impl = impl_.get();
-
-            return PageHandle(std::move(handle_impl));
         }
 
         impl_->l2_misses.fetch_add(1);
@@ -824,7 +893,7 @@ void TieredCache::prefetch(std::span<const std::size_t> pages, BackendT* backend
             .load_latency = std::chrono::duration_cast<std::chrono::nanoseconds>(latency),
             .is_dirty = false,
             .is_pinned = false,
-            .priority = -64  // Lower priority for prefetched pages
+            .priority = kPrefetchPagePriority  // Lower priority for prefetched pages
         };
         slot.is_valid.store(true);
 
@@ -858,11 +927,13 @@ void TieredCache::invalidate(std::size_t page_idx, std::size_t file_id) {
         if (it != impl_->l1_map.end()) {
             auto& slot = impl_->l1_slots[it->second];
 
-            // Wait for unpin
+            // Wait for unpin using condition variable with timeout
+            constexpr auto kMaxWait = std::chrono::milliseconds(kEvictionWaitTimeoutMs);
             while (slot.pin_count.load() > 0) {
-                lock.unlock();
-                std::this_thread::yield();
-                lock.lock();
+                if (impl_->l1_unpin_cv.wait_for(lock, kMaxWait) == std::cv_status::timeout) {
+                    // Still pinned after timeout - continue waiting
+                    // (invalidate must succeed, so we keep waiting)
+                }
             }
 
             if (slot.metadata.is_dirty && impl_->config.writeback_on_evict) {
@@ -883,10 +954,12 @@ void TieredCache::invalidate(std::size_t page_idx, std::size_t file_id) {
         if (it != impl_->l2_map.end()) {
             auto& slot = impl_->l2_slots[it->second];
 
+            // Wait for unpin using condition variable with timeout
+            constexpr auto kMaxWait = std::chrono::milliseconds(kEvictionWaitTimeoutMs);
             while (slot.pin_count.load() > 0) {
-                lock.unlock();
-                std::this_thread::yield();
-                lock.lock();
+                if (impl_->l2_unpin_cv.wait_for(lock, kMaxWait) == std::cv_status::timeout) {
+                    // Still pinned after timeout - continue waiting
+                }
             }
 
             if (slot.metadata.is_dirty && impl_->config.writeback_on_evict) {
@@ -986,30 +1059,75 @@ void TieredCache::clear() {
 }
 
 void TieredCache::resize(std::size_t l1_capacity, std::size_t l2_capacity) {
-    // Simplified resize - just update config and let eviction handle it
-    impl_->config.l1.capacity_pages = l1_capacity;
-    impl_->config.l2.capacity_pages = l2_capacity;
+    // Update config - this controls soft capacity (how many pages we keep)
+    // Note: This does NOT resize the underlying slot arrays, only controls eviction behavior
+    impl_->config.l1.capacity_pages = std::min(l1_capacity, impl_->l1_slots.size());
+    impl_->config.l2.capacity_pages = std::min(l2_capacity, impl_->l2_slots.size());
 
-    // Evict excess pages
-    while (impl_->l1_slots.size() > l1_capacity) {
-        std::size_t victim = impl_->l1_tracker->select_victim(false);
-        if (victim != std::numeric_limits<std::size_t>::max()) {
-            invalidate(impl_->l1_slots[victim].key.page_idx,
-                      impl_->l1_slots[victim].key.file_id);
-        } else {
-            break;
+    // Evict excess pages from L1 if current usage exceeds new capacity
+    {
+        std::unique_lock lock(impl_->l1_mutex);
+        while (impl_->l1_map.size() > impl_->config.l1.capacity_pages) {
+            std::size_t victim = impl_->l1_tracker->select_victim(false);
+            if (victim == std::numeric_limits<std::size_t>::max()) {
+                break;
+            }
+
+            auto& slot = impl_->l1_slots[victim];
+            if (slot.pin_count.load() > 0) {
+                // Skip pinned pages
+                continue;
+            }
+
+            // Demote to L2 if dirty and L2 enabled
+            if (impl_->config.enable_l2 && slot.metadata.is_dirty) {
+                lock.unlock();
+                std::size_t l2_slot = impl_->get_free_l2_slot();
+                if (l2_slot != std::numeric_limits<std::size_t>::max()) {
+                    std::unique_lock l2_lock(impl_->l2_mutex);
+                    auto& dst = impl_->l2_slots[l2_slot];
+                    std::memcpy(dst.data, slot.data, kPageSize);
+                    dst.key = slot.key;
+                    dst.metadata = slot.metadata;
+                    dst.is_valid.store(true);
+                    impl_->l2_map[slot.key] = l2_slot;
+                    impl_->l2_tracker->on_access(l2_slot, slot.metadata, false);
+                    impl_->l1_to_l2_demotions.fetch_add(1);
+                }
+                lock.lock();
+            }
+
+            impl_->l1_map.erase(slot.key);
+            impl_->l1_tracker->on_evict(victim);
+            slot.is_valid.store(false);
+            impl_->l1_free_slots.push(victim);
+            impl_->l1_evictions.fetch_add(1);
         }
     }
 
+    // Evict excess pages from L2
     if (impl_->config.enable_l2) {
-        while (impl_->l2_slots.size() > l2_capacity) {
+        std::unique_lock lock(impl_->l2_mutex);
+        while (impl_->l2_map.size() > impl_->config.l2.capacity_pages) {
             std::size_t victim = impl_->l2_tracker->select_victim(false);
-            if (victim != std::numeric_limits<std::size_t>::max()) {
-                invalidate(impl_->l2_slots[victim].key.page_idx,
-                          impl_->l2_slots[victim].key.file_id);
-            } else {
+            if (victim == std::numeric_limits<std::size_t>::max()) {
                 break;
             }
+
+            auto& slot = impl_->l2_slots[victim];
+            if (slot.pin_count.load() > 0) {
+                continue;
+            }
+
+            if (slot.metadata.is_dirty && impl_->config.writeback_on_evict) {
+                impl_->dirty_writebacks.fetch_add(1);
+            }
+
+            impl_->l2_map.erase(slot.key);
+            impl_->l2_tracker->on_evict(victim);
+            slot.is_valid.store(false);
+            impl_->l2_free_slots.push(victim);
+            impl_->l2_evictions.fetch_add(1);
         }
     }
 }

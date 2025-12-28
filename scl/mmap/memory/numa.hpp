@@ -325,7 +325,11 @@ int NUMAAllocator::select_node(int hint_node) const {
 
 void* NUMAAllocator::allocate_on_node(std::size_t size_bytes, int node) {
     // Align size to page boundary
-    const std::size_t page_size = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+    long page_size_result = sysconf(_SC_PAGESIZE);
+    if (page_size_result <= 0) {
+        page_size_result = 4096;  // Fallback to common page size
+    }
+    const std::size_t page_size = static_cast<std::size_t>(page_size_result);
     size_bytes = (size_bytes + page_size - 1) & ~(page_size - 1);
 
     void* ptr = nullptr;
@@ -400,7 +404,11 @@ void NUMAAllocator::deallocate(void* ptr, std::size_t size_bytes) {
         update_stats(node, size_bytes, false);
     }
 
-    const std::size_t page_size = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+    long page_size_result = sysconf(_SC_PAGESIZE);
+    if (page_size_result <= 0) {
+        page_size_result = 4096;  // Fallback to common page size
+    }
+    const std::size_t page_size = static_cast<std::size_t>(page_size_result);
     size_bytes = (size_bytes + page_size - 1) & ~(page_size - 1);
 
 #if SCL_HAS_LIBNUMA
@@ -437,7 +445,10 @@ int NUMAAllocator::get_node(const void* ptr) const noexcept {
     int status[1] = {-1};
 
     if (move_pages(0, 1, pages, nullptr, status, 0) == 0) {
-        node = status[0];
+        // status[0] contains node number (>= 0) or negative error code
+        if (status[0] >= 0) {
+            node = status[0];
+        }
     }
     return node;
 #else
@@ -466,12 +477,16 @@ bool NUMAAllocator::migrate(void* ptr, std::size_t size_bytes, int target_node) 
 
 #ifdef __linux__
     // Fallback: use move_pages
-    const std::size_t page_size = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+    long page_size_result = sysconf(_SC_PAGESIZE);
+    if (page_size_result <= 0) {
+        page_size_result = 4096;  // Fallback to common page size
+    }
+    const std::size_t page_size = static_cast<std::size_t>(page_size_result);
     std::size_t num_pages = (size_bytes + page_size - 1) / page_size;
 
     std::vector<void*> pages(num_pages);
     std::vector<int> nodes(num_pages, target_node);
-    std::vector<int> status(num_pages);
+    std::vector<int> status(num_pages, -1);
 
     for (std::size_t i = 0; i < num_pages; ++i) {
         pages[i] = static_cast<char*>(ptr) + i * page_size;
@@ -480,8 +495,19 @@ bool NUMAAllocator::migrate(void* ptr, std::size_t size_bytes, int target_node) 
     if (move_pages(0, static_cast<unsigned long>(num_pages),
                    pages.data(), nodes.data(), status.data(),
                    MPOL_MF_MOVE) == 0) {
-        stats_.migrations++;
-        return true;
+        // Check if all pages were successfully migrated
+        bool all_success = true;
+        for (std::size_t i = 0; i < num_pages; ++i) {
+            // status[i] < 0 means error, otherwise it's the current node
+            if (status[i] < 0 || status[i] != target_node) {
+                all_success = false;
+                break;
+            }
+        }
+        if (all_success) {
+            stats_.migrations++;
+            return true;
+        }
     }
     stats_.migration_failures++;
 #else
@@ -496,7 +522,11 @@ bool NUMAAllocator::migrate(void* ptr, std::size_t size_bytes, int target_node) 
 void NUMAAllocator::touch_pages(void* ptr, std::size_t size_bytes) {
     if (!ptr || size_bytes == 0) return;
 
-    const std::size_t page_size = static_cast<std::size_t>(sysconf(_SC_PAGESIZE));
+    long page_size_result = sysconf(_SC_PAGESIZE);
+    if (page_size_result <= 0) {
+        page_size_result = 4096;  // Fallback to common page size
+    }
+    const std::size_t page_size = static_cast<std::size_t>(page_size_result);
     volatile char* p = static_cast<volatile char*>(ptr);
 
     for (std::size_t offset = 0; offset < size_bytes; offset += page_size) {

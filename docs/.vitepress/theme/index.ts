@@ -9,6 +9,8 @@ import AlgorithmBlock from '../components/AlgorithmBlock.vue'
 import ParameterTable from '../components/ParameterTable.vue'
 import ComplexityBadge from '../components/ComplexityBadge.vue'
 import PerformanceChart from '../components/PerformanceChart.vue'
+import SourceCode from '../components/SourceCode.vue'
+import CollapsibleCode from '../components/CollapsibleCode.vue'
 
 export default {
   extends: DefaultTheme,
@@ -24,6 +26,8 @@ export default {
     app.component('ParameterTable', ParameterTable)
     app.component('ComplexityBadge', ComplexityBadge)
     app.component('PerformanceChart', PerformanceChart)
+    app.component('SourceCode', SourceCode)
+    app.component('CollapsibleCode', CollapsibleCode)
   }
 } satisfies Theme
 

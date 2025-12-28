@@ -1,0 +1,112 @@
+{
+  "total_files": 70,
+  "total_batches": 18,
+  "batches": {
+    "batch_1": [
+      "algebra.hpp",
+      "alignment.hpp",
+      "annotation.hpp",
+      "association.hpp"
+    ],
+    "batch_2": [
+      "bbknn.hpp",
+      "centrality.hpp",
+      "clonotype.hpp",
+      "coexpression.hpp"
+    ],
+    "batch_3": [
+      "communication.hpp",
+      "comparison.hpp",
+      "components.hpp",
+      "correlation.hpp"
+    ],
+    "batch_4": [
+      "diffusion.hpp",
+      "doublet.hpp",
+      "enrichment.hpp",
+      "entropy.hpp"
+    ],
+    "batch_5": [
+      "feature.hpp",
+      "gnn.hpp",
+      "gram.hpp",
+      "grn.hpp"
+    ],
+    "batch_6": [
+      "group.hpp",
+      "hotspot.hpp",
+      "hvg.hpp",
+      "impute.hpp"
+    ],
+    "batch_7": [
+      "kernel.hpp",
+      "leiden.hpp",
+      "lineage.hpp",
+      "log1p.hpp"
+    ],
+    "batch_8": [
+      "louvain.hpp",
+      "markers.hpp",
+      "merge.hpp",
+      "metrics.hpp"
+    ],
+    "batch_9": [
+      "mmd.hpp",
+      "multiple_testing.hpp",
+      "mwu.hpp",
+      "neighbors.hpp"
+    ],
+    "batch_10": [
+      "niche.hpp",
+      "normalize.hpp",
+      "outlier.hpp",
+      "permutation.hpp"
+    ],
+    "batch_11": [
+      "projection.hpp",
+      "propagation.hpp",
+      "pseudotime.hpp",
+      "qc.hpp"
+    ],
+    "batch_12": [
+      "reorder.hpp",
+      "resample.hpp",
+      "sampling.hpp",
+      "scale.hpp"
+    ],
+    "batch_13": [
+      "scoring.hpp",
+      "slice.hpp",
+      "softmax.hpp",
+      "sparse.hpp"
+    ],
+    "batch_14": [
+      "sparse_opt.hpp",
+      "spatial.hpp",
+      "spatial_pattern.hpp",
+      "state.hpp"
+    ],
+    "batch_15": [
+      "subpopulation.hpp",
+      "tissue.hpp",
+      "transition.hpp",
+      "ttest.hpp"
+    ],
+    "batch_16": [
+      "velocity.hpp",
+      "stat/auroc.hpp",
+      "stat/effect_size.hpp",
+      "stat/group_partition.hpp"
+    ],
+    "batch_17": [
+      "stat/kruskal_wallis.hpp",
+      "stat/ks.hpp",
+      "stat/oneway_anova.hpp",
+      "stat/permutation_stat.hpp"
+    ],
+    "batch_18": [
+      "stat/rank_utils.hpp",
+      "stat/stat_base.hpp"
+    ]
+  }
+}

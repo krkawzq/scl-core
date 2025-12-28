@@ -135,19 +135,16 @@ public:
     }
 
     SCL_NODISCARD T operator[](std::size_t i) const {
+        SCL_ASSERT(i < num_elements_,
+                   "MmapArray::operator[] index out of bounds");
         if (i >= num_elements_) {
-#ifndef NDEBUG
-            std::fprintf(stderr, "ERROR: MmapArray::operator[] i=%zu >= size=%zu\n",
-                        i, num_elements_);
-#endif
             return T{};
         }
 
         constexpr std::size_t kMaxByteOffset = SIZE_MAX / sizeof(T);
+        SCL_ASSERT(i <= kMaxByteOffset,
+                   "MmapArray::operator[] byte offset would overflow");
         if (i > kMaxByteOffset) {
-#ifndef NDEBUG
-            std::fprintf(stderr, "ERROR: MmapArray::operator[] byte offset overflow\n");
-#endif
             return T{};
         }
 
@@ -159,10 +156,9 @@ public:
         if (!handle) return T{};
 
         const std::size_t elem_in_page = page_off / sizeof(T);
+        SCL_ASSERT(elem_in_page < kElementsPerPage,
+                   "MmapArray::operator[] elem_in_page out of bounds");
         if (elem_in_page >= kElementsPerPage) {
-#ifndef NDEBUG
-            std::fprintf(stderr, "ERROR: MmapArray::operator[] elem_in_page out of bounds\n");
-#endif
             return T{};
         }
 
@@ -210,50 +206,36 @@ public:
         std::size_t current = start;
         std::size_t remaining = count;
 
-        while (remaining > 0) {
-            constexpr std::size_t kMaxByteOffset = SIZE_MAX / sizeof(T);
-            if (current > kMaxByteOffset) {
-#ifndef NDEBUG
-                std::fprintf(stderr, "ERROR: MmapArray::read_range byte offset overflow\n");
-#endif
-                break;
-            }
+        // Pre-loop validation (checked once, not per iteration)
+        constexpr std::size_t kMaxByteOffset = SIZE_MAX / sizeof(T);
+        SCL_ASSERT(start <= kMaxByteOffset,
+                   "MmapArray::read_range start would cause byte offset overflow");
 
+        while (remaining > 0) {
             const std::size_t byte_off = start_offset_ + current * sizeof(T);
             const std::size_t page_idx = byte_to_page_idx(byte_off);
             const std::size_t page_off = byte_to_page_offset(byte_off);
 
-            if (page_off > kPageSize) {
-#ifndef NDEBUG
-                std::fprintf(stderr, "ERROR: MmapArray::read_range page_off exceeds page size\n");
-#endif
-                break;
-            }
+            // byte_to_page_offset returns byte_off % kPageSize, always < kPageSize
+            SCL_ASSERT(page_off < kPageSize,
+                       "MmapArray::read_range page_off invariant violated");
 
             const std::size_t bytes_in_page = kPageSize - page_off;
             const std::size_t elems_in_page = bytes_in_page / sizeof(T);
             const std::size_t copy_count = std::min(remaining, elems_in_page);
 
-            if (copy_count == 0) {
-#ifndef NDEBUG
-                std::fprintf(stderr, "ERROR: MmapArray::read_range zero copy_count\n");
-#endif
-                break;
-            }
+            // elems_in_page >= 1 when kPageSize >= sizeof(T), and remaining > 0
+            SCL_ASSERT(copy_count > 0,
+                       "MmapArray::read_range copy_count invariant violated");
 
             PageHandle handle = scheduler_->request(page_idx, store_.get());
             if (handle) {
                 const std::size_t elem_offset = page_off / sizeof(T);
-                if (elem_offset < kElementsPerPage &&
-                    elem_offset + copy_count <= kElementsPerPage) {
-                    const T* src = handle.as<T>() + elem_offset;
-                    scl::memory::copy_fast(
-                        Array<const T>(src, copy_count),
-                        Array<T>(dest, copy_count)
-                    );
-                } else {
-                    std::memset(dest, 0, copy_count * sizeof(T));
-                }
+                const T* src = handle.as<T>() + elem_offset;
+                scl::memory::copy_fast(
+                    Array<const T>(src, copy_count),
+                    Array<T>(dest, copy_count)
+                );
             } else {
                 std::memset(dest, 0, copy_count * sizeof(T));
             }
@@ -294,43 +276,35 @@ public:
         std::size_t current = start;
         std::size_t remaining = count;
 
-        while (remaining > 0) {
-            constexpr std::size_t kMaxByteOffset = SIZE_MAX / sizeof(T);
-            if (current > kMaxByteOffset) {
-#ifndef NDEBUG
-                std::fprintf(stderr, "ERROR: MmapArray::write_range byte offset overflow\n");
-#endif
-                break;
-            }
+        // Pre-loop validation
+        constexpr std::size_t kMaxByteOffset = SIZE_MAX / sizeof(T);
+        SCL_ASSERT(start <= kMaxByteOffset,
+                   "MmapArray::write_range start would cause byte offset overflow");
 
+        while (remaining > 0) {
             const std::size_t byte_off = start_offset_ + current * sizeof(T);
             const std::size_t page_idx = byte_to_page_idx(byte_off);
             const std::size_t page_off = byte_to_page_offset(byte_off);
 
-            if (page_off > kPageSize) {
-                break;
-            }
+            SCL_ASSERT(page_off < kPageSize,
+                       "MmapArray::write_range page_off invariant violated");
 
             const std::size_t bytes_in_page = kPageSize - page_off;
             const std::size_t elems_in_page = bytes_in_page / sizeof(T);
             const std::size_t copy_count = std::min(remaining, elems_in_page);
 
-            if (copy_count == 0) {
-                break;
-            }
+            SCL_ASSERT(copy_count > 0,
+                       "MmapArray::write_range copy_count invariant violated");
 
             PageHandle handle = scheduler_->request(page_idx, store_.get());
             if (handle) {
                 const std::size_t elem_offset = page_off / sizeof(T);
-                if (elem_offset < kElementsPerPage &&
-                    elem_offset + copy_count <= kElementsPerPage) {
-                    T* dest = handle.as<T>() + elem_offset;
-                    scl::memory::copy_fast(
-                        Array<const T>(src, copy_count),
-                        Array<T>(dest, copy_count)
-                    );
-                    handle.mark_dirty();
-                }
+                T* dest = handle.as<T>() + elem_offset;
+                scl::memory::copy_fast(
+                    Array<const T>(src, copy_count),
+                    Array<T>(dest, copy_count)
+                );
+                handle.mark_dirty();
             }
 
             remaining -= copy_count;
@@ -361,37 +335,32 @@ public:
         std::size_t current = start;
         std::size_t remaining = count;
 
-        while (remaining > 0) {
-            constexpr std::size_t kMaxByteOffset = SIZE_MAX / sizeof(T);
-            if (current > kMaxByteOffset) {
-                break;
-            }
+        // Pre-loop validation
+        constexpr std::size_t kMaxByteOffset = SIZE_MAX / sizeof(T);
+        SCL_ASSERT(start <= kMaxByteOffset,
+                   "MmapArray::fill_range start would cause byte offset overflow");
 
+        while (remaining > 0) {
             const std::size_t byte_off = start_offset_ + current * sizeof(T);
             const std::size_t page_idx = byte_to_page_idx(byte_off);
             const std::size_t page_off = byte_to_page_offset(byte_off);
 
-            if (page_off > kPageSize) {
-                break;
-            }
+            SCL_ASSERT(page_off < kPageSize,
+                       "MmapArray::fill_range page_off invariant violated");
 
             const std::size_t bytes_in_page = kPageSize - page_off;
             const std::size_t elems_in_page = bytes_in_page / sizeof(T);
             const std::size_t fill_count = std::min(remaining, elems_in_page);
 
-            if (fill_count == 0) {
-                break;
-            }
+            SCL_ASSERT(fill_count > 0,
+                       "MmapArray::fill_range fill_count invariant violated");
 
             PageHandle handle = scheduler_->request(page_idx, store_.get());
             if (handle) {
                 const std::size_t elem_offset = page_off / sizeof(T);
-                if (elem_offset < kElementsPerPage &&
-                    elem_offset + fill_count <= kElementsPerPage) {
-                    T* dest = handle.as<T>() + elem_offset;
-                    scl::memory::fill(Array<T>(dest, fill_count), value);
-                    handle.mark_dirty();
-                }
+                T* dest = handle.as<T>() + elem_offset;
+                scl::memory::fill(Array<T>(dest, fill_count), value);
+                handle.mark_dirty();
             }
 
             remaining -= fill_count;

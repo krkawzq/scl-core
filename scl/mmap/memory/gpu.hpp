@@ -34,6 +34,101 @@
 namespace scl::mmap::memory {
 
 // =============================================================================
+// GPU Error Checking Macros
+// =============================================================================
+
+#if SCL_HAS_CUDA
+#define SCL_CUDA_CHECK(call) do { \
+    cudaError_t err = (call); \
+    if (err != cudaSuccess) { \
+        throw RuntimeError(std::string("CUDA error: ") + cudaGetErrorString(err)); \
+    } \
+} while(0)
+
+#define SCL_CUDA_CHECK_WARN(call) do { \
+    cudaError_t err = (call); \
+    if (err != cudaSuccess) { \
+        /* Warning only, do not throw in destructor */ \
+    } \
+} while(0)
+#endif
+
+#if SCL_HAS_HIP
+#define SCL_HIP_CHECK(call) do { \
+    hipError_t err = (call); \
+    if (err != hipSuccess) { \
+        throw RuntimeError(std::string("HIP error: ") + hipGetErrorString(err)); \
+    } \
+} while(0)
+
+#define SCL_HIP_CHECK_WARN(call) do { \
+    hipError_t err = (call); \
+    if (err != hipSuccess) { \
+        /* Warning only, do not throw in destructor */ \
+    } \
+} while(0)
+#endif
+
+// =============================================================================
+// RAII Device Guard for Exception-Safe Device Switching
+// =============================================================================
+
+#if SCL_HAS_CUDA || SCL_HAS_HIP
+namespace detail {
+
+class DeviceGuard {
+public:
+    explicit DeviceGuard(int target_device, GPUBackend backend)
+        : backend_(backend), saved_device_(-1) {
+#if SCL_HAS_CUDA
+        if (backend_ == GPUBackend::CUDA) {
+            SCL_CUDA_CHECK(cudaGetDevice(&saved_device_));
+            if (target_device != saved_device_) {
+                SCL_CUDA_CHECK(cudaSetDevice(target_device));
+            } else {
+                saved_device_ = -1;  // No restore needed
+            }
+        }
+#endif
+#if SCL_HAS_HIP
+        if (backend_ == GPUBackend::HIP) {
+            SCL_HIP_CHECK(hipGetDevice(&saved_device_));
+            if (target_device != saved_device_) {
+                SCL_HIP_CHECK(hipSetDevice(target_device));
+            } else {
+                saved_device_ = -1;  // No restore needed
+            }
+        }
+#endif
+    }
+
+    ~DeviceGuard() {
+        if (saved_device_ >= 0) {
+#if SCL_HAS_CUDA
+            if (backend_ == GPUBackend::CUDA) {
+                SCL_CUDA_CHECK_WARN(cudaSetDevice(saved_device_));
+            }
+#endif
+#if SCL_HAS_HIP
+            if (backend_ == GPUBackend::HIP) {
+                SCL_HIP_CHECK_WARN(hipSetDevice(saved_device_));
+            }
+#endif
+        }
+    }
+
+    DeviceGuard(const DeviceGuard&) = delete;
+    DeviceGuard& operator=(const DeviceGuard&) = delete;
+
+private:
+    GPUBackend backend_;
+    int saved_device_;
+};
+
+} // namespace detail
+#endif // SCL_HAS_CUDA || SCL_HAS_HIP
+
+// =============================================================================
 // GPUPoolConfig Implementation
 // =============================================================================
 
@@ -167,21 +262,21 @@ GPUStream& GPUStream::operator=(GPUStream&& other) noexcept = default;
 void GPUStream::synchronize() {
     if (!impl_ || !impl_->stream) {
 #if SCL_HAS_CUDA
-        cudaDeviceSynchronize();
+        SCL_CUDA_CHECK(cudaDeviceSynchronize());
 #elif SCL_HAS_HIP
-        hipDeviceSynchronize();
+        SCL_HIP_CHECK(hipDeviceSynchronize());
 #endif
         return;
     }
 
 #if SCL_HAS_CUDA
     if (impl_->backend == GPUBackend::CUDA) {
-        cudaStreamSynchronize(impl_->cuda_stream());
+        SCL_CUDA_CHECK(cudaStreamSynchronize(impl_->cuda_stream()));
     }
 #endif
 #if SCL_HAS_HIP
     if (impl_->backend == GPUBackend::HIP) {
-        hipStreamSynchronize(impl_->hip_stream());
+        SCL_HIP_CHECK(hipStreamSynchronize(impl_->hip_stream()));
     }
 #endif
 }
@@ -264,6 +359,21 @@ struct GPUMemoryPool::Impl {
     }
 
     ~Impl() {
+        // Check for active allocations that weren't properly deallocated
+        {
+            std::lock_guard<std::mutex> lock(alloc_mutex);
+            if (!allocations.empty()) {
+#ifndef NDEBUG
+                std::fprintf(stderr, "WARNING: GPUMemoryPool destructor: %zu allocations "
+                             "were not deallocated (total %zu bytes)\n",
+                             allocations.size(), total_allocated.load());
+#endif
+                // Do not free them here - user may have external references
+                // Just clear tracking to avoid double-free if user frees later
+                allocations.clear();
+            }
+        }
+
         // Free all pooled memory
         std::lock_guard<std::mutex> lock(free_list_mutex);
 
@@ -311,23 +421,23 @@ struct GPUMemoryPool::Impl {
         if (actual_device_id < 0) {
 #if SCL_HAS_CUDA
             if (actual_backend == GPUBackend::CUDA) {
-                cudaGetDevice(&actual_device_id);
+                SCL_CUDA_CHECK(cudaGetDevice(&actual_device_id));
             }
 #endif
 #if SCL_HAS_HIP
             if (actual_backend == GPUBackend::HIP) {
-                hipGetDevice(&actual_device_id);
+                SCL_HIP_CHECK(hipGetDevice(&actual_device_id));
             }
 #endif
         } else {
 #if SCL_HAS_CUDA
             if (actual_backend == GPUBackend::CUDA) {
-                cudaSetDevice(actual_device_id);
+                SCL_CUDA_CHECK(cudaSetDevice(actual_device_id));
             }
 #endif
 #if SCL_HAS_HIP
             if (actual_backend == GPUBackend::HIP) {
-                hipSetDevice(actual_device_id);
+                SCL_HIP_CHECK(hipSetDevice(actual_device_id));
             }
 #endif
         }
@@ -521,8 +631,8 @@ struct GPUMemoryPool::Impl {
     }
 
     void reset_stats() {
-        total_allocated.store(0);
-        peak_allocated.store(0);
+        // Note: Do NOT reset total_allocated and peak_allocated
+        // as they track actual memory state, not just statistics
         total_allocations.store(0);
         total_frees.store(0);
         pool_hits.store(0);
@@ -653,12 +763,12 @@ void GPUMemoryPool::copy_h2d(void* dst, const void* src, std::size_t size_bytes)
 
 #if SCL_HAS_CUDA
     if (impl_->actual_backend == GPUBackend::CUDA) {
-        cudaMemcpy(dst, src, size_bytes, cudaMemcpyHostToDevice);
+        SCL_CUDA_CHECK(cudaMemcpy(dst, src, size_bytes, cudaMemcpyHostToDevice));
     }
 #endif
 #if SCL_HAS_HIP
     if (impl_->actual_backend == GPUBackend::HIP) {
-        hipMemcpy(dst, src, size_bytes, hipMemcpyHostToDevice);
+        SCL_HIP_CHECK(hipMemcpy(dst, src, size_bytes, hipMemcpyHostToDevice));
     }
 #endif
 
@@ -677,12 +787,12 @@ void GPUMemoryPool::copy_d2h(void* dst, const void* src, std::size_t size_bytes)
 
 #if SCL_HAS_CUDA
     if (impl_->actual_backend == GPUBackend::CUDA) {
-        cudaMemcpy(dst, src, size_bytes, cudaMemcpyDeviceToHost);
+        SCL_CUDA_CHECK(cudaMemcpy(dst, src, size_bytes, cudaMemcpyDeviceToHost));
     }
 #endif
 #if SCL_HAS_HIP
     if (impl_->actual_backend == GPUBackend::HIP) {
-        hipMemcpy(dst, src, size_bytes, hipMemcpyDeviceToHost);
+        SCL_HIP_CHECK(hipMemcpy(dst, src, size_bytes, hipMemcpyDeviceToHost));
     }
 #endif
 
@@ -701,17 +811,18 @@ void GPUMemoryPool::copy_h2d_async(
 
 #if SCL_HAS_CUDA
     if (impl_->actual_backend == GPUBackend::CUDA) {
-        cudaMemcpyAsync(dst, src, size_bytes, cudaMemcpyHostToDevice,
-                        static_cast<cudaStream_t>(stream.native_handle()));
+        SCL_CUDA_CHECK(cudaMemcpyAsync(dst, src, size_bytes, cudaMemcpyHostToDevice,
+                        static_cast<cudaStream_t>(stream.native_handle())));
     }
 #endif
 #if SCL_HAS_HIP
     if (impl_->actual_backend == GPUBackend::HIP) {
-        hipMemcpyAsync(dst, src, size_bytes, hipMemcpyHostToDevice,
-                       static_cast<hipStream_t>(stream.native_handle()));
+        SCL_HIP_CHECK(hipMemcpyAsync(dst, src, size_bytes, hipMemcpyHostToDevice,
+                       static_cast<hipStream_t>(stream.native_handle())));
     }
 #endif
 
+    // Note: Timing not tracked for async operations as it would require synchronization
     impl_->h2d_transfers.fetch_add(1);
     impl_->h2d_bytes.fetch_add(size_bytes);
 }
@@ -723,17 +834,18 @@ void GPUMemoryPool::copy_d2h_async(
 
 #if SCL_HAS_CUDA
     if (impl_->actual_backend == GPUBackend::CUDA) {
-        cudaMemcpyAsync(dst, src, size_bytes, cudaMemcpyDeviceToHost,
-                        static_cast<cudaStream_t>(stream.native_handle()));
+        SCL_CUDA_CHECK(cudaMemcpyAsync(dst, src, size_bytes, cudaMemcpyDeviceToHost,
+                        static_cast<cudaStream_t>(stream.native_handle())));
     }
 #endif
 #if SCL_HAS_HIP
     if (impl_->actual_backend == GPUBackend::HIP) {
-        hipMemcpyAsync(dst, src, size_bytes, hipMemcpyDeviceToHost,
-                       static_cast<hipStream_t>(stream.native_handle()));
+        SCL_HIP_CHECK(hipMemcpyAsync(dst, src, size_bytes, hipMemcpyDeviceToHost,
+                       static_cast<hipStream_t>(stream.native_handle())));
     }
 #endif
 
+    // Note: Timing not tracked for async operations as it would require synchronization
     impl_->d2h_transfers.fetch_add(1);
     impl_->d2h_bytes.fetch_add(size_bytes);
 }
@@ -743,12 +855,12 @@ void GPUMemoryPool::memset_device(void* ptr, int value, std::size_t size_bytes) 
 
 #if SCL_HAS_CUDA
     if (impl_->actual_backend == GPUBackend::CUDA) {
-        cudaMemset(ptr, value, size_bytes);
+        SCL_CUDA_CHECK(cudaMemset(ptr, value, size_bytes));
     }
 #endif
 #if SCL_HAS_HIP
     if (impl_->actual_backend == GPUBackend::HIP) {
-        hipMemset(ptr, value, size_bytes);
+        SCL_HIP_CHECK(hipMemset(ptr, value, size_bytes));
     }
 #endif
 }
@@ -760,14 +872,14 @@ void GPUMemoryPool::memset_device_async(
 
 #if SCL_HAS_CUDA
     if (impl_->actual_backend == GPUBackend::CUDA) {
-        cudaMemsetAsync(ptr, value, size_bytes,
-                        static_cast<cudaStream_t>(stream.native_handle()));
+        SCL_CUDA_CHECK(cudaMemsetAsync(ptr, value, size_bytes,
+                        static_cast<cudaStream_t>(stream.native_handle())));
     }
 #endif
 #if SCL_HAS_HIP
     if (impl_->actual_backend == GPUBackend::HIP) {
-        hipMemsetAsync(ptr, value, size_bytes,
-                       static_cast<hipStream_t>(stream.native_handle()));
+        SCL_HIP_CHECK(hipMemsetAsync(ptr, value, size_bytes,
+                       static_cast<hipStream_t>(stream.native_handle())));
     }
 #endif
 }
@@ -835,23 +947,34 @@ void GPUMemoryPool::reset_stats() noexcept {
 void GPUMemoryPool::trim(std::size_t keep_bytes) {
     std::lock_guard<std::mutex> lock(impl_->free_list_mutex);
 
-    std::size_t freed = 0;
+    // Calculate current free list size
+    std::size_t current_free = 0;
+    for (const auto& [size, list] : impl_->device_free_list) {
+        current_free += size * list.size();
+    }
+    for (const auto& [size, list] : impl_->pinned_free_list) {
+        current_free += size * list.size();
+    }
+
+    // Release memory until we have at most keep_bytes of free memory
+    std::size_t to_release = (current_free > keep_bytes) ? (current_free - keep_bytes) : 0;
+    std::size_t released = 0;
 
     // Trim device free list
     for (auto& [size, list] : impl_->device_free_list) {
-        while (!list.empty() && freed < keep_bytes) {
+        while (!list.empty() && released < to_release) {
             impl_->free_device_memory(list.back());
             list.pop_back();
-            freed += size;
+            released += size;
         }
     }
 
     // Trim pinned free list
     for (auto& [size, list] : impl_->pinned_free_list) {
-        while (!list.empty() && freed < keep_bytes) {
+        while (!list.empty() && released < to_release) {
             impl_->free_pinned_memory(list.back());
             list.pop_back();
-            freed += size;
+            released += size;
         }
     }
 }
@@ -892,14 +1015,12 @@ GPUDeviceInfo GPUMemoryPool::get_device_info(int device_id) {
         info.supports_managed = prop.managedMemory;
         info.supports_async = prop.asyncEngineCount > 0;
 
-        int current_device;
-        cudaGetDevice(&current_device);
-        cudaSetDevice(device_id);
+        // Use RAII guard for exception-safe device switching
+        detail::DeviceGuard guard(device_id, GPUBackend::CUDA);
         std::size_t free_mem, total_mem;
         if (cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess) {
             info.free_memory = free_mem;
         }
-        cudaSetDevice(current_device);
     }
 #endif
 
@@ -916,14 +1037,12 @@ GPUDeviceInfo GPUMemoryPool::get_device_info(int device_id) {
         info.supports_managed = prop.managedMemory;
         info.supports_async = prop.asyncEngineCount > 0;
 
-        int current_device;
-        hipGetDevice(&current_device);
-        hipSetDevice(device_id);
+        // Use RAII guard for exception-safe device switching
+        detail::DeviceGuard guard(device_id, GPUBackend::HIP);
         std::size_t free_mem, total_mem;
         if (hipMemGetInfo(&free_mem, &total_mem) == hipSuccess) {
             info.free_memory = free_mem;
         }
-        hipSetDevice(current_device);
     }
 #endif
 

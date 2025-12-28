@@ -1,4 +1,6 @@
 import { defineConfig } from 'vitepress'
+import path from 'path'
+import { sourceCodePlugin } from './plugins/sourceCodePlugin'
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
@@ -17,9 +19,17 @@ export default defineConfig({
     lineNumbers: true,
     
     // Theme for code highlighting
+    // Options: 'one-dark-pro', 'dracula', 'tokyo-night', 'vitesse-dark', 'nord', 'catppuccin-mocha'
     theme: {
-      light: 'github-light',
-      dark: 'github-dark'
+      light: 'vitesse-light',
+      dark: 'one-dark-pro'
+    },
+    
+    // Custom markdown-it plugins
+    config: (md) => {
+      md.use(sourceCodePlugin, {
+        projectRoot: path.resolve(__dirname, '../..')
+      })
     }
   },
   
@@ -152,9 +162,12 @@ export default defineConfig({
                 { text: 'Sparse Matrix', link: '/cpp/core/sparse' },
                 { text: 'Registry', link: '/cpp/core/registry' },
                 { text: 'SIMD', link: '/cpp/core/simd' },
-                { text: 'Error Handling', link: '/cpp/core/error' },
                 { text: 'Memory', link: '/cpp/core/memory' },
-                { text: 'Vectorize', link: '/cpp/core/vectorize' }
+                { text: 'Vectorize', link: '/cpp/core/vectorize' },
+                { text: 'Sort', link: '/cpp/core/sort' },
+                { text: 'Argsort', link: '/cpp/core/argsort' },
+                { text: 'Error Handling', link: '/cpp/core/error' },
+                { text: 'Macros', link: '/cpp/core/macros' }
               ]
             },
             {
@@ -173,11 +186,44 @@ export default defineConfig({
               items: [
                 { text: 'Overview', link: '/cpp/kernels/' },
                 { text: 'Sparse Tools', link: '/cpp/kernels/sparse-tools' },
+                { text: 'Linear Algebra', link: '/cpp/kernels/algebra' },
+                { text: 'Feature Statistics', link: '/cpp/kernels/feature' },
+                { text: 'Scaling', link: '/cpp/kernels/scale' },
                 { text: 'Normalization', link: '/cpp/kernels/normalization' },
-                { text: 'Statistics', link: '/cpp/kernels/statistics' },
+                { text: 'Softmax', link: '/cpp/kernels/softmax' },
+                { text: 'Mann-Whitney U', link: '/cpp/kernels/mwu' },
+                { text: 'T-test', link: '/cpp/kernels/ttest' },
                 { text: 'Neighbors', link: '/cpp/kernels/neighbors' },
+                { text: 'BBKNN', link: '/cpp/kernels/bbknn' },
+                { text: 'MMD', link: '/cpp/kernels/mmd' },
+                { text: 'Correlation', link: '/cpp/kernels/correlation' },
+                { text: 'Highly Variable Genes', link: '/cpp/kernels/hvg' },
+                { text: 'Reorder', link: '/cpp/kernels/reorder' },
+                { text: 'Louvain', link: '/cpp/kernels/louvain' },
+                { text: 'Sparse Optimization', link: '/cpp/kernels/sparse-opt' },
+                { text: 'Niche Analysis', link: '/cpp/kernels/niche' },
+                { text: 'Merge', link: '/cpp/kernels/merge' },
+                { text: 'Slice', link: '/cpp/kernels/slice' },
+                { text: 'Group', link: '/cpp/kernels/group' },
+                { text: 'Log1p Transform', link: '/cpp/kernels/log1p' },
+                { text: 'Quality Control', link: '/cpp/kernels/qc' },
+                { text: 'Resampling', link: '/cpp/kernels/resample' },
+                { text: 'Entropy', link: '/cpp/kernels/entropy' },
+                { text: 'Gene Regulatory Network', link: '/cpp/kernels/grn' },
+                { text: 'Hotspot Detection', link: '/cpp/kernels/hotspot' },
+                { text: 'Imputation', link: '/cpp/kernels/impute' },
+                { text: 'Connected Components', link: '/cpp/kernels/components' },
+                { text: 'Clustering Metrics', link: '/cpp/kernels/metrics' },
+                { text: 'Outlier Detection', link: '/cpp/kernels/outlier' },
+                { text: 'Sampling', link: '/cpp/kernels/sampling' },
+                { text: 'Statistics', link: '/cpp/kernels/statistics' },
                 { text: 'Clustering', link: '/cpp/kernels/clustering' },
-                { text: 'Spatial', link: '/cpp/kernels/spatial' }
+                { text: 'Spatial', link: '/cpp/kernels/spatial' },
+                { text: 'Subpopulation', link: '/cpp/kernels/subpopulation' },
+                { text: 'Clonotype', link: '/cpp/kernels/clonotype' },
+                { text: 'Lineage', link: '/cpp/kernels/lineage' },
+                { text: 'Spatial Pattern', link: '/cpp/kernels/spatial-pattern' },
+                { text: 'Tissue Architecture', link: '/cpp/kernels/tissue' }
               ]
             }
           ]
@@ -340,9 +386,12 @@ export default defineConfig({
                 { text: '稀疏矩阵', link: '/zh/cpp/core/sparse' },
                 { text: '注册表', link: '/zh/cpp/core/registry' },
                 { text: 'SIMD', link: '/zh/cpp/core/simd' },
-                { text: '错误处理', link: '/zh/cpp/core/error' },
                 { text: '内存', link: '/zh/cpp/core/memory' },
-                { text: '向量化', link: '/zh/cpp/core/vectorize' }
+                { text: '向量化', link: '/zh/cpp/core/vectorize' },
+                { text: '排序', link: '/zh/cpp/core/sort' },
+                { text: '参数排序', link: '/zh/cpp/core/argsort' },
+                { text: '错误处理', link: '/zh/cpp/core/error' },
+                { text: '宏定义', link: '/zh/cpp/core/macros' }
               ]
             },
             {
@@ -361,11 +410,48 @@ export default defineConfig({
               items: [
                 { text: '概览', link: '/zh/cpp/kernels/' },
                 { text: '稀疏工具', link: '/zh/cpp/kernels/sparse-tools' },
+                { text: '线性代数', link: '/zh/cpp/kernels/algebra' },
+                { text: '特征统计', link: '/zh/cpp/kernels/feature' },
+                { text: '缩放', link: '/zh/cpp/kernels/scale' },
                 { text: '归一化', link: '/zh/cpp/kernels/normalization' },
-                { text: '统计', link: '/zh/cpp/kernels/statistics' },
+                { text: 'Softmax', link: '/zh/cpp/kernels/softmax' },
+                { text: 'Mann-Whitney U', link: '/zh/cpp/kernels/mwu' },
+                { text: 'T 检验', link: '/zh/cpp/kernels/ttest' },
                 { text: '邻居搜索', link: '/zh/cpp/kernels/neighbors' },
+                { text: 'BBKNN', link: '/zh/cpp/kernels/bbknn' },
+                { text: 'MMD', link: '/zh/cpp/kernels/mmd' },
+                { text: '相关性', link: '/zh/cpp/kernels/correlation' },
+                { text: '高变基因', link: '/zh/cpp/kernels/hvg' },
+                { text: '重排序', link: '/zh/cpp/kernels/reorder' },
+                { text: 'Louvain', link: '/zh/cpp/kernels/louvain' },
+                { text: '稀疏优化', link: '/zh/cpp/kernels/sparse-opt' },
+                { text: '生态位分析', link: '/zh/cpp/kernels/niche' },
+                { text: '合并', link: '/zh/cpp/kernels/merge' },
+                { text: '切片', link: '/zh/cpp/kernels/slice' },
+                { text: '分组', link: '/zh/cpp/kernels/group' },
+                { text: 'Log1p 变换', link: '/zh/cpp/kernels/log1p' },
+                { text: '质量控制', link: '/zh/cpp/kernels/qc' },
+                { text: '重采样', link: '/zh/cpp/kernels/resample' },
+                { text: '扩散算法', link: '/zh/cpp/kernels/diffusion' },
+                { text: '双联体检测', link: '/zh/cpp/kernels/doublet' },
+                { text: '富集分析', link: '/zh/cpp/kernels/enrichment' },
+                { text: '图神经网络', link: '/zh/cpp/kernels/gnn' },
+                { text: '熵', link: '/zh/cpp/kernels/entropy' },
+                { text: '基因调控网络', link: '/zh/cpp/kernels/grn' },
+                { text: '热点检测', link: '/zh/cpp/kernels/hotspot' },
+                { text: '插补', link: '/zh/cpp/kernels/impute' },
+                { text: '连通分量', link: '/zh/cpp/kernels/components' },
+                { text: '聚类度量', link: '/zh/cpp/kernels/metrics' },
+                { text: '异常值检测', link: '/zh/cpp/kernels/outlier' },
+                { text: '采样', link: '/zh/cpp/kernels/sampling' },
+                { text: '统计', link: '/zh/cpp/kernels/statistics' },
                 { text: '聚类', link: '/zh/cpp/kernels/clustering' },
-                { text: '空间分析', link: '/zh/cpp/kernels/spatial' }
+                { text: '空间分析', link: '/zh/cpp/kernels/spatial' },
+                { text: '亚群分析', link: '/zh/cpp/kernels/subpopulation' },
+                { text: '克隆型', link: '/zh/cpp/kernels/clonotype' },
+                { text: '谱系追踪', link: '/zh/cpp/kernels/lineage' },
+                { text: '空间模式', link: '/zh/cpp/kernels/spatial-pattern' },
+                { text: '组织结构', link: '/zh/cpp/kernels/tissue' }
               ]
             }
           ]

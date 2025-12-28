@@ -29,6 +29,9 @@ struct MmapSparseAdapter<T, Format>::Impl {
     void* indices_array_ = nullptr;
     void* data_array_ = nullptr;
 
+    // Cache reference for prefetch operations
+    cache::TieredCache* cache_ = nullptr;
+
     // Function pointers for array access
     std::function<ZeroCopyView<index_type>(std::size_t, std::size_t)> get_indptr_view;
     std::function<ZeroCopyView<index_type>(std::size_t, std::size_t)> get_indices_view;
@@ -44,6 +47,7 @@ struct MmapSparseAdapter<T, Format>::Impl {
     Impl(cache::TieredCache& cache, SparseMatrixInfo info)
         : info_(info)
         , view_builder(cache, ViewConfig::streaming())
+        , cache_(&cache)
     {}
 
     void ensure_indptr_cached() const {
@@ -59,13 +63,19 @@ struct MmapSparseAdapter<T, Format>::Impl {
         auto view = get_indptr_view(0, ptr_count);
         if (view.valid()) {
             view.copy_to(indptr_cache.data());
+            indptr_cached = true;  // Only set cached on success
         }
-
-        indptr_cached = true;
+        // On failure, indptr_cached remains false, next call will retry
     }
 
     index_type get_ptr(std::size_t idx) const {
         ensure_indptr_cached();
+        std::size_t max_idx = (Format == SparseFormat::CSR)
+            ? info_.rows + 1
+            : info_.cols + 1;
+        SCL_CHECK_ARG(idx < max_idx, "indptr index out of bounds");
+        SCL_CHECK_ARG(indptr_cached && idx < indptr_cache.size(),
+                      "indptr not cached or index out of range");
         return indptr_cache[idx];
     }
 };
@@ -84,47 +94,58 @@ MmapSparseAdapter<T, Format>::MmapSparseAdapter(
     SparseMatrixInfo info
 ) : impl_(std::make_unique<Impl>(cache, info))
 {
-    // Store array references and create view functions
+    // Store array references
     impl_->indptr_array_ = &indptr_array;
     impl_->indices_array_ = &indices_array;
     impl_->data_array_ = &data_array;
 
-    // Create view functions that capture array references
-    impl_->get_indptr_view = [this, &indptr_array](std::size_t offset, std::size_t count) {
-        return impl_->view_builder.build<index_type>(indptr_array, offset, count);
+    // Store typed array pointers for use in lambdas
+    // These are captured by value (pointer copy) not by reference
+    IndptrArray* indptr_ptr = &indptr_array;
+    IndicesArray* indices_ptr = &indices_array;
+    DataArray* data_ptr = &data_array;
+    Impl* impl_ptr = impl_.get();
+
+    // Create view functions that capture pointer values (not references)
+    impl_->get_indptr_view = [impl_ptr, indptr_ptr](std::size_t offset, std::size_t count) {
+        return impl_ptr->view_builder.template build<index_type>(*indptr_ptr, offset, count);
     };
 
-    impl_->get_indices_view = [this, &indices_array](std::size_t offset, std::size_t count) {
-        return impl_->view_builder.build<index_type>(indices_array, offset, count);
+    impl_->get_indices_view = [impl_ptr, indices_ptr](std::size_t offset, std::size_t count) {
+        return impl_ptr->view_builder.template build<index_type>(*indices_ptr, offset, count);
     };
 
-    impl_->get_data_view = [this, &data_array](std::size_t offset, std::size_t count) {
-        return impl_->view_builder.build<T>(data_array, offset, count);
+    impl_->get_data_view = [impl_ptr, data_ptr](std::size_t offset, std::size_t count) {
+        return impl_ptr->view_builder.template build<T>(*data_ptr, offset, count);
     };
 
-    // Create prefetch functions
-    impl_->prefetch_indptr = [&indptr_array, &cache](std::span<const std::size_t> pages) {
-        cache.prefetch(pages, &indptr_array.backend());
+    // Create prefetch functions using stored cache pointer
+    impl_->prefetch_indptr = [impl_ptr, indptr_ptr](std::span<const std::size_t> pages) {
+        impl_ptr->cache_->prefetch(pages, &indptr_ptr->backend());
     };
 
-    impl_->prefetch_indices = [&indices_array, &cache](std::span<const std::size_t> pages) {
-        cache.prefetch(pages, &indices_array.backend());
+    impl_->prefetch_indices = [impl_ptr, indices_ptr](std::span<const std::size_t> pages) {
+        impl_ptr->cache_->prefetch(pages, &indices_ptr->backend());
     };
 
-    impl_->prefetch_data = [&data_array, &cache](std::span<const std::size_t> pages) {
-        cache.prefetch(pages, &data_array.backend());
+    impl_->prefetch_data = [impl_ptr, data_ptr](std::span<const std::size_t> pages) {
+        impl_ptr->cache_->prefetch(pages, &data_ptr->backend());
     };
 }
 
 template <typename T, SparseFormat Format>
 MmapSparseAdapter<T, Format>::~MmapSparseAdapter() = default;
 
+// Move operations are disabled because lambdas capture raw pointers to external arrays
+// and impl_. Moving would invalidate these pointers leading to undefined behavior.
+// If move semantics are required, the design should be changed to use shared_ptr
+// for all captured resources.
 template <typename T, SparseFormat Format>
-MmapSparseAdapter<T, Format>::MmapSparseAdapter(MmapSparseAdapter&& other) noexcept = default;
+MmapSparseAdapter<T, Format>::MmapSparseAdapter(MmapSparseAdapter&& other) noexcept = delete;
 
 template <typename T, SparseFormat Format>
 MmapSparseAdapter<T, Format>&
-MmapSparseAdapter<T, Format>::operator=(MmapSparseAdapter&& other) noexcept = default;
+MmapSparseAdapter<T, Format>::operator=(MmapSparseAdapter&& other) noexcept = delete;
 
 template <typename T, SparseFormat Format>
 typename MmapSparseAdapter<T, Format>::size_type

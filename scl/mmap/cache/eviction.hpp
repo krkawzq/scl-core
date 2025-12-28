@@ -133,20 +133,27 @@ struct EvictionTracker::Impl {
     std::list<std::size_t> b2_list;  // Ghost list for T2
     std::unordered_map<std::size_t, std::list<ARCEntry>::iterator> t1_map;
     std::unordered_map<std::size_t, std::list<ARCEntry>::iterator> t2_map;
+    // Maps for O(1) ghost list removal (instead of O(n) list.remove())
+    std::unordered_map<std::size_t, std::list<std::size_t>::iterator> b1_map;
+    std::unordered_map<std::size_t, std::list<std::size_t>::iterator> b2_map;
     std::unordered_set<std::size_t> b1_set;
     std::unordered_set<std::size_t> b2_set;
     double arc_p = 0.5;  // Target size for T1
 
     // Clock structures
-    std::vector<ClockEntry> clock_buffer;
-    std::size_t clock_hand = 0;
+    // Clock buffer and hand are mutable: reference bit clearing and hand movement
+    // during select_victim are implementation details that don't affect logical constness
+    mutable std::vector<ClockEntry> clock_buffer;
+    mutable std::size_t clock_hand = 0;
     std::unordered_map<std::size_t, std::size_t> clock_map;  // slot -> buffer index
 
     // Cost-based structures
     std::unordered_map<std::size_t, CostEntry> cost_map;
 
     // Pinned pages
-    std::unordered_set<std::size_t> pinned_slots;
+    // Mutable: select_victims temporarily modifies this for batch selection,
+    // but restores original state before returning (net effect is zero)
+    mutable std::unordered_set<std::size_t> pinned_slots;
 
     explicit Impl(std::size_t cap, EvictionConfig cfg)
         : config(cfg), capacity(cap), arc_p(cfg.arc_p_init) {
@@ -177,7 +184,7 @@ struct EvictionTracker::Impl {
         }
     }
 
-    std::size_t lru_select_victim(bool exclude_pinned) const {
+    std::size_t lru_select_victim(bool exclude_pinned) const noexcept {
         for (auto it = lru_list.rbegin(); it != lru_list.rend(); ++it) {
             if (!exclude_pinned || pinned_slots.find(it->slot_idx) == pinned_slots.end()) {
                 return it->slot_idx;
@@ -212,7 +219,7 @@ struct EvictionTracker::Impl {
         lfu_map.erase(slot_idx);
     }
 
-    std::size_t lfu_select_victim(bool exclude_pinned) const {
+    std::size_t lfu_select_victim(bool exclude_pinned) const noexcept {
         std::size_t victim = std::numeric_limits<std::size_t>::max();
         std::uint32_t min_freq = std::numeric_limits<std::uint32_t>::max();
 
@@ -236,6 +243,12 @@ struct EvictionTracker::Impl {
             double delta = static_cast<double>(b2_set.size()) /
                           std::max(b1_set.size(), std::size_t(1));
             arc_p = std::min(arc_p + std::max(delta, 1.0), static_cast<double>(capacity));
+            // Remove from both set, map, and list (O(1) via map iterator)
+            auto it = b1_map.find(slot_idx);
+            if (it != b1_map.end()) {
+                b1_list.erase(it->second);
+                b1_map.erase(it);
+            }
             b1_set.erase(slot_idx);
             stats.ghost_hits++;
             stats.adaptive_changes++;
@@ -244,6 +257,12 @@ struct EvictionTracker::Impl {
             double delta = static_cast<double>(b1_set.size()) /
                           std::max(b2_set.size(), std::size_t(1));
             arc_p = std::max(arc_p - std::max(delta, 1.0), 0.0);
+            // Remove from both set, map, and list (O(1) via map iterator)
+            auto it = b2_map.find(slot_idx);
+            if (it != b2_map.end()) {
+                b2_list.erase(it->second);
+                b2_map.erase(it);
+            }
             b2_set.erase(slot_idx);
             stats.ghost_hits++;
             stats.adaptive_changes++;
@@ -284,10 +303,16 @@ struct EvictionTracker::Impl {
         if (t1_it != t1_map.end()) {
             t1_list.erase(t1_it->second);
             t1_map.erase(t1_it);
-            // Add to B1 ghost list
+            // Add to B1 ghost list (front = newest)
+            b1_list.push_front(slot_idx);
+            b1_map[slot_idx] = b1_list.begin();
             b1_set.insert(slot_idx);
-            if (b1_set.size() > capacity) {
-                b1_set.erase(b1_set.begin());
+            // Enforce capacity limit (remove oldest from back)
+            while (b1_list.size() > capacity) {
+                std::size_t oldest = b1_list.back();
+                b1_list.pop_back();
+                b1_map.erase(oldest);
+                b1_set.erase(oldest);
             }
             return;
         }
@@ -296,15 +321,21 @@ struct EvictionTracker::Impl {
         if (t2_it != t2_map.end()) {
             t2_list.erase(t2_it->second);
             t2_map.erase(t2_it);
-            // Add to B2 ghost list
+            // Add to B2 ghost list (front = newest)
+            b2_list.push_front(slot_idx);
+            b2_map[slot_idx] = b2_list.begin();
             b2_set.insert(slot_idx);
-            if (b2_set.size() > capacity) {
-                b2_set.erase(b2_set.begin());
+            // Enforce capacity limit (remove oldest from back)
+            while (b2_list.size() > capacity) {
+                std::size_t oldest = b2_list.back();
+                b2_list.pop_back();
+                b2_map.erase(oldest);
+                b2_set.erase(oldest);
             }
         }
     }
 
-    std::size_t arc_select_victim(bool exclude_pinned) const {
+    std::size_t arc_select_victim(bool exclude_pinned) const noexcept {
         // Use p to decide which list to evict from
         std::size_t t1_size = t1_list.size();
         std::size_t t2_size = t2_list.size();
@@ -371,7 +402,7 @@ struct EvictionTracker::Impl {
         }
     }
 
-    std::size_t clock_select_victim(bool exclude_pinned) {
+    std::size_t clock_select_victim(bool exclude_pinned) const noexcept {
         if (clock_buffer.empty()) {
             return std::numeric_limits<std::size_t>::max();
         }
@@ -414,7 +445,7 @@ struct EvictionTracker::Impl {
         cost_map.erase(slot_idx);
     }
 
-    std::size_t cost_select_victim(bool exclude_pinned) const {
+    std::size_t cost_select_victim(bool exclude_pinned) const noexcept {
         auto now = std::chrono::steady_clock::now();
         std::size_t victim = std::numeric_limits<std::size_t>::max();
         double min_score = std::numeric_limits<double>::max();
@@ -432,7 +463,7 @@ struct EvictionTracker::Impl {
         return victim;
     }
 
-    std::size_t current_size() const {
+    std::size_t current_size() const noexcept {
         switch (config.policy) {
             case EvictionPolicy::LRU:
                 return lru_list.size();
@@ -455,10 +486,13 @@ struct EvictionTracker::Impl {
         lfu_map.clear();
         t1_list.clear();
         t2_list.clear();
+        b1_list.clear();
+        b2_list.clear();
         b1_set.clear();
         b2_set.clear();
         t1_map.clear();
         t2_map.clear();
+        arc_p = config.arc_p_init;
         clock_buffer.clear();
         clock_map.clear();
         clock_hand = 0;
@@ -525,7 +559,7 @@ void EvictionTracker::on_evict(std::size_t slot_idx) {
     }
 }
 
-std::size_t EvictionTracker::select_victim(bool exclude_pinned) const {
+std::size_t EvictionTracker::select_victim(bool exclude_pinned) const noexcept {
     switch (impl_->config.policy) {
         case EvictionPolicy::LRU:
             return impl_->lru_select_victim(exclude_pinned);
@@ -534,7 +568,7 @@ std::size_t EvictionTracker::select_victim(bool exclude_pinned) const {
         case EvictionPolicy::ARC:
             return impl_->arc_select_victim(exclude_pinned);
         case EvictionPolicy::Clock:
-            return const_cast<Impl*>(impl_.get())->clock_select_victim(exclude_pinned);
+            return impl_->clock_select_victim(exclude_pinned);
         case EvictionPolicy::CostBased:
             return impl_->cost_select_victim(exclude_pinned);
         default:
@@ -548,31 +582,35 @@ std::size_t EvictionTracker::select_victims(
     std::span<std::size_t> output
 ) const {
     std::size_t selected = 0;
-    std::unordered_set<std::size_t> already_selected;
+    const std::size_t max_select = std::min(count, output.size());
 
-    // Temporarily track selected victims for batch selection
-    auto* mutable_impl = const_cast<Impl*>(impl_.get());
-
-    while (selected < count && selected < output.size()) {
+    while (selected < max_select) {
         std::size_t victim = select_victim(exclude_pinned);
         if (victim == std::numeric_limits<std::size_t>::max()) {
             break;
         }
-        if (already_selected.find(victim) != already_selected.end()) {
+
+        // Check if already selected (use output array itself, avoid extra allocation)
+        bool duplicate = false;
+        for (std::size_t i = 0; i < selected; ++i) {
+            if (output[i] == victim) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
             break;  // No more unique victims
         }
+
         output[selected++] = victim;
-        already_selected.insert(victim);
 
         // Temporarily mark as pinned to avoid re-selecting
-        mutable_impl->pinned_slots.insert(victim);
+        impl_->pinned_slots.insert(victim);
     }
 
-    // Restore pinned state
+    // Restore pinned state (all selected items were temporarily pinned)
     for (std::size_t i = 0; i < selected; ++i) {
-        if (already_selected.find(output[i]) != already_selected.end()) {
-            mutable_impl->pinned_slots.erase(output[i]);
-        }
+        impl_->pinned_slots.erase(output[i]);
     }
 
     return selected;

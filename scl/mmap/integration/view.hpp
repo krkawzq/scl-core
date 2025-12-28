@@ -61,14 +61,13 @@ struct ZeroCopyView<T>::Impl {
 
     Impl() = default;
 
-    Impl(const Impl& other)
-        : handles(other.handles)  // Shared handles
-        , data_ptr(other.data_ptr)
-        , element_count(other.element_count)
-        , byte_offset(other.byte_offset)
-        , contiguous(other.contiguous)
-        , dirty(other.dirty)
-    {}
+    // Non-copyable: PageHandle cannot be safely copied (double-free risk)
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
+
+    // Move-only semantics
+    Impl(Impl&&) noexcept = default;
+    Impl& operator=(Impl&&) noexcept = default;
 
     ~Impl() {
         release_handles();
@@ -99,17 +98,12 @@ template <typename T>
 ZeroCopyView<T>::ZeroCopyView() noexcept
     : impl_(std::make_shared<Impl>()) {}
 
+// Non-copyable: ZeroCopyView owns PageHandles which cannot be safely copied
 template <typename T>
-ZeroCopyView<T>::ZeroCopyView(const ZeroCopyView& other)
-    : impl_(other.impl_ ? std::make_shared<Impl>(*other.impl_) : nullptr) {}
+ZeroCopyView<T>::ZeroCopyView(const ZeroCopyView&) = delete;
 
 template <typename T>
-ZeroCopyView<T>& ZeroCopyView<T>::operator=(const ZeroCopyView& other) {
-    if (this != &other) {
-        impl_ = other.impl_ ? std::make_shared<Impl>(*other.impl_) : nullptr;
-    }
-    return *this;
-}
+ZeroCopyView<T>& ZeroCopyView<T>::operator=(const ZeroCopyView&) = delete;
 
 template <typename T>
 ZeroCopyView<T>::ZeroCopyView(ZeroCopyView&& other) noexcept = default;
@@ -167,18 +161,23 @@ bool ZeroCopyView<T>::is_contiguous() const noexcept {
 template <typename T>
 typename ZeroCopyView<T>::const_reference
 ZeroCopyView<T>::operator[](size_type idx) const noexcept {
+    SCL_ASSERT(impl_ && impl_->data_ptr, "ZeroCopyView::operator[] on invalid view");
     return impl_->data_ptr[idx];
 }
 
 template <typename T>
 typename ZeroCopyView<T>::reference
 ZeroCopyView<T>::operator[](size_type idx) noexcept {
+    SCL_ASSERT(impl_ && impl_->data_ptr, "ZeroCopyView::operator[] on invalid view");
     return impl_->data_ptr[idx];
 }
 
 template <typename T>
 typename ZeroCopyView<T>::const_reference
 ZeroCopyView<T>::at(size_type idx) const {
+    if (!impl_ || !impl_->data_ptr) {
+        throw std::logic_error("ZeroCopyView::at: view is invalid");
+    }
     if (idx >= size()) {
         throw std::out_of_range("ZeroCopyView::at: index out of range");
     }
@@ -188,6 +187,9 @@ ZeroCopyView<T>::at(size_type idx) const {
 template <typename T>
 typename ZeroCopyView<T>::reference
 ZeroCopyView<T>::at(size_type idx) {
+    if (!impl_ || !impl_->data_ptr) {
+        throw std::logic_error("ZeroCopyView::at: view is invalid");
+    }
     if (idx >= size()) {
         throw std::out_of_range("ZeroCopyView::at: index out of range");
     }
@@ -196,21 +198,29 @@ ZeroCopyView<T>::at(size_type idx) {
 
 template <typename T>
 typename ZeroCopyView<T>::const_reference ZeroCopyView<T>::front() const noexcept {
+    SCL_ASSERT(impl_ && impl_->data_ptr && impl_->element_count > 0,
+               "ZeroCopyView::front on invalid/empty view");
     return impl_->data_ptr[0];
 }
 
 template <typename T>
 typename ZeroCopyView<T>::reference ZeroCopyView<T>::front() noexcept {
+    SCL_ASSERT(impl_ && impl_->data_ptr && impl_->element_count > 0,
+               "ZeroCopyView::front on invalid/empty view");
     return impl_->data_ptr[0];
 }
 
 template <typename T>
 typename ZeroCopyView<T>::const_reference ZeroCopyView<T>::back() const noexcept {
+    SCL_ASSERT(impl_ && impl_->data_ptr && impl_->element_count > 0,
+               "ZeroCopyView::back on invalid/empty view");
     return impl_->data_ptr[impl_->element_count - 1];
 }
 
 template <typename T>
 typename ZeroCopyView<T>::reference ZeroCopyView<T>::back() noexcept {
+    SCL_ASSERT(impl_ && impl_->data_ptr && impl_->element_count > 0,
+               "ZeroCopyView::back on invalid/empty view");
     return impl_->data_ptr[impl_->element_count - 1];
 }
 
@@ -264,8 +274,12 @@ ZeroCopyView<T> ZeroCopyView<T>::subview(size_type offset, size_type count) cons
         count = impl_->element_count - offset;
     }
 
+    // Share the same impl via shared_ptr (no handle copying)
+    // Create a wrapper view that adjusts data_ptr and element_count
     auto sub_impl = std::make_shared<Impl>();
-    sub_impl->handles = impl_->handles;  // Share handles
+    // Note: sub_impl->handles is empty - the parent view owns the handles
+    // The subview is valid only as long as the parent view is valid
+    // This is documented behavior: subview does not extend parent lifetime
     sub_impl->data_ptr = impl_->data_ptr + offset;
     sub_impl->element_count = count;
     sub_impl->byte_offset = impl_->byte_offset + offset * sizeof(T);
@@ -382,13 +396,31 @@ ZeroCopyView<T> ViewBuilder::build(
     }
 
     // Set data pointer (offset into first page)
-    view_impl->data_ptr = reinterpret_cast<T*>(
-        view_impl->handles[0].data() + view_impl->byte_offset
-    );
+    // Verify alignment to prevent undefined behavior
+    std::byte* base_ptr = view_impl->handles[0].data() + view_impl->byte_offset;
+    if (reinterpret_cast<std::uintptr_t>(base_ptr) % alignof(T) != 0) {
+        // Misaligned access - this should not happen with properly aligned arrays
+        SCL_ASSERT(false, "ZeroCopyView: misaligned data access");
+        return ZeroCopyView<T>();
+    }
+    view_impl->data_ptr = reinterpret_cast<T*>(base_ptr);
 
-    // Check contiguity
-    view_impl->contiguous = (num_pages == 1) ||
-        (view_impl->byte_offset == 0 && byte_end % kPageSize == 0);
+    // Check contiguity: verify physical memory addresses are sequential
+    // Single page is always contiguous
+    if (num_pages == 1) {
+        view_impl->contiguous = true;
+    } else {
+        // Multiple pages: check if each page's end equals next page's start
+        view_impl->contiguous = true;
+        for (std::size_t i = 1; i < view_impl->handles.size(); ++i) {
+            std::byte* prev_end = view_impl->handles[i - 1].data() + kPageSize;
+            std::byte* curr_start = view_impl->handles[i].data();
+            if (prev_end != curr_start) {
+                view_impl->contiguous = false;
+                break;
+            }
+        }
+    }
 
     // Prefetch adjacent pages if configured
     if (impl_->config.prefetch_adjacent && impl_->config.prefetch_count > 0) {

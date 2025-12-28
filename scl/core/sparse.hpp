@@ -158,7 +158,7 @@ struct Sparse {
     // =========================================================================
     // Data Members
     // =========================================================================
-    
+
     Pointer* data_ptrs;      // Array of pointers to row/col data
     Pointer* indices_ptrs;   // Array of pointers to row/col indices
     Index* lengths;          // Length of each row/col
@@ -166,6 +166,7 @@ struct Sparse {
     Index cols_;
     Index nnz_;
     bool owns_data_;         // Whether this matrix owns the data (false for wrapped)
+    bool is_view_;           // Whether this is a view (shares pointers with another matrix)
 
     // =========================================================================
     // Constructors
@@ -173,12 +174,12 @@ struct Sparse {
 
     constexpr Sparse() noexcept
         : data_ptrs(nullptr), indices_ptrs(nullptr), lengths(nullptr),
-          rows_(0), cols_(0), nnz_(0), owns_data_(true) {}
+          rows_(0), cols_(0), nnz_(0), owns_data_(true), is_view_(false) {}
 
     constexpr Sparse(Pointer* dp, Pointer* ip, Index* len,
-                     Index r, Index c, Index n, bool owns = true) noexcept
+                     Index r, Index c, Index n, bool owns = true, bool is_view = false) noexcept
         : data_ptrs(dp), indices_ptrs(ip), lengths(len),
-          rows_(r), cols_(c), nnz_(n), owns_data_(owns) {
+          rows_(r), cols_(c), nnz_(n), owns_data_(owns), is_view_(is_view) {
         SCL_ASSERT(r >= 0, "Sparse: rows must be non-negative");
         SCL_ASSERT(c >= 0, "Sparse: cols must be non-negative");
         SCL_ASSERT(n >= 0, "Sparse: nnz must be non-negative");
@@ -201,19 +202,21 @@ struct Sparse {
         , cols_(other.cols_)
         , nnz_(other.nnz_)
         , owns_data_(other.owns_data_)
+        , is_view_(other.is_view_)
     {
         other.data_ptrs = nullptr;
         other.indices_ptrs = nullptr;
         other.lengths = nullptr;
         other.rows_ = other.cols_ = other.nnz_ = 0;
         other.owns_data_ = false;
+        other.is_view_ = false;
     }
 
     // Move assignment: release current resources and transfer ownership
     Sparse& operator=(Sparse&& other) noexcept {
         if (this != &other) {
             release_resources();
-            
+
             data_ptrs = other.data_ptrs;
             indices_ptrs = other.indices_ptrs;
             lengths = other.lengths;
@@ -221,12 +224,14 @@ struct Sparse {
             cols_ = other.cols_;
             nnz_ = other.nnz_;
             owns_data_ = other.owns_data_;
-            
+            is_view_ = other.is_view_;
+
             other.data_ptrs = nullptr;
             other.indices_ptrs = nullptr;
             other.lengths = nullptr;
             other.rows_ = other.cols_ = other.nnz_ = 0;
             other.owns_data_ = false;
+            other.is_view_ = false;
         }
         return *this;
     }
@@ -1000,7 +1005,8 @@ struct Sparse {
             increment_alias_refcounts_safe(reg, idx_aliases);
         }
 
-        return Sparse(new_dp, new_ip, new_len, new_rows, cols_, new_nnz, true);
+        // Create view with is_view_=true (owns_data_=true, is_view_=true)
+        return Sparse(new_dp, new_ip, new_len, new_rows, cols_, new_nnz, true, true);
     }
     
     /// @brief Create a contiguous row range view
@@ -1071,7 +1077,8 @@ struct Sparse {
             increment_alias_refcounts_safe(reg, idx_aliases);
         }
 
-        return Sparse(new_dp, new_ip, new_len, rows_, new_cols, new_nnz, true);
+        // Create view with is_view_=true (owns_data_=true, is_view_=true)
+        return Sparse(new_dp, new_ip, new_len, rows_, new_cols, new_nnz, true, true);
     }
 
     // =========================================================================
@@ -1451,9 +1458,15 @@ private:
                 if (indices_ptrs[i]) aliases.push_back(indices_ptrs[i]);
             }
 
-            // Batch release aliases (decrements refcounts, may free blocks)
             if (!aliases.empty()) {
-                reg.unregister_aliases(aliases);
+                if (is_view_) {
+                    // View: only decrement refcounts, don't remove alias mappings
+                    // The original matrix owns the alias mappings
+                    reg.decrement_buffer_refcounts(aliases);
+                } else {
+                    // Original matrix: remove alias mappings and decrement refcounts
+                    reg.unregister_aliases(aliases);
+                }
             }
         }
 
@@ -1468,6 +1481,7 @@ private:
         lengths = nullptr;
         rows_ = cols_ = nnz_ = 0;
         owns_data_ = true;
+        is_view_ = false;
     }
     
 public:

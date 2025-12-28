@@ -226,7 +226,7 @@ public:
     }
 
 private:
-    void spin_wait() {
+    void spin_wait() noexcept {
         while (!ready_.load(std::memory_order_acquire)) {
             spin_pause();
         }
@@ -290,21 +290,21 @@ struct PolicyDecision {
 class SchedulePolicy {
 public:
     virtual ~SchedulePolicy() = default;
-    
+
     virtual PolicyDecision decide(const SchedulerState& state) = 0;
-    
-    virtual void on_fetch_complete(std::size_t page, Duration latency) { 
-        (void)page; (void)latency; 
+
+    virtual void on_fetch_complete(std::size_t page, Duration latency) noexcept {
+        (void)page; (void)latency;
     }
-    virtual void on_cache_hit(std::size_t page) { (void)page; }
-    virtual void on_cache_miss(std::size_t page) { (void)page; }
-    virtual void on_eviction(std::size_t page) { (void)page; }
-    virtual void on_row_begin(std::size_t row) { (void)row; }
-    virtual void on_row_end(std::size_t row) { (void)row; }
-    
-    virtual void set_lookahead(std::size_t lookahead) { (void)lookahead; }
-    virtual void set_batch_size(std::size_t batch) { (void)batch; }
-    
+    virtual void on_cache_hit(std::size_t page) noexcept { (void)page; }
+    virtual void on_cache_miss(std::size_t page) noexcept { (void)page; }
+    virtual void on_eviction(std::size_t page) noexcept { (void)page; }
+    virtual void on_row_begin(std::size_t row) noexcept { (void)row; }
+    virtual void on_row_end(std::size_t row) noexcept { (void)row; }
+
+    virtual void set_lookahead(std::size_t lookahead) noexcept { (void)lookahead; }
+    virtual void set_batch_size(std::size_t batch) noexcept { (void)batch; }
+
     SCL_NODISCARD virtual const char* name() const noexcept { return "BasePolicy"; }
 };
 
@@ -346,37 +346,38 @@ public:
     
     PolicyDecision decide(const SchedulerState& state) override {
         PolicyDecision d;
-        
+
         if (!state.has_capacity()) {
             d.should_wait = true;
             return d;
         }
-        
+
         std::size_t lookahead = lookahead_.load(std::memory_order_relaxed);
         std::size_t batch_size = batch_size_.load(std::memory_order_relaxed);
-        
+
         std::size_t start = state.current_row;
-        std::size_t end = std::min(start + lookahead, state.total_rows);
+        // Bound by both total_rows and total_pages_ to ensure valid page indices
+        std::size_t end = std::min({start + lookahead, state.total_rows, total_pages_});
         std::size_t available = state.available_slots();
         std::size_t batch = std::min(batch_size, available);
-        
+
         d.pages_to_fetch.reserve(batch);
-        
+
         for (std::size_t page = start; page < end && d.pages_to_fetch.size() < batch; ++page) {
-            if (page < total_pages_ && !loaded_flags_[page].load(std::memory_order_acquire)) {
+            if (!loaded_flags_[page].load(std::memory_order_acquire)) {
                 d.pages_to_fetch.push_back(page);
                 d.priority = static_cast<int>(lookahead) - static_cast<int>(page - start);
             }
         }
-        
+
         return d;
     }
     
-    void on_fetch_complete(std::size_t page, Duration latency) override {
+    void on_fetch_complete(std::size_t page, Duration latency) noexcept override {
         if (page < total_pages_) {
             loaded_flags_[page].store(true, std::memory_order_release);
         }
-        
+
         if (latency > target_latency_ * 2) {
             std::size_t current = lookahead_.load(std::memory_order_relaxed);
             if (current < max_lookahead_) {
@@ -393,23 +394,23 @@ public:
             }
         }
     }
-    
-    void on_eviction(std::size_t page) override {
+
+    void on_eviction(std::size_t page) noexcept override {
         if (page < total_pages_) {
             loaded_flags_[page].store(false, std::memory_order_release);
         }
     }
-    
-    void on_row_begin(std::size_t row) override {
+
+    void on_row_begin(std::size_t row) noexcept override {
         current_row_.store(row, std::memory_order_release);
     }
-    
-    void set_lookahead(std::size_t lookahead) override {
+
+    void set_lookahead(std::size_t lookahead) noexcept override {
         lookahead_.store(std::clamp(lookahead, min_lookahead_, max_lookahead_),
                         std::memory_order_relaxed);
     }
-    
-    void set_batch_size(std::size_t batch) override {
+
+    void set_batch_size(std::size_t batch) noexcept override {
         batch_size_.store(std::max(batch, std::size_t{1}), std::memory_order_relaxed);
     }
     
@@ -1170,34 +1171,35 @@ private:
     
     bool evict_page(std::size_t page_idx) {
         auto& entry = entries_[page_idx];
-        
+
         entry.pin();
-        
+
         if (entry.pin_count.load(std::memory_order_acquire) > 1) {
             entry.unpin();
             return false;
         }
-        
+
         Page* page = entry.page.exchange(nullptr, std::memory_order_acq_rel);
         if (!page) {
             entry.unpin();
             return false;
         }
-        
+
+        // Do writeback while we still hold the pin (before unpin)
+        writeback_if_dirty(page_idx, page);
+
         entry.reset_load_state();
         entry.unpin();
-        
-        writeback_if_dirty(page_idx, page);
-        
+
         GlobalPagePool::instance().release(page);
         current_resident_.fetch_sub(1, std::memory_order_relaxed);
         stats_.evictions.fetch_add(1, std::memory_order_relaxed);
-        
+
         {
             std::shared_lock lock(policy_lock_);
             if (policy_) policy_->on_eviction(page_idx);
         }
-        
+
         return true;
     }
     
@@ -1251,14 +1253,14 @@ inline PageHandle::PageHandle(PrefetchScheduler* scheduler, std::size_t idx, Pag
 }
 
 inline PageHandle::~PageHandle() {
-    if (scheduler_ && page_) {
+    if (scheduler_ && page_ && owns_pin_) {
         scheduler_->unpin(page_idx_);
     }
 }
 
 inline PageHandle& PageHandle::operator=(PageHandle&& other) noexcept {
     if (this != &other) {
-        if (scheduler_ && page_) {
+        if (scheduler_ && page_ && owns_pin_) {
             scheduler_->unpin(page_idx_);
         }
         scheduler_ = other.scheduler_;
