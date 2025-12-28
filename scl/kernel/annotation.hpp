@@ -124,7 +124,7 @@ SCL_FORCE_INLINE Real compute_row_norm(
     const Sparse<T, IsCSR>& X,
     Index row
 ) {
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         auto values = X.row_values_unsafe(row);
         Index len = X.row_length_unsafe(row);
         const Size len_sz = static_cast<Size>(len);
@@ -167,7 +167,7 @@ SCL_FORCE_INLINE Real sparse_dot_product(
     const Sparse<T, IsCSR>& Y,
     Index row_y
 ) {
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         auto x_indices = X.row_indices_unsafe(row_x);
         auto x_values = X.row_values_unsafe(row_x);
         Index x_len = X.row_length_unsafe(row_x);
@@ -207,17 +207,17 @@ Real cosine_similarity(
 // Pearson correlation using algebraic identity (avoids dense allocation)
 // correlation(x, y) = (n*sum(xy) - sum(x)*sum(y)) / 
 //                     sqrt((n*sum(x^2) - sum(x)^2) * (n*sum(y^2) - sum(y)^2))
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR_X, bool IsCSR_Y>
 SCL_FORCE_INLINE Real pearson_correlation(
-    const Sparse<T, IsCSR>& X,
+    const Sparse<T, IsCSR_X>& X,
     Index row_x,
-    const Sparse<T, IsCSR>& Y,
+    const Sparse<T, IsCSR_Y>& Y,
     Index row_y,
     Index n_features
 ) {
     if (SCL_UNLIKELY(n_features == 0)) return Real(0);
 
-    if (IsCSR) {
+    if constexpr (IsCSR_X && IsCSR_Y) {
         auto x_indices = X.row_indices_unsafe(row_x);
         auto x_values = X.row_values_unsafe(row_x);
         Index x_len = X.row_length_unsafe(row_x);
@@ -262,34 +262,56 @@ SCL_FORCE_INLINE Real pearson_correlation(
         scl::algo::zero(x_dense, static_cast<Size>(n_features));
         scl::algo::zero(y_dense, static_cast<Size>(n_features));
 
-        for (Index c = 0; c < n_features; ++c) {
-            auto x_indices = X.col_indices_unsafe(c);
-            auto x_values = X.col_values_unsafe(c);
-            Index x_len = X.col_length_unsafe(c);
-
-            // Binary search for row_x
-            Index lo = 0, hi = x_len;
-            while (lo < hi) {
-                Index mid = lo + (hi - lo) / 2;
-                if (x_indices[mid] < row_x) lo = mid + 1;
-                else hi = mid;
+        // Extract X row
+        if constexpr (IsCSR_X) {
+            auto x_indices = X.row_indices_unsafe(row_x);
+            auto x_values = X.row_values_unsafe(row_x);
+            Index x_len = X.row_length_unsafe(row_x);
+            for (Index k = 0; k < x_len; ++k) {
+                x_dense[x_indices.ptr[k]] = static_cast<Real>(x_values.ptr[k]);
             }
-            if (lo < x_len && x_indices[lo] == row_x) {
-                x_dense[c] = static_cast<Real>(x_values[lo]);
-            }
+        } else {
+            for (Index c = 0; c < n_features; ++c) {
+                auto x_indices = X.col_indices_unsafe(c);
+                auto x_values = X.col_values_unsafe(c);
+                Index x_len = X.col_length_unsafe(c);
 
-            auto y_indices = Y.col_indices_unsafe(c);
-            auto y_values = Y.col_values_unsafe(c);
-            Index y_len = Y.col_length_unsafe(c);
-
-            lo = 0; hi = y_len;
-            while (lo < hi) {
-                Index mid = lo + (hi - lo) / 2;
-                if (y_indices[mid] < row_y) lo = mid + 1;
-                else hi = mid;
+                // Binary search for row_x
+                Index lo = 0, hi = x_len;
+                while (lo < hi) {
+                    Index mid = lo + (hi - lo) / 2;
+                    if (x_indices.ptr[mid] < row_x) lo = mid + 1;
+                    else hi = mid;
+                }
+                if (lo < x_len && x_indices.ptr[lo] == row_x) {
+                    x_dense[c] = static_cast<Real>(x_values.ptr[lo]);
+                }
             }
-            if (lo < y_len && y_indices[lo] == row_y) {
-                y_dense[c] = static_cast<Real>(y_values[lo]);
+        }
+
+        // Extract Y row
+        if constexpr (IsCSR_Y) {
+            auto y_indices = Y.row_indices_unsafe(row_y);
+            auto y_values = Y.row_values_unsafe(row_y);
+            Index y_len = Y.row_length_unsafe(row_y);
+            for (Index k = 0; k < y_len; ++k) {
+                y_dense[y_indices.ptr[k]] = static_cast<Real>(y_values.ptr[k]);
+            }
+        } else {
+            for (Index c = 0; c < n_features; ++c) {
+                auto y_indices = Y.col_indices_unsafe(c);
+                auto y_values = Y.col_values_unsafe(c);
+                Index y_len = Y.col_length_unsafe(c);
+
+                Index lo = 0, hi = y_len;
+                while (lo < hi) {
+                    Index mid = lo + (hi - lo) / 2;
+                    if (y_indices.ptr[mid] < row_y) lo = mid + 1;
+                    else hi = mid;
+                }
+                if (lo < y_len && y_indices.ptr[lo] == row_y) {
+                    y_dense[c] = static_cast<Real>(y_values.ptr[lo]);
+                }
             }
         }
 
@@ -749,7 +771,7 @@ void build_reference_profiles(
     }
 
     // Accumulate expression
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
             Index t = labels[c];
             if (SCL_UNLIKELY(t < 0 || t >= n_types)) continue;
@@ -763,16 +785,16 @@ void build_reference_profiles(
             // 4-way unrolled accumulation
             Index k = 0;
             for (; k + 4 <= len; k += 4) {
-                Index g0 = indices[k], g1 = indices[k+1], g2 = indices[k+2], g3 = indices[k+3];
-                if (SCL_LIKELY(g0 < n_genes)) profile[g0] += static_cast<Real>(values[k]);
-                if (SCL_LIKELY(g1 < n_genes)) profile[g1] += static_cast<Real>(values[k+1]);
-                if (SCL_LIKELY(g2 < n_genes)) profile[g2] += static_cast<Real>(values[k+2]);
-                if (SCL_LIKELY(g3 < n_genes)) profile[g3] += static_cast<Real>(values[k+3]);
+                Index g0 = indices.ptr[k], g1 = indices.ptr[k+1], g2 = indices.ptr[k+2], g3 = indices.ptr[k+3];
+                if (SCL_LIKELY(g0 < n_genes)) profile[g0] += static_cast<Real>(values.ptr[k]);
+                if (SCL_LIKELY(g1 < n_genes)) profile[g1] += static_cast<Real>(values.ptr[k+1]);
+                if (SCL_LIKELY(g2 < n_genes)) profile[g2] += static_cast<Real>(values.ptr[k+2]);
+                if (SCL_LIKELY(g3 < n_genes)) profile[g3] += static_cast<Real>(values.ptr[k+3]);
             }
             for (; k < len; ++k) {
-                Index g = indices[k];
+                Index g = indices.ptr[k];
                 if (SCL_LIKELY(g < n_genes)) {
-                    profile[g] += static_cast<Real>(values[k]);
+                    profile[g] += static_cast<Real>(values.ptr[k]);
                 }
             }
         }
@@ -783,12 +805,12 @@ void build_reference_profiles(
             Index len = expression.col_length_unsafe(g);
 
             for (Index k = 0; k < len; ++k) {
-                Index c = indices[k];
+                Index c = indices.ptr[k];
                 if (c >= n_cells) continue;
 
                 Index t = labels[c];
                 if (t >= 0 && t < n_types) {
-                    profiles[static_cast<Size>(t) * n_genes + g] += static_cast<Real>(values[k]);
+                    profiles[static_cast<Size>(t) * n_genes + g] += static_cast<Real>(values.ptr[k]);
                 }
             }
         }
@@ -852,14 +874,27 @@ void marker_gene_score(
 
             // Extract cell expression
             scl::algo::zero(cell_expr, static_cast<Size>(n_genes));
-            auto indices = expression.row_indices_unsafe(c);
-            auto values = expression.row_values_unsafe(c);
-            Index len = expression.row_length_unsafe(c);
+            if constexpr (IsCSR) {
+                auto indices = expression.row_indices_unsafe(c);
+                auto values = expression.row_values_unsafe(c);
+                Index len = expression.row_length_unsafe(c);
 
-            for (Index k = 0; k < len; ++k) {
-                Index g = indices[k];
-                if (SCL_LIKELY(g < n_genes)) {
-                    cell_expr[g] = static_cast<Real>(values[k]);
+                for (Index k = 0; k < len; ++k) {
+                    Index g = indices.ptr[k];
+                    if (SCL_LIKELY(g < n_genes)) {
+                        cell_expr[g] = static_cast<Real>(values.ptr[k]);
+                    }
+                }
+            } else {
+                for (Index g = 0; g < n_genes; ++g) {
+                    auto indices = expression.col_indices_unsafe(g);
+                    auto values = expression.col_values_unsafe(g);
+                    Index len = expression.col_length_unsafe(g);
+                    
+                    const Index* found = scl::algo::lower_bound(indices.ptr, indices.ptr + len, c);
+                    if (found != indices.ptr + len && *found == c) {
+                        cell_expr[g] = static_cast<Real>(values.ptr[static_cast<Size>(found - indices.ptr)]);
+                    }
                 }
             }
 
@@ -900,22 +935,34 @@ void marker_gene_score(
     } else {
         // Sequential path
         Real* cell_expr = nullptr;
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             cell_expr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
         }
 
         for (Index c = 0; c < n_cells; ++c) {
             // Extract cell expression
-            if (IsCSR) {
+            if constexpr (IsCSR) {
                 scl::algo::zero(cell_expr, static_cast<Size>(n_genes));
                 auto indices = expression.row_indices_unsafe(c);
                 auto values = expression.row_values_unsafe(c);
                 Index len = expression.row_length_unsafe(c);
 
                 for (Index k = 0; k < len; ++k) {
-                    Index g = indices[k];
+                    Index g = indices.ptr[k];
                     if (SCL_LIKELY(g < n_genes)) {
-                        cell_expr[g] = static_cast<Real>(values[k]);
+                        cell_expr[g] = static_cast<Real>(values.ptr[k]);
+                    }
+                }
+            } else {
+                scl::algo::zero(cell_expr, static_cast<Size>(n_genes));
+                for (Index g = 0; g < n_genes; ++g) {
+                    auto indices = expression.col_indices_unsafe(g);
+                    auto values = expression.col_values_unsafe(g);
+                    Index len = expression.col_length_unsafe(g);
+                    
+                    const Index* found = scl::algo::lower_bound(indices.ptr, indices.ptr + len, c);
+                    if (found != indices.ptr + len && *found == c) {
+                        cell_expr[g] = static_cast<Real>(values.ptr[static_cast<Size>(found - indices.ptr)]);
                     }
                 }
             }
@@ -932,7 +979,7 @@ void marker_gene_score(
 
                 // 4-way unrolled marker accumulation for CSR format
                 Index m = 0;
-                if (IsCSR) {
+                if constexpr (IsCSR) {
                     for (; m + 4 <= n_markers; m += 4) {
                         Index g0 = markers[m], g1 = markers[m+1], g2 = markers[m+2], g3 = markers[m+3];
                         if (SCL_LIKELY(g0 >= 0 && g0 < n_genes)) { sum += cell_expr[g0]; ++valid; }
@@ -948,7 +995,7 @@ void marker_gene_score(
                     if (SCL_UNLIKELY(g < 0 || g >= n_genes)) continue;
 
                     Real expr;
-                    if (IsCSR) {
+                    if constexpr (IsCSR) {
                         expr = cell_expr[g];
                     } else {
                         expr = Real(0);
@@ -958,7 +1005,7 @@ void marker_gene_score(
                         // Binary search for CSC format
                         const Index* found = scl::algo::lower_bound(indices.ptr, indices.ptr + len, c);
                         if (found != indices.ptr + len && *found == c) {
-                            expr = static_cast<Real>(values[static_cast<Size>(found - indices.ptr)]);
+                            expr = static_cast<Real>(values.ptr[static_cast<Size>(found - indices.ptr)]);
                         }
                     }
 
@@ -1203,7 +1250,7 @@ void detect_novel_types_by_distance(
             // Extract query expression
             scl::algo::zero(query_dense, static_cast<Size>(n_genes));
 
-            if (IsCSR) {
+            if constexpr (IsCSR) {
                 auto indices = query_expression.row_indices_unsafe(q);
                 auto values = query_expression.row_values_unsafe(q);
                 Index len = query_expression.row_length_unsafe(q);
@@ -1262,7 +1309,7 @@ void detect_novel_types_by_distance(
             // Extract query expression
             scl::algo::zero(query_dense, static_cast<Size>(n_genes));
 
-            if (IsCSR) {
+            if constexpr (IsCSR) {
                 auto indices = query_expression.row_indices_unsafe(q);
                 auto values = query_expression.row_values_unsafe(q);
                 Index len = query_expression.row_length_unsafe(q);
@@ -1578,7 +1625,7 @@ void cell_type_marker_expression(
         Index g = marker_genes[m];
         if (g < 0 || g >= n_genes) continue;
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             for (Index c = 0; c < n_cells; ++c) {
                 Index t = labels[c];
                 if (SCL_UNLIKELY(t < 0 || t >= n_types)) continue;
@@ -1670,7 +1717,7 @@ void hierarchical_annotation(
         // Extract cell expression
         scl::algo::zero(cell_expr, static_cast<Size>(n_genes));
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             auto indices = expression.row_indices_unsafe(c);
             auto values = expression.row_values_unsafe(c);
             Index len = expression.row_length_unsafe(c);
@@ -1840,7 +1887,7 @@ void differential_markers(
     Index n_in = 0, n_out = 0;
 
     // Accumulate expression
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
             bool is_target = (labels[c] == target_type);
             if (is_target) ++n_in;

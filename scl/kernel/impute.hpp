@@ -241,7 +241,7 @@ SCL_FORCE_INLINE Real get_expression(
     Index n_genes
 ) noexcept {
     T val;
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         auto indices = X.row_indices_unsafe(cell);
         auto values = X.row_values_unsafe(cell);
         Index len = X.row_length_unsafe(cell);
@@ -284,7 +284,7 @@ SCL_HOT Index collect_neighbor_values_batch(
         }
 
         T val;
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             auto indices = X.row_indices_unsafe(neighbor);
             auto row_values = X.row_values_unsafe(neighbor);
             Index len = X.row_length_unsafe(neighbor);
@@ -420,7 +420,7 @@ void knn_impute_dense(
     scl::algo::zero(X_imputed, total);
 
     // Step 1: Copy original values (parallel)
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
             auto values = X.row_values_unsafe(static_cast<Index>(c));
@@ -533,7 +533,7 @@ void knn_impute_weighted_dense(
     scl::algo::zero(X_imputed, total);
 
     // Copy original values
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
             auto values = X.row_values_unsafe(static_cast<Index>(c));
@@ -614,7 +614,7 @@ void diffusion_impute_sparse_transition(
     // Initialize with original expression
     scl::algo::zero(X_imputed, total);
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
             auto values = X.row_values_unsafe(static_cast<Index>(c));
@@ -682,7 +682,7 @@ void magic_impute(
     // Initialize
     scl::algo::zero(X_imputed, total);
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
             auto values = X.row_values_unsafe(static_cast<Index>(c));
@@ -977,7 +977,7 @@ void detect_dropouts(
     scl::algo::zero(gene_means, G);
     scl::algo::zero(gene_nnz, G);
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         // Parallel over cells, atomic accumulation
         std::atomic<int64_t>* atomic_sums = static_cast<std::atomic<int64_t>*>(
             scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT));
@@ -1161,7 +1161,7 @@ void smooth_expression(
             Real w = weights[k];
             weight_sum += w;
 
-            if (IsCSR) {
+            if constexpr (IsCSR) {
                 auto indices = X.row_indices_unsafe(neighbor);
                 auto values = X.row_values_unsafe(neighbor);
                 Index len = X.row_length_unsafe(neighbor);
@@ -1181,7 +1181,7 @@ void smooth_expression(
         }
 
         // Add original contribution
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
             auto values = X.row_values_unsafe(static_cast<Index>(c));
             Index len = X.row_length_unsafe(static_cast<Index>(c));
@@ -1216,7 +1216,7 @@ void diffusion_impute_dense(
     scl::algo::zero(X_imputed, total);
 
     // Initialize
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
             auto indices = X.row_indices_unsafe(c);
             auto values = X.row_values_unsafe(c);

@@ -1014,7 +1014,7 @@ void pathway_activity(
     Real inv_n_pathway = Real(1) / static_cast<Real>(pathway_genes.len);
     const bool use_parallel = (static_cast<Size>(n_cells) >= config::PARALLEL_THRESHOLD);
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         auto process_cell = [&](Index c) {
             auto indices = X.row_indices_unsafe(c);
             auto values = X.row_values_unsafe(c);
@@ -1171,7 +1171,7 @@ void gsva_score(
     auto process_cell = [&](Index c, detail::CellEnrichmentWorkspace& ws) {
         std::memset(ws.cell_expr, 0, n_genes_sz * sizeof(Real));
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             auto indices = X.row_indices_unsafe(c);
             auto values = X.row_values_unsafe(c);
             const Index len = X.row_length_unsafe(c);
@@ -1471,7 +1471,7 @@ void ssgsea(
     auto process_cell = [&](Index c, detail::CellEnrichmentWorkspace& ws) {
         std::memset(ws.cell_expr, 0, n_genes_sz * sizeof(Real));
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             auto indices = X.row_indices_unsafe(c);
             auto values = X.row_values_unsafe(c);
             const Index len = X.row_length_unsafe(c);
@@ -1566,7 +1566,5 @@ inline void sort_by_pvalue(
         Array<Index>(sorted_indices.ptr, n)
     );
 }
-
-} // namespace scl::kernel::enrichment
 
 } // namespace scl::kernel::enrichment

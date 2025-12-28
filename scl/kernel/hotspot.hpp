@@ -493,7 +493,7 @@ void local_morans_i(
         Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
         local_i[i] = detail::compute_local_moran_i(
-            static_cast<Index>(i), z_values, indices, w_values, len
+            static_cast<Index>(i), const_cast<const Real*>(z_values), indices.ptr, w_values.ptr, len
         );
 
         // Analytical z-score
@@ -563,7 +563,7 @@ void local_morans_i(
                     auto w_vals = spatial_weights.primary_values_unsafe(i);
                     Index len = spatial_weights.primary_length_unsafe(i);
                     Real perm_local_i = detail::compute_local_moran_i(
-                        i, perm_values, indices, w_vals, len
+                        i, const_cast<const Real*>(perm_values), indices.ptr, w_vals.ptr, len
                     );
                     local_counts[i] += (std::abs(perm_local_i) >= std::abs(local_i[i]));
                 }
@@ -611,7 +611,7 @@ void classify_lisa_patterns(
         auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
         Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
-        Real spatial_lag = detail::compute_spatial_lag(indices, w_values, len, z_values);
+        Real spatial_lag = detail::compute_spatial_lag(indices.ptr, w_values.ptr, len, z_values);
         patterns[i] = detail::classify_quadrant(
             z_values[i], spatial_lag, local_i[i], p_values[i], significance_level
         );
@@ -658,7 +658,7 @@ void getis_ord_g_star(
         Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
         detail::compute_g_star(
-            static_cast<Index>(i), values.ptr, indices, w_values, len,
+            static_cast<Index>(i), values.ptr, indices.ptr, w_values.ptr, len,
             global_mean, global_s, n, include_self, g_star[i], z_scores[i]
         );
 
@@ -753,7 +753,7 @@ void local_gearys_c(
         Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
         local_c[i] = detail::compute_local_geary_c(
-            static_cast<Index>(i), values.ptr, indices, w_values, len
+            static_cast<Index>(i), const_cast<const Real*>(values.ptr), indices.ptr, w_values.ptr, len
         ) * inv_m2;
 
         Real wi2 = 0;
@@ -810,7 +810,7 @@ void local_gearys_c(
                     auto w_vals = spatial_weights.primary_values_unsafe(i);
                     Index len = spatial_weights.primary_length_unsafe(i);
                     Real perm_c = detail::compute_local_geary_c(
-                        i, perm_values, indices, w_vals, len
+                        i, const_cast<const Real*>(perm_values), indices.ptr, w_vals.ptr, len
                     ) * inv_m2;
 
                     if (std::abs(perm_c - Real(1)) >= std::abs(local_c[i] - Real(1))) {
@@ -1007,7 +1007,7 @@ void compute_spatial_lag(
         auto indices = spatial_weights.primary_indices_unsafe(static_cast<Index>(i));
         auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
         Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
-        spatial_lag[i] = detail::compute_spatial_lag(indices, w_values, len, values.ptr);
+        spatial_lag[i] = detail::compute_spatial_lag(indices.ptr, w_values.ptr, len, values.ptr);
     });
 }
 

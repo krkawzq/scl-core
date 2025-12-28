@@ -213,7 +213,7 @@ void group_mean_expression(
     }
 
     // Accumulate expression sums
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
             Index g = group_labels[c];
             if (SCL_UNLIKELY(g < 0 || g >= n_groups)) continue;
@@ -340,7 +340,7 @@ void percent_expressed(
     }
 
     // Count expressing cells
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
             Index g = group_labels[c];
             if (SCL_UNLIKELY(g < 0 || g >= n_groups)) continue;
@@ -526,7 +526,7 @@ void one_vs_rest_stats(
     Real inv_n_out = (n_out > 0) ? Real(1) / static_cast<Real>(n_out) : Real(0);
 
     // Accumulate statistics
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
             Index g = group_labels[c];
             if (SCL_UNLIKELY(g < 0)) continue;

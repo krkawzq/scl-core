@@ -32,10 +32,12 @@ scl_error_t scl_diffusion_compute_transition_matrix(
     if (!adjacency) return SCL_ERROR_NULL_POINTER;
     try {
         adjacency->visit([&](auto& mat) {
-            scl::Real* values = const_cast<scl::Real*>(
-                reinterpret_cast<const scl::Real*>(mat.values().ptr)
-            );
-            compute_transition_matrix(mat, values, symmetric != 0);
+            using MatType = std::remove_reference_t<decltype(mat)>;
+            using T = typename MatType::ValueType;
+            constexpr bool IsCSR = MatType::is_csr;
+            
+            // Note: compute_transition_matrix modifies matrix in-place, no separate values array needed
+            scl::kernel::diffusion::compute_transition_matrix<T, IsCSR>(mat, symmetric != 0);
         });
         return SCL_OK;
     } catch (...) {

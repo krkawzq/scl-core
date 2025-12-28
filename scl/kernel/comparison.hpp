@@ -534,37 +534,73 @@ void condition_response(
     }
 
     // Parallel over genes with WorkspacePool
-    scl::threading::DualWorkspacePool<Real> pool;
-    pool.init(scl::threading::Scheduler::get_num_threads(), n_cond0, n_cond1);
+    scl::threading::WorkspacePool<Real> pool0;
+    scl::threading::WorkspacePool<Real> pool1;
+    pool0.init(scl::threading::Scheduler::get_num_threads(), n_cond0);
+    pool1.init(scl::threading::Scheduler::get_num_threads(), n_cond1);
 
     scl::threading::parallel_for(Size(0), n_genes, [&](size_t g, size_t thread_rank) {
-        Real* group0 = pool.get_first(thread_rank);
-        Real* group1 = pool.get_second(thread_rank);
+        Real* group0 = pool0.get(thread_rank);
+        Real* group1 = pool1.get(thread_rank);
 
         Size idx0 = 0, idx1 = 0;
         Real sum0 = Real(0.0), sum1 = Real(0.0);
 
-        // Gather expression values for this gene using binary search
-        for (Size c = 0; c < n_cells; ++c) {
-            Real val = Real(0.0);
+        // Gather expression values for this gene
+        if constexpr (IsCSR) {
+            // For CSR: iterate over cells and search for gene
+            for (Size c = 0; c < n_cells; ++c) {
+                Real val = Real(0.0);
 
-            const Index row_start = expression.row_indices_unsafe()[c];
-            const Index row_end = expression.row_indices_unsafe()[c + 1];
+                auto row_vals = expression.row_values_unsafe(static_cast<Index>(c));
+                auto row_idxs = expression.row_indices_unsafe(static_cast<Index>(c));
+                Index row_len = expression.row_length_unsafe(static_cast<Index>(c));
 
-            // Binary search for gene in sorted CSR indices
-            Index pos = detail::binary_search_gene(
-                expression.col_indices_unsafe(), row_start, row_end, static_cast<Index>(g));
-            if (pos >= 0) {
-                val = static_cast<Real>(expression.values()[pos]);
+                // Binary search for gene in sorted indices
+                Index pos = detail::binary_search_gene(
+                    row_idxs.ptr, 0, row_len, static_cast<Index>(g));
+                if (pos >= 0) {
+                    val = static_cast<Real>(row_vals.ptr[pos]);
+                }
+
+                if (conditions.ptr[c] == 0 && idx0 < n_cond0) {
+                    group0[idx0++] = val;
+                    sum0 += val;
+                } else if (conditions.ptr[c] == 1 && idx1 < n_cond1) {
+                    group1[idx1++] = val;
+                    sum1 += val;
+                }
+            }
+        } else {
+            // For CSC: directly access column for gene
+            auto col_vals = expression.col_values_unsafe(static_cast<Index>(g));
+            auto col_idxs = expression.col_indices_unsafe(static_cast<Index>(g));
+            Index col_len = expression.col_length_unsafe(static_cast<Index>(g));
+
+            // Create dense vector for this gene
+            Real* gene_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+            scl::algo::zero(gene_expr, n_cells);
+
+            for (Index k = 0; k < col_len; ++k) {
+                Index cell = col_idxs.ptr[k];
+                if (cell < static_cast<Index>(n_cells)) {
+                    gene_expr[cell] = static_cast<Real>(col_vals.ptr[k]);
+                }
             }
 
-            if (conditions.ptr[c] == 0 && idx0 < n_cond0) {
-                group0[idx0++] = val;
-                sum0 += val;
-            } else if (conditions.ptr[c] == 1 && idx1 < n_cond1) {
-                group1[idx1++] = val;
-                sum1 += val;
+            // Split by condition
+            for (Size c = 0; c < n_cells; ++c) {
+                Real val = gene_expr[c];
+                if (conditions.ptr[c] == 0 && idx0 < n_cond0) {
+                    group0[idx0++] = val;
+                    sum0 += val;
+                } else if (conditions.ptr[c] == 1 && idx1 < n_cond1) {
+                    group1[idx1++] = val;
+                    sum1 += val;
+                }
             }
+
+            scl::memory::aligned_free(gene_expr);
         }
 
         // Response score: log2 fold change

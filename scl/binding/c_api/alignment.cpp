@@ -170,15 +170,29 @@ scl_error_t scl_alignment_integration_score(
 
         scl::Real score_result = scl::Real(0);
         wrapper_data->visit([&](auto& data) {
+            using DataType = std::remove_reference_t<decltype(data)>;
+            using T = typename DataType::ValueType;
+            constexpr bool IsCSR_Data = DataType::is_csr;
+            
             wrapper_neighbors->visit([&](auto& neigh) {
-                score_result = scl::kernel::alignment::integration_score(
-                    data,
-                    scl::Array<const scl::Index>(
-                        reinterpret_cast<const scl::Index*>(batch_labels),
-                        static_cast<scl::Size>(n_cells)
-                    ),
-                    neigh
-                );
+                using NeighborType = std::remove_reference_t<decltype(neigh)>;
+                constexpr bool IsCSR_Neighbors = NeighborType::is_csr;
+                using NeighborValueType = typename NeighborType::ValueType;
+                
+                // Cast neighbor matrix to Index type if needed
+                if constexpr (std::is_same_v<NeighborValueType, scl::Index>) {
+                    score_result = scl::kernel::alignment::integration_score<T, IsCSR_Data, IsCSR_Neighbors>(
+                        data,
+                        scl::Array<const scl::Index>(
+                            reinterpret_cast<const scl::Index*>(batch_labels),
+                            static_cast<scl::Size>(n_cells)
+                        ),
+                        neigh
+                    );
+                } else {
+                    // Neighbor matrix has wrong value type, return error
+                    score_result = scl::Real(0);
+                }
             });
         });
         *score = static_cast<scl_real_t>(score_result);
@@ -204,17 +218,23 @@ scl_error_t scl_alignment_batch_mixing(
         if (err != SCL_OK) return err;
 
         wrapper->visit([&](auto& neigh) {
-            scl::kernel::alignment::batch_mixing(
-                scl::Array<const scl::Index>(
-                    reinterpret_cast<const scl::Index*>(batch_labels),
-                    static_cast<scl::Size>(n_cells)
-                ),
-                neigh,
-                scl::Array<scl::Real>(
-                    reinterpret_cast<scl::Real*>(mixing_scores),
-                    static_cast<scl::Size>(n_cells)
-                )
-            );
+            using NeighborType = std::remove_reference_t<decltype(neigh)>;
+            constexpr bool IsCSR = NeighborType::is_csr;
+            using NeighborValueType = typename NeighborType::ValueType;
+            
+            if constexpr (std::is_same_v<NeighborValueType, scl::Index>) {
+                scl::kernel::alignment::batch_mixing<IsCSR>(
+                    scl::Array<const scl::Index>(
+                        reinterpret_cast<const scl::Index*>(batch_labels),
+                        static_cast<scl::Size>(n_cells)
+                    ),
+                    neigh,
+                    scl::Array<scl::Real>(
+                        reinterpret_cast<scl::Real*>(mixing_scores),
+                        static_cast<scl::Size>(n_cells)
+                    )
+                );
+            }
         });
         return SCL_OK;
     } catch (...) {
@@ -342,13 +362,19 @@ scl_error_t scl_alignment_kbet_score(
 
         scl::Real score_result = scl::Real(0);
         wrapper->visit([&](auto& neigh) {
-            score_result = scl::kernel::alignment::kbet_score(
-                neigh,
-                scl::Array<const scl::Index>(
-                    reinterpret_cast<const scl::Index*>(batch_labels),
-                    static_cast<scl::Size>(n_cells)
-                )
-            );
+            using NeighborType = std::remove_reference_t<decltype(neigh)>;
+            constexpr bool IsCSR = NeighborType::is_csr;
+            using NeighborValueType = typename NeighborType::ValueType;
+            
+            if constexpr (std::is_same_v<NeighborValueType, scl::Index>) {
+                score_result = scl::kernel::alignment::kbet_score<IsCSR>(
+                    neigh,
+                    scl::Array<const scl::Index>(
+                        reinterpret_cast<const scl::Index*>(batch_labels),
+                        static_cast<scl::Size>(n_cells)
+                    )
+                );
+            }
         });
         *score = static_cast<scl_real_t>(score_result);
         return SCL_OK;

@@ -298,48 +298,52 @@ void simulate_doublets(
         Real* profile = doublet_profiles + static_cast<Size>(d) * n_genes;
 
         // Add cell1's expression (4-way unrolled)
-        auto indices1 = X.row_indices_unsafe(cell1);
-        auto values1 = X.row_values_unsafe(cell1);
-        Index len1 = X.row_length_unsafe(cell1);
+        if constexpr (IsCSR) {
+            auto indices1 = X.row_indices_unsafe(cell1);
+            auto values1 = X.row_values_unsafe(cell1);
+            Index len1 = X.row_length_unsafe(cell1);
 
-        Index k = 0;
-        for (; k + 4 <= len1; k += 4) {
-            Index g0 = indices1[k];
-            Index g1 = indices1[k + 1];
-            Index g2 = indices1[k + 2];
-            Index g3 = indices1[k + 3];
-            if (SCL_LIKELY(g0 < n_genes)) profile[g0] += static_cast<Real>(values1[k]) * Real(0.5);
-            if (SCL_LIKELY(g1 < n_genes)) profile[g1] += static_cast<Real>(values1[k + 1]) * Real(0.5);
-            if (SCL_LIKELY(g2 < n_genes)) profile[g2] += static_cast<Real>(values1[k + 2]) * Real(0.5);
-            if (SCL_LIKELY(g3 < n_genes)) profile[g3] += static_cast<Real>(values1[k + 3]) * Real(0.5);
-        }
-        for (; k < len1; ++k) {
-            Index gene = indices1[k];
-            if (SCL_LIKELY(gene < n_genes)) {
-                profile[gene] += static_cast<Real>(values1[k]) * Real(0.5);
+            Index k = 0;
+            for (; k + 4 <= len1; k += 4) {
+                Index g0 = indices1.ptr[k];
+                Index g1 = indices1.ptr[k + 1];
+                Index g2 = indices1.ptr[k + 2];
+                Index g3 = indices1.ptr[k + 3];
+                if (SCL_LIKELY(g0 < n_genes)) profile[g0] += static_cast<Real>(values1.ptr[k]) * Real(0.5);
+                if (SCL_LIKELY(g1 < n_genes)) profile[g1] += static_cast<Real>(values1.ptr[k + 1]) * Real(0.5);
+                if (SCL_LIKELY(g2 < n_genes)) profile[g2] += static_cast<Real>(values1.ptr[k + 2]) * Real(0.5);
+                if (SCL_LIKELY(g3 < n_genes)) profile[g3] += static_cast<Real>(values1.ptr[k + 3]) * Real(0.5);
+            }
+            for (; k < len1; ++k) {
+                Index gene = indices1.ptr[k];
+                if (SCL_LIKELY(gene < n_genes)) {
+                    profile[gene] += static_cast<Real>(values1.ptr[k]) * Real(0.5);
+                }
             }
         }
 
         // Add cell2's expression (4-way unrolled)
-        auto indices2 = X.row_indices_unsafe(cell2);
-        auto values2 = X.row_values_unsafe(cell2);
-        Index len2 = X.row_length_unsafe(cell2);
+        if constexpr (IsCSR) {
+            auto indices2 = X.row_indices_unsafe(cell2);
+            auto values2 = X.row_values_unsafe(cell2);
+            Index len2 = X.row_length_unsafe(cell2);
 
-        k = 0;
-        for (; k + 4 <= len2; k += 4) {
-            Index g0 = indices2[k];
-            Index g1 = indices2[k + 1];
-            Index g2 = indices2[k + 2];
-            Index g3 = indices2[k + 3];
-            if (SCL_LIKELY(g0 < n_genes)) profile[g0] += static_cast<Real>(values2[k]) * Real(0.5);
-            if (SCL_LIKELY(g1 < n_genes)) profile[g1] += static_cast<Real>(values2[k + 1]) * Real(0.5);
-            if (SCL_LIKELY(g2 < n_genes)) profile[g2] += static_cast<Real>(values2[k + 2]) * Real(0.5);
-            if (SCL_LIKELY(g3 < n_genes)) profile[g3] += static_cast<Real>(values2[k + 3]) * Real(0.5);
-        }
-        for (; k < len2; ++k) {
-            Index gene = indices2[k];
-            if (SCL_LIKELY(gene < n_genes)) {
-                profile[gene] += static_cast<Real>(values2[k]) * Real(0.5);
+            Index k = 0;
+            for (; k + 4 <= len2; k += 4) {
+                Index g0 = indices2.ptr[k];
+                Index g1 = indices2.ptr[k + 1];
+                Index g2 = indices2.ptr[k + 2];
+                Index g3 = indices2.ptr[k + 3];
+                if (SCL_LIKELY(g0 < n_genes)) profile[g0] += static_cast<Real>(values2.ptr[k]) * Real(0.5);
+                if (SCL_LIKELY(g1 < n_genes)) profile[g1] += static_cast<Real>(values2.ptr[k + 1]) * Real(0.5);
+                if (SCL_LIKELY(g2 < n_genes)) profile[g2] += static_cast<Real>(values2.ptr[k + 2]) * Real(0.5);
+                if (SCL_LIKELY(g3 < n_genes)) profile[g3] += static_cast<Real>(values2.ptr[k + 3]) * Real(0.5);
+            }
+            for (; k < len2; ++k) {
+                Index gene = indices2.ptr[k];
+                if (SCL_LIKELY(gene < n_genes)) {
+                    profile[gene] += static_cast<Real>(values2.ptr[k]) * Real(0.5);
+                }
             }
         }
     };
@@ -942,11 +946,13 @@ void classify_doublet_types_knn(
     if (use_parallel) {
         scl::threading::parallel_for(Size(0), static_cast<Size>(n),
             [&](size_t i, size_t thread_rank) {
-                Index* counts = static_cast<Index*>(workspace_pool.get(thread_rank));
+                Real* workspace = workspace_pool.get(thread_rank);
+                Index* counts = reinterpret_cast<Index*>(workspace);
                 process_cell(static_cast<Index>(i), counts);
             });
     } else {
-        Index* counts = static_cast<Index*>(workspace_pool.get(0));
+        Real* workspace = workspace_pool.get(0);
+        Index* counts = reinterpret_cast<Index*>(workspace);
         for (Index i = 0; i < n; ++i) {
             process_cell(i, counts);
         }

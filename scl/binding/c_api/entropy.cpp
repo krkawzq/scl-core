@@ -102,7 +102,7 @@ scl_error_t scl_entropy_kl_divergence(
             reinterpret_cast<const scl::Real*>(q), n
         );
         *kl_out = static_cast<scl_real_t>(
-            kl_divergence(p_arr, q_arr, use_log2 != 0)
+            scl::kernel::entropy::kl_divergence(p_arr, q_arr, use_log2 != 0)
         );
         return SCL_OK;
     } catch (...) {
@@ -126,7 +126,7 @@ scl_error_t scl_entropy_js_divergence(
             reinterpret_cast<const scl::Real*>(q), n
         );
         *js_out = static_cast<scl_real_t>(
-            js_divergence(p_arr, q_arr, use_log2 != 0)
+            scl::kernel::entropy::js_divergence(p_arr, q_arr, use_log2 != 0)
         );
         return SCL_OK;
     } catch (...) {
@@ -150,7 +150,7 @@ scl_error_t scl_entropy_symmetric_kl(
             reinterpret_cast<const scl::Real*>(q), n
         );
         *sym_kl_out = static_cast<scl_real_t>(
-            symmetric_kl(p_arr, q_arr, use_log2 != 0)
+            scl::kernel::entropy::symmetric_kl(p_arr, q_arr, use_log2 != 0)
         );
         return SCL_OK;
     } catch (...) {
@@ -174,7 +174,7 @@ scl_error_t scl_entropy_mutual_information(
     if (!x_binned || !y_binned || !mi_out) return SCL_ERROR_NULL_POINTER;
     try {
         *mi_out = static_cast<scl_real_t>(
-            mutual_information(
+            scl::kernel::entropy::mutual_information(
                 reinterpret_cast<const scl::Index*>(x_binned),
                 reinterpret_cast<const scl::Index*>(y_binned),
                 n, n_bins_x, n_bins_y, use_log2 != 0
@@ -200,7 +200,7 @@ scl_error_t scl_entropy_joint_entropy(
     }
     try {
         *joint_entropy_out = static_cast<scl_real_t>(
-            joint_entropy(
+            scl::kernel::entropy::joint_entropy(
                 reinterpret_cast<const scl::Index*>(x_binned),
                 reinterpret_cast<const scl::Index*>(y_binned),
                 n, n_bins_x, n_bins_y, use_log2 != 0
@@ -226,7 +226,7 @@ scl_error_t scl_entropy_conditional_entropy(
     }
     try {
         *cond_entropy_out = static_cast<scl_real_t>(
-            conditional_entropy(
+            scl::kernel::entropy::conditional_entropy(
                 reinterpret_cast<const scl::Index*>(x_binned),
                 reinterpret_cast<const scl::Index*>(y_binned),
                 n, n_bins_x, n_bins_y, use_log2 != 0
@@ -248,7 +248,7 @@ scl_error_t scl_entropy_marginal_entropy(
     if (!binned || !marginal_entropy_out) return SCL_ERROR_NULL_POINTER;
     try {
         *marginal_entropy_out = static_cast<scl_real_t>(
-            marginal_entropy(
+            scl::kernel::entropy::marginal_entropy(
                 reinterpret_cast<const scl::Index*>(binned),
                 n, n_bins, use_log2 != 0
             )
@@ -280,7 +280,7 @@ scl_error_t scl_entropy_normalized_mi(
             reinterpret_cast<const scl::Index*>(labels2), n
         );
         *nmi_out = static_cast<scl_real_t>(
-            normalized_mi(l1_arr, l2_arr, n_clusters1, n_clusters2)
+            scl::kernel::entropy::normalized_mi(l1_arr, l2_arr, n_clusters1, n_clusters2)
         );
         return SCL_OK;
     } catch (...) {
@@ -305,7 +305,7 @@ scl_error_t scl_entropy_adjusted_mi(
             reinterpret_cast<const scl::Index*>(labels2), n
         );
         *ami_out = static_cast<scl_real_t>(
-            adjusted_mi(l1_arr, l2_arr, n_clusters1, n_clusters2)
+            scl::kernel::entropy::adjusted_mi(l1_arr, l2_arr, n_clusters1, n_clusters2)
         );
         return SCL_OK;
     } catch (...) {
@@ -325,7 +325,7 @@ scl_error_t scl_entropy_discretize_equal_width(
 ) {
     if (!values || !binned) return SCL_ERROR_NULL_POINTER;
     try {
-        discretize_equal_width(
+        scl::kernel::entropy::discretize_equal_width(
             reinterpret_cast<const scl::Real*>(values),
             n, n_bins, reinterpret_cast<scl::Index*>(binned)
         );
@@ -343,7 +343,7 @@ scl_error_t scl_entropy_discretize_equal_frequency(
 ) {
     if (!values || !binned) return SCL_ERROR_NULL_POINTER;
     try {
-        discretize_equal_frequency(
+        scl::kernel::entropy::discretize_equal_frequency(
             reinterpret_cast<const scl::Real*>(values),
             n, n_bins, reinterpret_cast<scl::Index*>(binned)
         );
@@ -374,7 +374,7 @@ scl_error_t scl_entropy_cross_entropy(
             reinterpret_cast<const scl::Real*>(pred_probs), n
         );
         *cross_entropy_out = static_cast<scl_real_t>(
-            cross_entropy(true_arr, pred_arr)
+            scl::kernel::entropy::cross_entropy(true_arr, pred_arr)
         );
         return SCL_OK;
     } catch (...) {
@@ -393,7 +393,7 @@ scl_error_t scl_entropy_gini_impurity(
             reinterpret_cast<const scl::Real*>(probabilities), n
         );
         *gini_out = static_cast<scl_real_t>(
-            gini_impurity(probs_arr)
+            scl::kernel::entropy::gini_impurity(probs_arr)
         );
         return SCL_OK;
     } catch (...) {

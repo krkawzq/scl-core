@@ -60,11 +60,11 @@ SCL_FORCE_INLINE Index binary_search_feature(
 }
 
 // Pearson correlation between two sparse vectors
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 SCL_FORCE_INLINE Real pearson_correlation(
-    const Sparse<T, IsCSR>& data1,
+    const Sparse<T, IsCSR1>& data1,
     Index feature1,
-    const Sparse<T, IsCSR>& data2,
+    const Sparse<T, IsCSR2>& data2,
     Index feature2,
     Size n_cells
 ) {
@@ -87,23 +87,57 @@ SCL_FORCE_INLINE Real pearson_correlation(
         vals2[c] = Real(0.0);
     }
 
-    // Gather values for feature1 from data1 using binary search
+    // Gather values for feature1 from data1
     for (Size c = 0; c < n_cells; ++c) {
-        const Index row_start = data1.row_indices_unsafe()[c];
-        const Index row_end = data1.row_indices_unsafe()[c + 1];
-        Index pos = binary_search_feature(data1.col_indices_unsafe(), row_start, row_end, feature1);
-        if (pos >= 0) {
-            vals1[c] = static_cast<Real>(data1.values()[pos]);
+        if constexpr (IsCSR1) {
+            auto row_idxs = data1.row_indices_unsafe(static_cast<Index>(c));
+            auto row_vals = data1.row_values_unsafe(static_cast<Index>(c));
+            Index row_len = data1.row_length_unsafe(static_cast<Index>(c));
+            
+            for (Index j = 0; j < row_len; ++j) {
+                if (row_idxs[j] == feature1) {
+                    vals1[c] = static_cast<Real>(row_vals[j]);
+                    break;
+                }
+            }
+        } else {
+            auto col_idxs = data1.col_indices_unsafe(feature1);
+            auto col_vals = data1.col_values_unsafe(feature1);
+            Index col_len = data1.col_length_unsafe(feature1);
+            
+            for (Index j = 0; j < col_len; ++j) {
+                if (col_idxs[j] == static_cast<Index>(c)) {
+                    vals1[c] = static_cast<Real>(col_vals[j]);
+                    break;
+                }
+            }
         }
     }
 
-    // Gather values for feature2 from data2 using binary search
+    // Gather values for feature2 from data2
     for (Size c = 0; c < n_cells; ++c) {
-        const Index row_start = data2.row_indices_unsafe()[c];
-        const Index row_end = data2.row_indices_unsafe()[c + 1];
-        Index pos = binary_search_feature(data2.col_indices_unsafe(), row_start, row_end, feature2);
-        if (pos >= 0) {
-            vals2[c] = static_cast<Real>(data2.values()[pos]);
+        if constexpr (IsCSR2) {
+            auto row_idxs = data2.row_indices_unsafe(static_cast<Index>(c));
+            auto row_vals = data2.row_values_unsafe(static_cast<Index>(c));
+            Index row_len = data2.row_length_unsafe(static_cast<Index>(c));
+            
+            for (Index j = 0; j < row_len; ++j) {
+                if (row_idxs[j] == feature2) {
+                    vals2[c] = static_cast<Real>(row_vals[j]);
+                    break;
+                }
+            }
+        } else {
+            auto col_idxs = data2.col_indices_unsafe(feature2);
+            auto col_vals = data2.col_values_unsafe(feature2);
+            Index col_len = data2.col_length_unsafe(feature2);
+            
+            for (Index j = 0; j < col_len; ++j) {
+                if (col_idxs[j] == static_cast<Index>(c)) {
+                    vals2[c] = static_cast<Real>(col_vals[j]);
+                    break;
+                }
+            }
         }
     }
 
@@ -140,11 +174,11 @@ SCL_FORCE_INLINE Real pearson_correlation(
 }
 
 // Spearman correlation via rank transformation
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 SCL_FORCE_INLINE Real spearman_correlation(
-    const Sparse<T, IsCSR>& data1,
+    const Sparse<T, IsCSR1>& data1,
     Index feature1,
-    const Sparse<T, IsCSR>& data2,
+    const Sparse<T, IsCSR2>& data2,
     Index feature2,
     Size n_cells
 ) {
@@ -166,23 +200,57 @@ SCL_FORCE_INLINE Real spearman_correlation(
         indices[c] = static_cast<Index>(c);
     }
 
-    // Gather values for feature1 using binary search
+    // Gather values for feature1
     for (Size c = 0; c < n_cells; ++c) {
-        const Index row_start = data1.row_indices_unsafe()[c];
-        const Index row_end = data1.row_indices_unsafe()[c + 1];
-        Index pos = binary_search_feature(data1.col_indices_unsafe(), row_start, row_end, feature1);
-        if (pos >= 0) {
-            vals1[c] = static_cast<Real>(data1.values()[pos]);
+        if constexpr (IsCSR1) {
+            auto row_idxs = data1.row_indices_unsafe(static_cast<Index>(c));
+            auto row_vals = data1.row_values_unsafe(static_cast<Index>(c));
+            Index row_len = data1.row_length_unsafe(static_cast<Index>(c));
+            
+            for (Index j = 0; j < row_len; ++j) {
+                if (row_idxs[j] == feature1) {
+                    vals1[c] = static_cast<Real>(row_vals[j]);
+                    break;
+                }
+            }
+        } else {
+            auto col_idxs = data1.col_indices_unsafe(feature1);
+            auto col_vals = data1.col_values_unsafe(feature1);
+            Index col_len = data1.col_length_unsafe(feature1);
+            
+            for (Index j = 0; j < col_len; ++j) {
+                if (col_idxs[j] == static_cast<Index>(c)) {
+                    vals1[c] = static_cast<Real>(col_vals[j]);
+                    break;
+                }
+            }
         }
     }
 
-    // Gather values for feature2 using binary search
+    // Gather values for feature2
     for (Size c = 0; c < n_cells; ++c) {
-        const Index row_start = data2.row_indices_unsafe()[c];
-        const Index row_end = data2.row_indices_unsafe()[c + 1];
-        Index pos = binary_search_feature(data2.col_indices_unsafe(), row_start, row_end, feature2);
-        if (pos >= 0) {
-            vals2[c] = static_cast<Real>(data2.values()[pos]);
+        if constexpr (IsCSR2) {
+            auto row_idxs = data2.row_indices_unsafe(static_cast<Index>(c));
+            auto row_vals = data2.row_values_unsafe(static_cast<Index>(c));
+            Index row_len = data2.row_length_unsafe(static_cast<Index>(c));
+            
+            for (Index j = 0; j < row_len; ++j) {
+                if (row_idxs[j] == feature2) {
+                    vals2[c] = static_cast<Real>(row_vals[j]);
+                    break;
+                }
+            }
+        } else {
+            auto col_idxs = data2.col_indices_unsafe(feature2);
+            auto col_vals = data2.col_values_unsafe(feature2);
+            Index col_len = data2.col_length_unsafe(feature2);
+            
+            for (Index j = 0; j < col_len; ++j) {
+                if (col_idxs[j] == static_cast<Index>(c)) {
+                    vals2[c] = static_cast<Real>(col_vals[j]);
+                    break;
+                }
+            }
         }
     }
 
@@ -281,10 +349,10 @@ void gene_peak_correlation(
 // Cis-Regulatory Associations
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void cis_regulatory(
-    const Sparse<T, IsCSR>& rna_expression,
-    const Sparse<T, IsCSR>& atac_accessibility,
+    const Sparse<T, IsCSR1>& rna_expression,
+    const Sparse<T, IsCSR2>& atac_accessibility,
     const Index* gene_indices,
     const Index* peak_indices,
     Size n_pairs,
@@ -335,10 +403,10 @@ void cis_regulatory(
 // Enhancer-Gene Links
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void enhancer_gene_link(
-    const Sparse<T, IsCSR>& rna,
-    const Sparse<T, IsCSR>& atac,
+    const Sparse<T, IsCSR1>& rna,
+    const Sparse<T, IsCSR2>& atac,
     Real correlation_threshold,
     Index* link_genes,
     Index* link_peaks,
@@ -383,10 +451,10 @@ void enhancer_gene_link(
 // Multi-modal Neighbors
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void multimodal_neighbors(
-    const Sparse<T, IsCSR>& modality1,
-    const Sparse<T, IsCSR>& modality2,
+    const Sparse<T, IsCSR1>& modality1,
+    const Sparse<T, IsCSR2>& modality2,
     Real weight1,
     Real weight2,
     Index k,
@@ -428,48 +496,75 @@ void multimodal_neighbors(
 
             // Distance in modality 1
             Real dist1 = Real(0.0);
-            const Index start1_i = modality1.row_indices_unsafe()[i];
-            const Index end1_i = modality1.row_indices_unsafe()[i + 1];
-            const Index start1_j = modality1.row_indices_unsafe()[j];
-            const Index end1_j = modality1.row_indices_unsafe()[j + 1];
+            Array<T> row1_i_vals, row1_j_vals;
+            Array<Index> row1_i_idxs, row1_j_idxs;
+            Index row1_i_len, row1_j_len;
+            
+            if constexpr (IsCSR1) {
+                row1_i_vals = modality1.row_values_unsafe(static_cast<Index>(i));
+                row1_i_idxs = modality1.row_indices_unsafe(static_cast<Index>(i));
+                row1_i_len = modality1.row_length_unsafe(static_cast<Index>(i));
+                row1_j_vals = modality1.row_values_unsafe(static_cast<Index>(j));
+                row1_j_idxs = modality1.row_indices_unsafe(static_cast<Index>(j));
+                row1_j_len = modality1.row_length_unsafe(static_cast<Index>(j));
+            } else {
+                row1_i_vals = modality1.col_values_unsafe(static_cast<Index>(i));
+                row1_i_idxs = modality1.col_indices_unsafe(static_cast<Index>(i));
+                row1_i_len = modality1.col_length_unsafe(static_cast<Index>(i));
+                row1_j_vals = modality1.col_values_unsafe(static_cast<Index>(j));
+                row1_j_idxs = modality1.col_indices_unsafe(static_cast<Index>(j));
+                row1_j_len = modality1.col_length_unsafe(static_cast<Index>(j));
+            }
 
-            Index i1 = start1_i, j1 = start1_j;
-            while (i1 < end1_i && j1 < end1_j) {
-                Index col_i = modality1.col_indices_unsafe()[i1];
-                Index col_j = modality1.col_indices_unsafe()[j1];
+            Index i1 = 0, j1 = 0;
+            while (i1 < row1_i_len && j1 < row1_j_len) {
+                Index col_i = row1_i_idxs[i1];
+                Index col_j = row1_j_idxs[j1];
                 if (col_i == col_j) {
-                    Real diff = static_cast<Real>(modality1.values()[i1]) -
-                               static_cast<Real>(modality1.values()[j1]);
+                    Real diff = static_cast<Real>(row1_i_vals[i1]) -
+                               static_cast<Real>(row1_j_vals[j1]);
                     dist1 += diff * diff;
                     ++i1; ++j1;
                 } else if (col_i < col_j) {
-                    Real val = static_cast<Real>(modality1.values()[i1]);
+                    Real val = static_cast<Real>(row1_i_vals[i1]);
                     dist1 += val * val;
                     ++i1;
                 } else {
-                    Real val = static_cast<Real>(modality1.values()[j1]);
+                    Real val = static_cast<Real>(row1_j_vals[j1]);
                     dist1 += val * val;
                     ++j1;
                 }
             }
-            while (i1 < end1_i) {
-                Real val = static_cast<Real>(modality1.values()[i1++]);
+            while (i1 < row1_i_len) {
+                Real val = static_cast<Real>(row1_i_vals[i1++]);
                 dist1 += val * val;
             }
-            while (j1 < end1_j) {
-                Real val = static_cast<Real>(modality1.values()[j1++]);
+            while (j1 < row1_j_len) {
+                Real val = static_cast<Real>(row1_j_vals[j1++]);
                 dist1 += val * val;
             }
 
             // Distance in modality 2
             Real dist2 = Real(0.0);
-            auto row2_i_vals = modality2.row_values_unsafe(i);
-            auto row2_i_idxs = modality2.row_indices_unsafe(i);
-            Index row2_i_len = modality2.row_length_unsafe(i);
+            Array<T> row2_i_vals, row2_j_vals;
+            Array<Index> row2_i_idxs, row2_j_idxs;
+            Index row2_i_len, row2_j_len;
             
-            auto row2_j_vals = modality2.row_values_unsafe(j);
-            auto row2_j_idxs = modality2.row_indices_unsafe(j);
-            Index row2_j_len = modality2.row_length_unsafe(j);
+            if constexpr (IsCSR2) {
+                row2_i_vals = modality2.row_values_unsafe(static_cast<Index>(i));
+                row2_i_idxs = modality2.row_indices_unsafe(static_cast<Index>(i));
+                row2_i_len = modality2.row_length_unsafe(static_cast<Index>(i));
+                row2_j_vals = modality2.row_values_unsafe(static_cast<Index>(j));
+                row2_j_idxs = modality2.row_indices_unsafe(static_cast<Index>(j));
+                row2_j_len = modality2.row_length_unsafe(static_cast<Index>(j));
+            } else {
+                row2_i_vals = modality2.col_values_unsafe(static_cast<Index>(i));
+                row2_i_idxs = modality2.col_indices_unsafe(static_cast<Index>(i));
+                row2_i_len = modality2.col_length_unsafe(static_cast<Index>(i));
+                row2_j_vals = modality2.col_values_unsafe(static_cast<Index>(j));
+                row2_j_idxs = modality2.col_indices_unsafe(static_cast<Index>(j));
+                row2_j_len = modality2.col_length_unsafe(static_cast<Index>(j));
+            }
 
             Index i2 = 0, j2 = 0;
             while (i2 < row2_i_len && j2 < row2_j_len) {
@@ -524,10 +619,10 @@ void multimodal_neighbors(
 // Feature Coupling
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void feature_coupling(
-    const Sparse<T, IsCSR>& modality1,
-    const Sparse<T, IsCSR>& modality2,
+    const Sparse<T, IsCSR1>& modality1,
+    const Sparse<T, IsCSR2>& modality2,
     Index* feature1_indices,
     Index* feature2_indices,
     Real* coupling_scores,
@@ -568,11 +663,11 @@ void feature_coupling(
 // =============================================================================
 
 // Compute correlation for specific cell subset
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void correlation_in_subset(
-    const Sparse<T, IsCSR>& data1,
+    const Sparse<T, IsCSR1>& data1,
     Index feature1,
-    const Sparse<T, IsCSR>& data2,
+    const Sparse<T, IsCSR2>& data2,
     Index feature2,
     Array<const Index> cell_indices,
     Real& correlation
@@ -592,18 +687,52 @@ void correlation_in_subset(
         vals1[s] = Real(0.0);
         vals2[s] = Real(0.0);
 
-        const Index row_start1 = data1.row_indices_unsafe()[c];
-        const Index row_end1 = data1.row_indices_unsafe()[c + 1];
-        Index pos1 = detail::binary_search_feature(data1.col_indices_unsafe(), row_start1, row_end1, feature1);
-        if (pos1 >= 0) {
-            vals1[s] = static_cast<Real>(data1.values()[pos1]);
+        if constexpr (IsCSR1) {
+            auto row1_idxs = data1.row_indices_unsafe(c);
+            auto row1_vals = data1.row_values_unsafe(c);
+            Index row1_len = data1.row_length_unsafe(c);
+            
+            for (Index j = 0; j < row1_len; ++j) {
+                if (row1_idxs[j] == feature1) {
+                    vals1[s] = static_cast<Real>(row1_vals[j]);
+                    break;
+                }
+            }
+        } else {
+            auto col1_idxs = data1.col_indices_unsafe(feature1);
+            auto col1_vals = data1.col_values_unsafe(feature1);
+            Index col1_len = data1.col_length_unsafe(feature1);
+            
+            for (Index j = 0; j < col1_len; ++j) {
+                if (col1_idxs[j] == c) {
+                    vals1[s] = static_cast<Real>(col1_vals[j]);
+                    break;
+                }
+            }
         }
 
-        const Index row_start2 = data2.row_indices_unsafe()[c];
-        const Index row_end2 = data2.row_indices_unsafe()[c + 1];
-        Index pos2 = detail::binary_search_feature(data2.col_indices_unsafe(), row_start2, row_end2, feature2);
-        if (pos2 >= 0) {
-            vals2[s] = static_cast<Real>(data2.values()[pos2]);
+        if constexpr (IsCSR2) {
+            auto row2_idxs = data2.row_indices_unsafe(c);
+            auto row2_vals = data2.row_values_unsafe(c);
+            Index row2_len = data2.row_length_unsafe(c);
+            
+            for (Index j = 0; j < row2_len; ++j) {
+                if (row2_idxs[j] == feature2) {
+                    vals2[s] = static_cast<Real>(row2_vals[j]);
+                    break;
+                }
+            }
+        } else {
+            auto col2_idxs = data2.col_indices_unsafe(feature2);
+            auto col2_vals = data2.col_values_unsafe(feature2);
+            Index col2_len = data2.col_length_unsafe(feature2);
+            
+            for (Index j = 0; j < col2_len; ++j) {
+                if (col2_idxs[j] == c) {
+                    vals2[s] = static_cast<Real>(col2_vals[j]);
+                    break;
+                }
+            }
         }
     }
 
@@ -655,15 +784,34 @@ void peak_to_gene_activity(
         scl::algo::zero(cell_activity, n_genes);
 
         // Aggregate peak accessibility to gene activity
-        const Index row_start = atac.row_indices_unsafe()[c];
-        const Index row_end = atac.row_indices_unsafe()[c + 1];
+        if constexpr (IsCSR) {
+            auto row_idxs = atac.row_indices_unsafe(c);
+            auto row_vals = atac.row_values_unsafe(c);
+            Index row_len = atac.row_length_unsafe(c);
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index peak = atac.col_indices_unsafe()[j];
-            if (peak < static_cast<Index>(n_peaks)) {
-                Index gene = peak_to_gene_map[peak];
-                if (gene >= 0 && gene < static_cast<Index>(n_genes)) {
-                    cell_activity[gene] += static_cast<Real>(atac.values()[j]);
+            for (Index j = 0; j < row_len; ++j) {
+                Index peak = row_idxs[j];
+                if (peak < static_cast<Index>(n_peaks)) {
+                    Index gene = peak_to_gene_map[peak];
+                    if (gene >= 0 && gene < static_cast<Index>(n_genes)) {
+                        cell_activity[gene] += static_cast<Real>(row_vals[j]);
+                    }
+                }
+            }
+        } else {
+            for (Size p = 0; p < n_peaks; ++p) {
+                auto col_idxs = atac.col_indices_unsafe(static_cast<Index>(p));
+                auto col_vals = atac.col_values_unsafe(static_cast<Index>(p));
+                Index col_len = atac.col_length_unsafe(static_cast<Index>(p));
+                
+                for (Index j = 0; j < col_len; ++j) {
+                    if (col_idxs[j] == c) {
+                        Index gene = peak_to_gene_map[p];
+                        if (gene >= 0 && gene < static_cast<Index>(n_genes)) {
+                            cell_activity[gene] += static_cast<Real>(col_vals[j]);
+                        }
+                        break;
+                    }
                 }
             }
         }

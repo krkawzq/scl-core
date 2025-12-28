@@ -361,7 +361,7 @@ SCL_HOT void extract_gene_expression(
 ) {
     std::memset(output, 0, static_cast<Size>(n_cells) * sizeof(Real));
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
             auto indices = X.row_indices_unsafe(c);
             auto values = X.row_values_unsafe(c);
@@ -808,7 +808,8 @@ void genie3_importance(
     // Per-thread workspace
     scl::threading::DualWorkspacePool<Real> workspace;
     if (use_parallel) {
-        workspace.init(n_threads, n_cells_sz, static_cast<Size>(n_tfs));
+        Size max_size = std::max(n_cells_sz, static_cast<Size>(n_tfs));
+        workspace.init(n_threads, max_size);
     }
 
     auto process_gene = [&](Index g, Real* target_expr, Real* importance, uint64_t seed) {
@@ -887,7 +888,7 @@ void regulon_activity(
     }
 
     auto process_cell = [&](Index c, Real* cell_expr) {
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             std::memset(cell_expr, 0, n_genes_sz * sizeof(Real));
 
             auto indices = expression.row_indices_unsafe(c);
@@ -915,7 +916,7 @@ void regulon_activity(
                 if (SCL_UNLIKELY(g < 0 || g >= n_genes)) continue;
 
                 Real expr;
-                if (IsCSR) {
+                if constexpr (IsCSR) {
                     expr = cell_expr[g];
                 } else {
                     expr = Real(0);
@@ -945,7 +946,7 @@ void regulon_activity(
     };
 
     if (use_parallel) {
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells), [&](size_t c, size_t thread_rank) {
                 Real* cell_expr = cell_expr_pool.get(thread_rank);
                 process_cell(static_cast<Index>(c), cell_expr);
@@ -957,7 +958,7 @@ void regulon_activity(
         }
     } else {
         Real* cell_expr = nullptr;
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             cell_expr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
         }
 
@@ -1018,7 +1019,7 @@ void regulon_auc_score(
         // Extract and rank gene expression
         std::memset(cell_expr, 0, n_genes_sz * sizeof(Real));
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             auto indices = expression.row_indices_unsafe(c);
             auto values = expression.row_values_unsafe(c);
             Index len = expression.row_length_unsafe(c);
@@ -1454,7 +1455,7 @@ void tf_activity_from_regulons(
     }
 
     auto process_cell = [&](Index c, Real* cell_expr) {
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             std::memset(cell_expr, 0, n_genes_sz * sizeof(Real));
 
             auto indices = expression.row_indices_unsafe(c);
@@ -1484,7 +1485,7 @@ void tf_activity_from_regulons(
                 Real weight = std::abs(grn_matrix[static_cast<Size>(target) * n_tfs + tf]);
                 Real expr;
 
-                if (IsCSR) {
+                if constexpr (IsCSR) {
                     expr = cell_expr[target];
                 } else {
                     expr = Real(0);
@@ -1510,7 +1511,7 @@ void tf_activity_from_regulons(
     };
 
     if (use_parallel) {
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells), [&](size_t c, size_t thread_rank) {
                 Real* cell_expr = cell_expr_pool.get(thread_rank);
                 process_cell(static_cast<Index>(c), cell_expr);
@@ -1522,7 +1523,7 @@ void tf_activity_from_regulons(
         }
     } else {
         Real* cell_expr = nullptr;
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             cell_expr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
         }
 

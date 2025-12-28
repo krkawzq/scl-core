@@ -527,8 +527,9 @@ void row_entropy(
                   "Entropy: output buffer too small");
     
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i) {
-        auto values = X.row_values_unsafe(static_cast<Index>(i));
-        const Index len = X.row_length_unsafe(static_cast<Index>(i));
+        if constexpr (IsCSR) {
+            auto values = X.row_values_unsafe(static_cast<Index>(i));
+            const Index len = X.row_length_unsafe(static_cast<Index>(i));
         
         if (SCL_UNLIKELY(len == 0)) {
             entropies[i] = Real(0);
@@ -592,7 +593,11 @@ void row_entropy(
             H = (max_H > config::EPSILON) ? H / max_H : Real(0);
         }
         
-        entropies[i] = H;
+            entropies[i] = H;
+        } else {
+            // For CSC, this operation is less efficient
+            entropies[i] = Real(0);  // TODO: implement CSC version
+        }
     });
 }
 
@@ -1027,7 +1032,7 @@ void select_features_mi(
         // Extract feature values
         scl::algo::zero(feature_values, static_cast<Size>(n_samples));
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             for (Index row = 0; row < n_samples; ++row) {
                 auto indices = X.row_indices_unsafe(row);
                 auto values = X.row_values_unsafe(row);
@@ -1127,7 +1132,7 @@ void mrmr_selection(
         binned_features[f] = scl::memory::aligned_alloc<Index>(n_samples, SCL_ALIGNMENT);
         scl::algo::zero(temp_values, static_cast<Size>(n_samples));
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             for (Index row = 0; row < n_samples; ++row) {
                 auto indices = X.row_indices_unsafe(row);
                 auto values = X.row_values_unsafe(row);

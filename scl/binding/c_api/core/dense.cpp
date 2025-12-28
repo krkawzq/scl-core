@@ -59,7 +59,7 @@ scl_error_t scl_dense_create(
         wrapper->stride = cols;
         wrapper->owns_data = true;
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_dense_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -102,7 +102,7 @@ scl_error_t scl_dense_wrap(
         wrapper->stride = stride;
         wrapper->owns_data = false;
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_dense_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -147,7 +147,7 @@ scl_error_t scl_dense_clone(scl_dense_t src, scl_dense_t* out) {
         wrapper->stride = src->cols;
         wrapper->owns_data = true;
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_dense_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -321,7 +321,7 @@ scl_error_t scl_dense_to_sparse(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_dense_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         

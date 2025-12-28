@@ -40,22 +40,42 @@ namespace config {
 namespace detail {
 
 // Compute squared Euclidean distance between sparse vectors
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 SCL_FORCE_INLINE Real sparse_distance_squared(
-    const Sparse<T, IsCSR>& data1,
+    const Sparse<T, IsCSR1>& data1,
     Index row1,
-    const Sparse<T, IsCSR>& data2,
+    const Sparse<T, IsCSR2>& data2,
     Index row2
 ) {
     Real dist = Real(0.0);
 
-    auto row1_vals = data1.row_values_unsafe(row1);
-    auto row1_idxs = data1.row_indices_unsafe(row1);
-    Index row1_len = data1.row_length_unsafe(row1);
+    Array<T> row1_vals;
+    Array<Index> row1_idxs;
+    Index row1_len;
     
-    auto row2_vals = data2.row_values_unsafe(row2);
-    auto row2_idxs = data2.row_indices_unsafe(row2);
-    Index row2_len = data2.row_length_unsafe(row2);
+    if constexpr (IsCSR1) {
+        row1_vals = data1.row_values_unsafe(row1);
+        row1_idxs = data1.row_indices_unsafe(row1);
+        row1_len = data1.row_length_unsafe(row1);
+    } else {
+        row1_vals = data1.col_values_unsafe(row1);
+        row1_idxs = data1.col_indices_unsafe(row1);
+        row1_len = data1.col_length_unsafe(row1);
+    }
+    
+    Array<T> row2_vals;
+    Array<Index> row2_idxs;
+    Index row2_len;
+    
+    if constexpr (IsCSR2) {
+        row2_vals = data2.row_values_unsafe(row2);
+        row2_idxs = data2.row_indices_unsafe(row2);
+        row2_len = data2.row_length_unsafe(row2);
+    } else {
+        row2_vals = data2.col_values_unsafe(row2);
+        row2_idxs = data2.col_indices_unsafe(row2);
+        row2_len = data2.col_length_unsafe(row2);
+    }
 
     Index i1 = 0, i2 = 0;
     while (i1 < row1_len && i2 < row2_len) {
@@ -91,10 +111,10 @@ SCL_FORCE_INLINE Real sparse_distance_squared(
 }
 
 // Find k nearest neighbors from data2 for each row in data1
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void find_cross_knn(
-    const Sparse<T, IsCSR>& data1,
-    const Sparse<T, IsCSR>& data2,
+    const Sparse<T, IsCSR1>& data1,
+    const Sparse<T, IsCSR2>& data2,
     Index k,
     Index* knn_indices,  // [n1 * k]
     Real* knn_distances   // [n1 * k]
@@ -172,10 +192,10 @@ SCL_FORCE_INLINE bool is_mnn(
 // Mutual Nearest Neighbors (MNN) Pairs
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void mnn_pairs(
-    const Sparse<T, IsCSR>& data1,
-    const Sparse<T, IsCSR>& data2,
+    const Sparse<T, IsCSR1>& data1,
+    const Sparse<T, IsCSR2>& data2,
     Index k,
     Index* mnn_cell1,
     Index* mnn_cell2,
@@ -222,10 +242,10 @@ void mnn_pairs(
 // Anchor Finding (Seurat-style)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void find_anchors(
-    const Sparse<T, IsCSR>& data1,
-    const Sparse<T, IsCSR>& data2,
+    const Sparse<T, IsCSR1>& data1,
+    const Sparse<T, IsCSR2>& data2,
     Index k,
     Index* anchor_cell1,
     Index* anchor_cell2,
@@ -359,11 +379,11 @@ void transfer_labels(
 // Integration Quality Score
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 Real integration_score(
-    const Sparse<T, IsCSR>& integrated_data,
+    const Sparse<T, IsCSR1>& integrated_data,
     Array<const Index> batch_labels,
-    const Sparse<Index, IsCSR>& neighbors
+    const Sparse<Index, IsCSR2>& neighbors
 ) {
     const Size n_cells = static_cast<Size>(integrated_data.rows());
     SCL_CHECK_DIM(n_cells == batch_labels.len, "Batch labels length mismatch");
@@ -487,10 +507,10 @@ void batch_mixing(
 // Compute Correction Vectors (MNN-based)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void compute_correction_vectors(
-    const Sparse<T, IsCSR>& data1,
-    const Sparse<T, IsCSR>& data2,
+    const Sparse<T, IsCSR1>& data1,
+    const Sparse<T, IsCSR2>& data2,
     const Index* mnn_cell1,
     const Index* mnn_cell2,
     Size n_pairs,
@@ -531,20 +551,48 @@ void compute_correction_vectors(
             cell2_dense[f] = Real(0.0);
         }
 
-        auto row1_vals = data1.row_values_unsafe(cell1);
-        auto row1_idxs = data1.row_indices_unsafe(cell1);
-        Index row1_len = data1.row_length_unsafe(cell1);
-        for (Index j = 0; j < row1_len; ++j) {
-            Index col = row1_idxs.ptr[j];
-            cell1_dense[col] = static_cast<Real>(row1_vals.ptr[j]);
+        if constexpr (IsCSR1) {
+            auto row1_vals = data1.row_values_unsafe(cell1);
+            auto row1_idxs = data1.row_indices_unsafe(cell1);
+            Index row1_len = data1.row_length_unsafe(cell1);
+            for (Index j = 0; j < row1_len; ++j) {
+                Index col = row1_idxs.ptr[j];
+                cell1_dense[col] = static_cast<Real>(row1_vals.ptr[j]);
+            }
+        } else {
+            for (Size f = 0; f < n_features; ++f) {
+                auto col_vals = data1.col_values_unsafe(static_cast<Index>(f));
+                auto col_idxs = data1.col_indices_unsafe(static_cast<Index>(f));
+                Index col_len = data1.col_length_unsafe(static_cast<Index>(f));
+                for (Index j = 0; j < col_len; ++j) {
+                    if (col_idxs.ptr[j] == cell1) {
+                        cell1_dense[f] = static_cast<Real>(col_vals.ptr[j]);
+                        break;
+                    }
+                }
+            }
         }
 
-        auto row2_vals = data2.row_values_unsafe(cell2);
-        auto row2_idxs = data2.row_indices_unsafe(cell2);
-        Index row2_len = data2.row_length_unsafe(cell2);
-        for (Index j = 0; j < row2_len; ++j) {
-            Index col = row2_idxs.ptr[j];
-            cell2_dense[col] = static_cast<Real>(row2_vals.ptr[j]);
+        if constexpr (IsCSR2) {
+            auto row2_vals = data2.row_values_unsafe(cell2);
+            auto row2_idxs = data2.row_indices_unsafe(cell2);
+            Index row2_len = data2.row_length_unsafe(cell2);
+            for (Index j = 0; j < row2_len; ++j) {
+                Index col = row2_idxs.ptr[j];
+                cell2_dense[col] = static_cast<Real>(row2_vals.ptr[j]);
+            }
+        } else {
+            for (Size f = 0; f < n_features; ++f) {
+                auto col_vals = data2.col_values_unsafe(static_cast<Index>(f));
+                auto col_idxs = data2.col_indices_unsafe(static_cast<Index>(f));
+                Index col_len = data2.col_length_unsafe(static_cast<Index>(f));
+                for (Index j = 0; j < col_len; ++j) {
+                    if (col_idxs.ptr[j] == cell2) {
+                        cell2_dense[f] = static_cast<Real>(col_vals.ptr[j]);
+                        break;
+                    }
+                }
+            }
         }
 
         // Add correction vector (cell1 - cell2)
@@ -631,10 +679,10 @@ void smooth_correction_vectors(
 // Canonical Correlation Analysis (CCA) for multimodal alignment
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR1, bool IsCSR2>
 void cca_projection(
-    const Sparse<T, IsCSR>& data1,
-    const Sparse<T, IsCSR>& data2,
+    const Sparse<T, IsCSR1>& data1,
+    const Sparse<T, IsCSR2>& data2,
     Size n_components,
     Real* projection1,  // [n1 * n_components]
     Real* projection2   // [n2 * n_components]
@@ -671,15 +719,32 @@ void cca_projection(
             projection1[i * n_components + c] = Real(0.0);
         }
 
-        auto row_vals = data1.row_values_unsafe(i);
-        auto row_idxs = data1.row_indices_unsafe(i);
-        Index row_len = data1.row_length_unsafe(i);
+        if constexpr (IsCSR1) {
+            auto row_vals = data1.row_values_unsafe(static_cast<Index>(i));
+            auto row_idxs = data1.row_indices_unsafe(static_cast<Index>(i));
+            Index row_len = data1.row_length_unsafe(static_cast<Index>(i));
 
-        for (Index j = 0; j < row_len; ++j) {
-            Index col = row_idxs.ptr[j];
-            Real val = static_cast<Real>(row_vals.ptr[j]);
-            for (Size c = 0; c < n_components; ++c) {
-                projection1[i * n_components + c] += val * proj_matrix1[col * n_components + c];
+            for (Index j = 0; j < row_len; ++j) {
+                Index col = row_idxs.ptr[j];
+                Real val = static_cast<Real>(row_vals.ptr[j]);
+                for (Size c = 0; c < n_components; ++c) {
+                    projection1[i * n_components + c] += val * proj_matrix1[col * n_components + c];
+                }
+            }
+        } else {
+            for (Size f = 0; f < d1; ++f) {
+                auto col_vals = data1.col_values_unsafe(static_cast<Index>(f));
+                auto col_idxs = data1.col_indices_unsafe(static_cast<Index>(f));
+                Index col_len = data1.col_length_unsafe(static_cast<Index>(f));
+                for (Index j = 0; j < col_len; ++j) {
+                    if (col_idxs.ptr[j] == static_cast<Index>(i)) {
+                        Real val = static_cast<Real>(col_vals.ptr[j]);
+                        for (Size c = 0; c < n_components; ++c) {
+                            projection1[i * n_components + c] += val * proj_matrix1[f * n_components + c];
+                        }
+                        break;
+                    }
+                }
             }
         }
     });
@@ -690,15 +755,32 @@ void cca_projection(
             projection2[i * n_components + c] = Real(0.0);
         }
 
-        auto row_vals = data2.row_values_unsafe(i);
-        auto row_idxs = data2.row_indices_unsafe(i);
-        Index row_len = data2.row_length_unsafe(i);
+        if constexpr (IsCSR2) {
+            auto row_vals = data2.row_values_unsafe(static_cast<Index>(i));
+            auto row_idxs = data2.row_indices_unsafe(static_cast<Index>(i));
+            Index row_len = data2.row_length_unsafe(static_cast<Index>(i));
 
-        for (Index j = 0; j < row_len; ++j) {
-            Index col = row_idxs.ptr[j];
-            Real val = static_cast<Real>(row_vals.ptr[j]);
-            for (Size c = 0; c < n_components; ++c) {
-                projection2[i * n_components + c] += val * proj_matrix2[col * n_components + c];
+            for (Index j = 0; j < row_len; ++j) {
+                Index col = row_idxs.ptr[j];
+                Real val = static_cast<Real>(row_vals.ptr[j]);
+                for (Size c = 0; c < n_components; ++c) {
+                    projection2[i * n_components + c] += val * proj_matrix2[col * n_components + c];
+                }
+            }
+        } else {
+            for (Size f = 0; f < d2; ++f) {
+                auto col_vals = data2.col_values_unsafe(static_cast<Index>(f));
+                auto col_idxs = data2.col_indices_unsafe(static_cast<Index>(f));
+                Index col_len = data2.col_length_unsafe(static_cast<Index>(f));
+                for (Index j = 0; j < col_len; ++j) {
+                    if (col_idxs.ptr[j] == static_cast<Index>(i)) {
+                        Real val = static_cast<Real>(col_vals.ptr[j]);
+                        for (Size c = 0; c < n_components; ++c) {
+                            projection2[i * n_components + c] += val * proj_matrix2[f * n_components + c];
+                        }
+                        break;
+                    }
+                }
             }
         }
     });

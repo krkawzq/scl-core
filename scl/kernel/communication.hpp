@@ -207,7 +207,7 @@ void extract_gene_expression(
 ) noexcept {
     scl::algo::zero(out, static_cast<Size>(n_cells));
     
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         // Row-major: need to scan all rows
         for (Index c = 0; c < n_cells; ++c) {
             auto indices = X.row_indices_unsafe(c);
@@ -283,7 +283,7 @@ Real compute_mean_expression(
     if (n_subset == 0) return Real(0);
     Real sum = Real(0);
     
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         for (Index i = 0; i < n_subset; ++i) {
             Index c = cell_indices[i];
             if (c >= n_cells) continue;

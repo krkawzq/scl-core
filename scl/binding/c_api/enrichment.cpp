@@ -250,8 +250,8 @@ scl_error_t scl_enrichment_ora_batch(
             n_de_genes
         );
 
-        const scl::Index** pathways = reinterpret_cast<const scl::Index**>(
-            const_cast<scl_index_t* const*>(pathway_genes)
+        const scl::Index** pathways = const_cast<const scl::Index**>(
+            reinterpret_cast<const scl::Index* const*>(pathway_genes)
         );
 
         scl::Array<scl::Real> pvals_arr(

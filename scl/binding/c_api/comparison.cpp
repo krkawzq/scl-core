@@ -26,12 +26,13 @@ scl_error_t scl_comp_composition_analysis(
     try {
         scl::Array<const scl::Index> types(cell_types, n_cells);
         scl::Array<const scl::Index> conds(conditions, n_cells);
-        scl::Array<scl::Real> props(reinterpret_cast<scl::Real*>(proportions),
-                                    static_cast<scl::Size>(n_types) * n_conditions);
-        scl::Array<scl::Real> pvals(reinterpret_cast<scl::Real*>(p_values), static_cast<scl::Size>(n_types));
+        scl::Real* props_ptr = reinterpret_cast<scl::Real*>(proportions);
+        scl::Real* pvals_ptr = reinterpret_cast<scl::Real*>(p_values);
 
         scl::kernel::comparison::composition_analysis(
-            types, conds, props, pvals, static_cast<scl::Size>(n_types), static_cast<scl::Size>(n_conditions)
+            types, conds,
+            props_ptr, pvals_ptr,
+            static_cast<scl::Size>(n_types), static_cast<scl::Size>(n_conditions)
         );
 
         return SCL_OK;

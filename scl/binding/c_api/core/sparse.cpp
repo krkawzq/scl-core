@@ -101,7 +101,7 @@ scl_error_t scl_sparse_create(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -167,7 +167,7 @@ scl_error_t scl_sparse_wrap(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -204,7 +204,7 @@ scl_error_t scl_sparse_clone(scl_sparse_t src, scl_sparse_t* out) {
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -379,7 +379,7 @@ scl_error_t scl_sparse_transpose(scl_sparse_t src, scl_sparse_t* out) {
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -416,7 +416,7 @@ scl_error_t scl_sparse_to_contiguous(scl_sparse_t src, scl_sparse_t* out) {
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -471,9 +471,7 @@ scl_error_t scl_sparse_wrap_and_own(
         );
         
         if (!data_buf || !indices_buf || !indptr_buf) {
-            if (data_buf) reg.buffer_alias_decref(data_buf);
-            if (indices_buf) reg.buffer_alias_decref(indices_buf);
-            if (indptr_buf) reg.buffer_alias_decref(indptr_buf);
+            // Buffer IDs are automatically managed, no need to manually decref here
             set_last_error(SCL_ERROR_OUT_OF_MEMORY, "Failed to register buffers");
             return SCL_ERROR_OUT_OF_MEMORY;
         }
@@ -527,7 +525,7 @@ scl_error_t scl_sparse_wrap_and_own(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -580,7 +578,7 @@ scl_error_t scl_sparse_slice_rows(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -633,7 +631,7 @@ scl_error_t scl_sparse_slice_cols(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -708,7 +706,7 @@ scl_error_t scl_sparse_create_with_strategy(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -782,7 +780,7 @@ scl_error_t scl_sparse_from_coo(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -923,7 +921,7 @@ scl_error_t scl_sparse_row_range_view(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -972,7 +970,7 @@ scl_error_t scl_sparse_row_range_copy(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -1026,7 +1024,7 @@ scl_error_t scl_sparse_row_slice_copy(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -1079,7 +1077,7 @@ scl_error_t scl_sparse_col_slice(
             return SCL_ERROR_INTERNAL;
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -1148,7 +1146,7 @@ scl_error_t scl_sparse_vstack(
         wrapper->is_csr = true;
         wrapper->matrix = std::move(result);
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         
@@ -1213,7 +1211,7 @@ scl_error_t scl_sparse_hstack(
         wrapper->is_csr = false;
         wrapper->matrix = std::move(result);
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         

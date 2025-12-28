@@ -92,7 +92,7 @@ scl_error_t scl_sparse_unsafe_from_raw(
             wrapper->matrix = std::move(matrix);
         }
         
-        *out = wrapper;
+        *out = reinterpret_cast<scl_sparse_t>(wrapper);
         clear_last_error();
         return SCL_OK;
         

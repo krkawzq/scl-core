@@ -56,9 +56,23 @@ scl_error_t scl_annotation_reference_mapping(
         if (err3 != SCL_OK) return err3;
 
         wrapper_query->visit([&](auto& query) {
+            using QueryType = std::remove_reference_t<decltype(query)>;
+            using T = typename QueryType::ValueType;
+            constexpr bool IsCSR_Query = QueryType::is_csr;
+            
             wrapper_ref->visit([&](auto& ref) {
-                wrapper_neighbors->visit([&](auto& neighbors) {
-                    scl::kernel::annotation::reference_mapping(
+                using RefType = std::remove_reference_t<decltype(ref)>;
+                constexpr bool IsCSR_Ref = RefType::is_csr;
+                
+                wrapper_neighbors->visit([&](auto& neighbors_real) {
+                    using NeighborType = std::remove_reference_t<decltype(neighbors_real)>;
+                    constexpr bool IsCSR_Neighbors = NeighborType::is_csr;
+                    
+                    // reinterpret the Real sparse matrix as Index sparse matrix
+                    // This is safe because they have the same memory layout
+                    auto& neighbors = reinterpret_cast<const scl::Sparse<scl::Index, IsCSR_Neighbors>&>(neighbors_real);
+                    
+                    scl::kernel::annotation::reference_mapping<T, IsCSR_Query, IsCSR_Ref, IsCSR_Neighbors>(
                         query, ref,
                         scl::Array<const scl::Index>(
                             reinterpret_cast<const scl::Index*>(reference_labels),
@@ -340,7 +354,11 @@ scl_error_t scl_annotation_label_propagation(
         if (err != SCL_OK) return err;
 
         wrapper->visit([&](auto& graph) {
-            scl::kernel::propagation::label_propagation(
+            using GraphType = std::remove_reference_t<decltype(graph)>;
+            using T = typename GraphType::ValueType;
+            constexpr bool IsCSR = GraphType::is_csr;
+            
+            scl::kernel::annotation::label_propagation<T, IsCSR>(
                 graph,
                 scl::Array<const scl::Index>(
                     reinterpret_cast<const scl::Index*>(initial_labels),
