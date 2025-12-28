@@ -13,20 +13,20 @@ Core modules provide:
 - **Error Handling** - Assertions and exceptions
 - **Vectorization** - Common vectorized operations
 
-## Module List
+## Files
 
-| Module | Purpose | Key Types |
-|--------|---------|-----------|
-| [Types](/cpp/core/types) | Fundamental types | `Real`, `Index`, `Size` |
-| [Sparse Matrix](/cpp/core/sparse) | Sparse matrix infrastructure | `Sparse<T, IsCSR>` |
-| [Registry](/cpp/core/registry) | Memory lifetime tracking | `Registry`, `BufferID` |
-| [SIMD](/cpp/core/simd) | SIMD abstraction | `Tag`, `Vec`, SIMD ops |
-| [Memory](/cpp/core/memory) | Aligned allocation | `aligned_alloc`, `aligned_free` |
-| [Vectorize](/cpp/core/vectorize) | Vectorized operations | `dot`, `norm`, `sum` |
-| [Sort](/cpp/core/sort) | High-performance sorting | `sort`, `sort_key_value` |
-| [Argsort](/cpp/core/argsort) | Argument sorting | `argsort_inplace`, `argsort_indirect` |
-| [Error Handling](/cpp/core/error) | Assertions and exceptions | `SCL_ASSERT`, `SCL_CHECK_*` |
-| [Macros](/cpp/core/macros) | Compiler macros | Platform detection, optimization hints |
+| File | Description | Main APIs |
+|------|-------------|-----------|
+| [type.hpp](./types) | Type system | Real, Index, Size, Array, Span |
+| [sparse.hpp](./sparse) | Sparse matrix | Sparse class, CSR/CSC format |
+| [registry.hpp](./registry) | Memory registry | Registry, BufferID, reference counting |
+| [simd.hpp](./simd) | SIMD abstraction | Tag, Vec, SIMD operations |
+| [memory.hpp](./memory) | Memory management | aligned_alloc, aligned_free |
+| [vectorize.hpp](./vectorize) | Vectorized ops | dot, norm, sum, vectorized functions |
+| [sort.hpp](./sort) | Sorting | sort, sort_key_value |
+| [argsort.hpp](./argsort) | Argument sorting | argsort_inplace, argsort_indirect |
+| [error.hpp](./error) | Error handling | SCL_ASSERT, SCL_CHECK_*, exceptions |
+| [macros.hpp](./macros) | Macros | Platform detection, optimization hints |
 
 ## Dependency Graph
 

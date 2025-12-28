@@ -25,8 +25,8 @@ import scl
 
 ## 文档
 
-- [用户指南](/zh/guide/getting-started) - 快速开始使用 SCL-Core
 - [C++ 开发者指南](/zh/cpp/) - 为 SCL-Core 做贡献
+- [快速开始](/zh/cpp/getting-started) - 开始使用 SCL-Core
 - [API 参考](/zh/api/) - 完整 API 文档
 
 ## 社区
@@ -37,6 +37,6 @@ import scl
 ---
 
 ::: tip 提示
-查看 [用户指南](/zh/guide/getting-started) 开始使用 SCL-Core。
+查看 [C++ 开发者指南](/zh/cpp/) 开始使用 SCL-Core。
 :::
 

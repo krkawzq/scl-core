@@ -1,247 +1,154 @@
-# 亚群分析
+# subpopulation.hpp
 
-用于亚群识别的聚类细化和稳定性评估。
+> scl/kernel/subpopulation.hpp · 亚群分析和聚类细化
 
-## 概览
+## 概述
 
-亚群分析内核提供：
+本文件提供单细胞数据中亚群分析和聚类细化的函数。包括递归子聚类和使用自举重采样的聚类稳定性评估。
 
-- **递归子聚类** - 分层聚类细化
-- **聚类稳定性** - 基于 bootstrap 的稳定性评估
-- **质量控制** - 识别稳健与不稳定的聚类
-- **细粒度分析** - 在聚类内发现亚群
+**头文件**: `#include "scl/kernel/subpopulation.hpp"`
 
-## 递归子聚类
-
-### recursive_subclustering
-
-在聚类内执行递归子聚类：
-
-```cpp
-#include "scl/kernel/subpopulation.hpp"
-
-Sparse<Real, true> expression = /* ... */;      // 表达矩阵 [n_cells x n_genes]
-Array<Index> cluster_labels = /* ... */;        // 初始聚类标签 [n_cells]
-Index n_cells = expression.rows();
-Array<Index> subcluster_labels(n_cells);        // 预分配输出
-
-// 标准子聚类（max_depth=3, min_size=10）
-scl::kernel::subpopulation::recursive_subclustering(
-    expression, cluster_labels, n_cells, subcluster_labels);
-
-// 自定义参数
-scl::kernel::subpopulation::recursive_subclustering(
-    expression, cluster_labels, n_cells, subcluster_labels,
-    max_depth = 4,                              // 更深层次
-    min_size = 20                               // 更大的最小聚类大小
-);
-```
-
-**参数：**
-- `expression`: 表达矩阵（细胞 × 基因，CSR 格式）
-- `cluster_labels`: 初始聚类标签，大小 = n_cells
-- `n_cells`: 细胞数量
-- `subcluster_labels`: 输出子聚类标签，必须预分配，大小 = n_cells
-- `max_depth`: 最大递归深度（默认：3）
-- `min_size`: 分割的最小聚类大小（默认：10）
-
-**后置条件：**
-- `subcluster_labels` 包含细化的子聚类分配
-- 子聚类是分层的（深度由标签编码表示）
-- 当适当时，原始聚类被分割为亚群
-
-**算法：**
-递归分层聚类：
-1. 对于每个聚类：
-   - 如果大小 < min_size：保留为叶节点
-   - 否则：应用聚类算法进行细分
-   - 递归处理每个子聚类
-2. 继续直到达到 max_depth 或聚类太小
-
-**复杂度：**
-- 时间：O(max_depth * n_cells * log(n_cells)) 每层
-- 空间：O(n_cells) 辅助空间用于标签和工作空间
-
-**线程安全：**
-- 不安全 - 带共享状态的递归算法
-
-**用例：**
-- 细粒度细胞类型识别
-- 分层聚类分析
-- 亚群发现
-- 注释的聚类细化
-
-## 聚类稳定性
-
-### cluster_stability
-
-使用 bootstrap 重采样评估聚类稳定性：
-
-```cpp
-Sparse<Real, true> expression = /* ... */;
-Array<Index> cluster_labels = /* ... */;        // 聚类标签 [n_cells]
-Index n_clusters = /* 唯一聚类数量 */;
-Array<Real> stability_scores(n_clusters);       // 预分配输出
-
-// 标准稳定性评估（100 次 bootstrap 迭代）
-scl::kernel::subpopulation::cluster_stability(
-    expression, cluster_labels, n_cells, stability_scores);
-
-// 自定义 bootstrap 迭代次数
-scl::kernel::subpopulation::cluster_stability(
-    expression, cluster_labels, n_cells, stability_scores,
-    n_bootstrap = 200,                          // 更多迭代
-    seed = 12345                                // 随机种子
-);
-```
-
-**参数：**
-- `expression`: 表达矩阵（细胞 × 基因，CSR 格式）
-- `cluster_labels`: 聚类标签，大小 = n_cells
-- `n_cells`: 细胞数量
-- `stability_scores`: 输出稳定性得分，必须预分配，大小 = n_clusters
-- `n_bootstrap`: Bootstrap 迭代次数（默认：100）
-- `seed`: 随机种子用于可重现性（默认：42）
-
-**后置条件：**
-- `stability_scores[c]` 包含聚类 c 的稳定性得分
-- 得分通常在范围 [0, 1]，更高 = 更稳定
-- 稳定聚类对数据扰动具有鲁棒性
-
-**算法：**
-Bootstrap 重采样方法：
-1. 对于每次 bootstrap 迭代：
-   - 有放回采样细胞
-   - 重新聚类采样细胞
-   - 计算与原始聚类的重叠
-2. 跨迭代聚合重叠得分
-3. 稳定性 = 平均一致性
-
-**复杂度：**
-- 时间：O(n_bootstrap * n_cells * log(n_cells)) - 由重新聚类主导
-- 空间：O(n_cells) 辅助空间用于 bootstrap 样本和标签
-
-**线程安全：**
-- 安全 - 跨 bootstrap 迭代并行化
-- 每次迭代是独立的
-
-**用例：**
-- 聚类结果的质量控制
-- 识别稳健与不稳定的聚类
-- 指导聚类细化决策
-- 验证聚类参数
-
-## 配置
-
-### 默认参数
-
-```cpp
-namespace config {
-    constexpr Real EPSILON = Real(1e-10);
-    constexpr Size MIN_CLUSTER_SIZE = 10;
-    constexpr Size DEFAULT_K = 5;
-    constexpr Size MAX_ITERATIONS = 100;
-    constexpr Size DEFAULT_BOOTSTRAP = 100;
-}
-```
-
-**最小聚类大小：**
-- 小于 `MIN_CLUSTER_SIZE` 的聚类不会被分割
-- 防止过度碎片化
-- 根据数据集大小调整
-
-**Bootstrap 迭代：**
-- 更多迭代 = 更可靠的稳定性得分
-- 默认 100 通常足够
-- 对高精度要求增加迭代次数
-
-## 示例
-
-### 分层子聚类
-
-```cpp
-#include "scl/kernel/subpopulation.hpp"
-
-// 初始聚类
-Sparse<Real, true> expression = /* ... */;
-Array<Index> initial_labels = /* ... */;  // 来自 Leiden/Louvain
-
-// 用子聚类细化
-Index n_cells = expression.rows();
-Array<Index> refined_labels(n_cells);
-
-scl::kernel::subpopulation::recursive_subclustering(
-    expression, initial_labels, n_cells, refined_labels,
-    max_depth = 3, min_size = 15);
-
-// refined_labels 现在包含分层子聚类
-```
-
-### 稳定性评估
-
-```cpp
-// 评估聚类结果的稳定性
-Array<Index> cluster_labels = /* ... */;
-Index n_clusters = *std::max_element(cluster_labels.begin(),
-                                     cluster_labels.end()) + 1;
-
-Array<Real> stability(n_clusters);
-scl::kernel::subpopulation::cluster_stability(
-    expression, cluster_labels, n_cells, stability,
-    n_bootstrap = 200);
-
-// 过滤不稳定聚类
-std::vector<Index> stable_clusters;
-for (Index c = 0; c < n_clusters; ++c) {
-    if (stability[c] > 0.7) {  // 稳定性阈值
-        stable_clusters.push_back(c);
-    }
-}
-
-std::cout << "发现 " << stable_clusters.size()
-          << " 个稳定聚类，共 " << n_clusters << " 个\n";
-```
-
-### 组合工作流
-
-```cpp
-// 1. 初始聚类
-Array<Index> initial_labels(n_cells);
-// ... 执行初始聚类 ...
-
-// 2. 评估稳定性
-Index n_clusters = /* ... */;
-Array<Real> stability(n_clusters);
-scl::kernel::subpopulation::cluster_stability(
-    expression, initial_labels, n_cells, stability);
-
-// 3. 细化稳定聚类
-Array<Index> refined_labels(n_cells);
-scl::kernel::subpopulation::recursive_subclustering(
-    expression, initial_labels, n_cells, refined_labels);
-
-// 4. 按稳定性过滤
-// 使用稳定性得分识别可靠的子聚类
-```
-
-## 性能考虑
-
-### 递归子聚类
-
-- 计算成本随深度扩展
-- 大聚类需要更多计算
-- 对于非常大的数据集，考虑限制 max_depth
-
-### Bootstrap 稳定性
-
-- 跨 bootstrap 迭代并行化
-- 每次迭代需要完全重新聚类
-- 总时间：O(n_bootstrap * clustering_time)
-- 对于初步探索，考虑减少 n_bootstrap
+主要特性：
+- 在现有聚类内进行递归子聚类
+- 通过自举评估聚类稳定性
+- 分层聚类细化
 
 ---
 
-::: tip 稳定性阈值
-使用稳定性得分指导下游分析：专注于稳定聚类进行标记识别和注释，谨慎对待不稳定聚类。
+## 主要 API
+
+### recursive_subclustering
+
+::: source_code file="scl/kernel/subpopulation.hpp" symbol="recursive_subclustering" collapsed
 :::
 
+**算法说明**
+
+在聚类内执行递归子聚类：
+
+1. 对于每个初始聚类：
+   - 如果聚类大小 >= min_size 且深度 < max_depth：
+     - 应用聚类算法（例如，k-means、Leiden）细分聚类
+     - 递归应用于每个子聚类
+     - 分配分层标签：`subcluster_labels[i] = parent_cluster * base + subcluster_id`
+   - 否则：保持原始聚类标签
+2. 构建最多 max_depth 层的分层聚类树
+3. 对独立聚类使用并行处理
+
+**边界条件**
+
+- **max_depth = 0**：返回原始聚类标签不变
+- **min_size 太大**：没有聚类被细分
+- **空聚类**：在递归中跳过
+- **单细胞聚类**：无法细分
+
+**数据保证（前置条件）**
+
+- `subcluster_labels` 容量 >= n_cells
+- `cluster_labels` 包含有效的聚类索引
+- 表达矩阵必须是有效的 CSR 格式
+- `min_size >= 2` 以进行有意义的细分
+
+**复杂度分析**
+
+- **时间**：O(max_depth * n_cells * log(n_cells)) - 每层聚类
+- **空间**：O(n_cells) 辅助空间
+
+**示例**
+
+```cpp
+#include "scl/kernel/subpopulation.hpp"
+
+scl::Sparse<Real, true> expression = /* 表达矩阵 */;
+scl::Array<Index> cluster_labels = /* 初始聚类 */;
+scl::Array<Index> subcluster_labels(n_cells);
+
+scl::kernel::subpopulation::recursive_subclustering(
+    expression, cluster_labels, n_cells,
+    subcluster_labels, 3,  // max_depth
+    10                     // min_size
+);
+
+// subcluster_labels 包含分层子聚类分配
+```
+
+---
+
+### cluster_stability
+
+::: source_code file="scl/kernel/subpopulation.hpp" symbol="cluster_stability" collapsed
+:::
+
+**算法说明**
+
+使用自举重采样评估聚类稳定性：
+
+1. 对于每次自举迭代（并行）：
+   - 有放回地采样细胞（自举样本）
+   - 对自举样本重新聚类
+   - 计算与原始聚类的聚类重叠
+   - 累加稳定性指标
+2. 对于每个聚类：
+   - 稳定性分数 = 跨自举迭代的平均 Jaccard 相似度
+   - 更高的分数表示更稳定的聚类
+3. 返回 [0, 1] 范围内的稳定性分数
+
+**边界条件**
+
+- **n_bootstrap = 0**：返回零稳定性分数
+- **小聚类**：由于采样方差可能具有低稳定性
+- **完美稳定性**：所有自举迭代产生相同的聚类
+
+**数据保证（前置条件）**
+
+- `stability_scores` 容量 >= n_clusters
+- `cluster_labels` 包含有效的聚类索引
+- 表达矩阵必须是有效的 CSR 格式
+- 随机种子确保可重现性
+
+**复杂度分析**
+
+- **时间**：O(n_bootstrap * n_cells * log(n_cells)) - 每次自举的聚类
+- **空间**：O(n_cells) 每线程辅助空间
+
+**示例**
+
+```cpp
+scl::Array<Real> stability_scores(n_clusters);
+
+scl::kernel::subpopulation::cluster_stability(
+    expression, cluster_labels, n_cells,
+    stability_scores,
+    100,  // n_bootstrap
+    42    // 种子
+);
+
+// stability_scores[c] 包含聚类 c 的稳定性分数
+// 更高的分数（接近 1.0）表示更稳定的聚类
+```
+
+---
+
+## 配置
+
+默认参数在 `scl::kernel::subpopulation::config` 中定义：
+
+- `EPSILON = 1e-10`：数值容差
+- `MIN_CLUSTER_SIZE = 10`：细分的最小聚类大小
+- `DEFAULT_K = 5`：k-means 子聚类的默认 k
+- `MAX_ITERATIONS = 100`：聚类算法的最大迭代次数
+- `DEFAULT_BOOTSTRAP = 100`：默认自举迭代次数
+
+---
+
+## 注意事项
+
+- 递归子聚类构建分层聚类树
+- 聚类稳定性有助于识别稳健与不稳定的聚类
+- 自举重采样为聚类分配提供统计置信度
+- 稳定性分数可用于过滤不可靠的聚类
+
+## 相关内容
+
+- [聚类模块](./leiden) - 用于聚类算法
+- [指标模块](./metrics) - 用于聚类质量指标

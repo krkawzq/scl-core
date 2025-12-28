@@ -11,10 +11,10 @@ hero:
   actions:
     - theme: brand
       text: Get Started
-      link: /guide/getting-started
+      link: /cpp/getting-started
     - theme: alt
-      text: API Reference
-      link: /api/
+      text: C++ Developer Guide
+      link: /cpp/
     - theme: alt
       text: View on GitHub
       link: https://github.com/krkawzq/scl-core
@@ -113,7 +113,7 @@ SCL-Core automatically detects the number of available CPU cores and parallelize
 
 - [GitHub Discussions](https://github.com/krkawzq/scl-core/discussions) - Ask questions and share ideas
 - [Issue Tracker](https://github.com/krkawzq/scl-core/issues) - Report bugs and request features
-- Contributing Guide - Learn how to contribute (coming soon)
+- [Contributing Guide](/CONTRIBUTING.md) - Learn how to contribute
 
 ## License
 

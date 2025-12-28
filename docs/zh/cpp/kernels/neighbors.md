@@ -1,37 +1,99 @@
-# 邻居搜索
+# neighbors.hpp
 
-带稀疏矩阵优化和 Cauchy-Schwarz 剪枝的 K 近邻（KNN）计算。
+> scl/kernel/neighbors.hpp · 使用欧氏距离的 K 近邻计算
 
 ## 概述
 
-邻居操作提供：
+本文件为稀疏矩阵使用欧氏距离提供高效的 K 近邻（KNN）计算。实现使用各种优化，包括 Cauchy-Schwarz 剪枝、自适应稀疏点积策略和 SIMD 优化操作。
 
-- **KNN 搜索** - 为每个样本找到 K 个最近邻
-- **欧氏距离** - L2 距离计算
-- **稀疏优化** - 高效的稀疏点积
-- **剪枝** - Cauchy-Schwarz 下界用于早期终止
+主要特性：
+- 基于欧氏距离的 KNN
+- 预计算的平方范数以提高效率
+- Cauchy-Schwarz 不等式用于剪枝
+- 自适应稀疏点积（线性合并、二分搜索、跳跃）
+- 用于维护 top-k 邻居的最大堆
+- 跨样本的线程安全并行化
 
-## 基本用法
+**头文件**: `#include "scl/kernel/neighbors.hpp"`
+
+---
+
+## 主要 API
 
 ### knn
 
-为稀疏矩阵中的每一行找到 K 个最近邻。
+使用欧氏距离查找稀疏矩阵中每一行的 K 个最近邻。
+
+::: source_code file="scl/kernel/neighbors.hpp" symbol="knn" collapsed
+:::
+
+**算法说明**
+
+对每个样本 i 并行执行：
+
+1. 维护大小为 k 的最大堆用于存储最近邻
+2. 对于每个候选 j != i：
+   a. **Cauchy-Schwarz 剪枝**：如果 `|norm_i - norm_j| >= current_max_distance` 则跳过
+     - 这使用 Cauchy-Schwarz 的下界：`|a-b| <= ||a-b||`
+   b. **稀疏点积**：使用自适应策略计算点积：
+     - **线性合并**：对于相似大小的向量（比例 < 32）
+     - **二分搜索**：对于比例 >= 32（较大向量长得多）
+     - **跳跃**：对于比例 >= 256（极端大小差异）
+   c. **距离计算**：`distance = sqrt(norm_i + norm_j - 2*dot)`
+     - 来自数值误差的负值钳制为 0
+   d. **堆更新**：如果距离 < 当前最大值，移除最大值并插入新邻居
+3. 对最终堆进行排序以获得按距离升序排列
+
+稀疏点积优化：
+- 非重叠索引范围的 8 路/4 路跳过
+- 在合并循环中预取以提高缓存效率
+- 在不相交范围上早期退出（O(1) 检查）
+
+**边界条件**
+
+- **存在的邻居少于 k 个**：剩余槽位填充 index=-1 和 distance=infinity
+- **排除自身**：样本 i 从其自己的邻居列表中排除
+- **全零样本**：正确计算距离（两个范数 = 0，距离 = 0）
+- **相同样本**：距离 = 0，如果允许将在邻居列表中
+- **来自数值误差的负距离**：在堆插入前钳制为 0
+- **空矩阵**：立即返回，所有索引 = -1
+
+**数据保证（前置条件）**
+
+- `norms_sq.len >= matrix.primary_dim()`（预计算的范数）
+- `norms_sq` 包含来自 `compute_norms()` 的有效平方范数
+- `out_indices.len >= matrix.primary_dim() * k`
+- `out_distances.len >= matrix.primary_dim() * k`
+- `k > 0`
+- 矩阵必须是有效的 CSR/CSC 格式
+
+**复杂度分析**
+
+- **时间**：最坏情况 O(n^2 * avg_nnz)，使用剪枝通常更好
+  - 最佳情况（重度剪枝）：O(n * k * log k)
+  - 使用 Cauchy-Schwarz 剪枝，许多候选者早期被跳过
+- **空间**：每个线程 O(k) 用于堆存储
+
+**示例**
 
 ```cpp
 #include "scl/kernel/neighbors.hpp"
 #include "scl/core/sparse.hpp"
 
-Sparse<Real, true> matrix = /* ... */;  // n_samples x n_features
+// 创建稀疏矩阵（n_samples x n_features）
+Sparse<Real, true> matrix(n_samples, n_features);
+// 用数据填充...
 
 // 预计算平方范数
-Array<Real> norms_sq(matrix.primary_dim());
+Array<Real> norms_sq(n_samples);
 scl::kernel::neighbors::compute_norms(matrix, norms_sq);
 
-// 找到 K 个最近邻
-Size k = 15;
-Array<Index> indices(matrix.primary_dim() * k);
-Array<Real> distances(matrix.primary_dim() * k);
+// 预分配输出
+Size k = 10;  // 邻居数量
+Array<Index> indices(n_samples * k);
+Array<Real> distances(n_samples * k);
 
+// 计算 KNN
 scl::kernel::neighbors::knn(
     matrix,
     norms_sq,
@@ -39,217 +101,58 @@ scl::kernel::neighbors::knn(
     indices,
     distances
 );
+
+// 结果：
+// 对于样本 i：
+// - indices[i*k : i*k+k] 包含 k 个最近邻的索引
+// - distances[i*k : i*k+k] 包含欧氏距离
+// - 邻居按距离排序（升序）
+// - 排除自身（i）
 ```
 
-**参数：**
-- `matrix` [in] - 稀疏矩阵（n_samples x n_features）
-- `norms_sq` [in] - 从 `compute_norms()` 预计算的平方范数
-- `k` [in] - 要找到的邻居数
-- `out_indices` [out] - 邻居索引，形状 (n_samples * k)
-- `out_distances` [out] - 邻居距离，形状 (n_samples * k)
+---
 
-**前置条件：**
-- `norms_sq.len >= matrix.primary_dim()`
-- `norms_sq` 包含来自 `compute_norms()` 的有效平方范数
-- `out_indices.len >= matrix.primary_dim() * k`
-- `out_distances.len >= matrix.primary_dim() * k`
-- `k > 0`
-
-**后置条件：**
-- 对于每个样本 i：
-  - `out_indices[i*k : i*k+k]` 包含 k 个最近邻的索引
-  - `out_distances[i*k : i*k+k]` 包含到邻居的欧氏距离
-  - 邻居按距离排序（升序）
-  - 自身（i）从邻居中排除
-- 如果存在的邻居少于 k 个：剩余槽位填充 index=-1 和 distance=infinity
-
-**算法：**
-对每个样本 i 并行：
-1. 维护大小为 k 的最大堆用于最近邻
-2. 对于每个候选 j != i：
-   a. Cauchy-Schwarz 剪枝：如果 |norm_i - norm_j| >= current_max 则跳过
-   b. 使用自适应策略计算稀疏点积：
-      - 线性合并：用于相似大小的向量
-      - 二分搜索：用于比例 >= 32
-      - 跳跃搜索：用于比例 >= 256
-   c. 计算距离：sqrt(norm_i + norm_j - 2*dot)
-   d. 如果距离 < 当前最大值则更新堆
-3. 对最终堆排序以获得升序
-
-**稀疏点积优化：**
-- 非重叠索引范围的 8 路/4 路跳过
-- 合并循环中的预取
-- 不相交范围的早期退出（O(1) 检查）
-
-**复杂度：**
-- 时间: O(n^2 * avg_nnz) 最坏情况，使用剪枝通常好得多
-- 空间: 每个线程 O(k) 用于堆存储
-
-**线程安全：**
-安全 - 按样本并行，使用线程本地工作空间
-
-**数值说明：**
-- 距离计算为 sqrt(norm_i + norm_j - 2*dot)
-- 数值误差导致的负值被钳制为 0
-- Cauchy-Schwarz 下界实现显著剪枝
-
-## 辅助函数
+## 工具函数
 
 ### compute_norms
 
-计算稀疏矩阵每行/列的平方 L2 范数。
+计算稀疏矩阵每一行/列的平方 L2 范数。必须在 `knn()` 之前调用。
+
+::: source_code file="scl/kernel/neighbors.hpp" symbol="compute_norms" collapsed
+:::
+
+**复杂度**
+
+- 时间：使用 SIMD 优化的 sum_squared O(nnz)
+- 空间：辅助空间 O(1)
+
+**示例**
 
 ```cpp
-Array<Real> norms_sq(matrix.primary_dim());
+Sparse<Real, true> matrix(n_samples, n_features);
+Array<Real> norms_sq(n_samples);
+
+// 在 KNN 之前计算范数
 scl::kernel::neighbors::compute_norms(matrix, norms_sq);
+
+// 现在在 knn() 中使用 norms_sq
+scl::kernel::neighbors::knn(matrix, norms_sq, k, indices, distances);
 ```
 
-**参数：**
-- `matrix` [in] - 稀疏矩阵（CSR 或 CSC）
-- `norms_sq` [out] - 预分配的平方范数缓冲区
+---
 
-**后置条件：**
-- `norms_sq[i] = 行/列 i 的平方值之和`
+## 数值注意事项
 
-**算法：**
-对每行并行：
-- 使用 SIMD 优化的 `scl::vectorize::sum_squared`
+- **距离公式**：`sqrt(norm_i + norm_j - 2*dot)`，其中 `norm_i = ||x_i||^2`
+- **数值稳定性**：来自 `norm_i + norm_j - 2*dot` 的负值钳制为 0（根据 Cauchy-Schwarz 应该非负）
+- **Cauchy-Schwarz 界**：`|norm_i - norm_j| <= ||x_i - x_j||` 用于剪枝
+- **稀疏点积**：基于大小比的自适应策略：
+  - 线性合并：当大小相似时 O(nnz1 + nnz2)
+  - 二分搜索：当比例 >= 32 时 O(nnz1 * log(nnz2))
+  - 跳跃：当比例 >= 256 时 O(nnz1 * log(nnz2/nnz1))
+- **堆操作**：维护最大堆，插入/删除为 O(log k)
 
-**复杂度：**
-- 时间: O(nnz)
-- 空间: O(1) 辅助空间
+## 相关内容
 
-**线程安全：**
-安全 - 按行并行，无共享可变状态
-
-**抛出：**
-`SCL_CHECK_DIM` - 如果 norms_sq 大小不足
-
-## 使用场景
-
-### 构建 KNN 图
-
-为下游分析构建 KNN 图：
-
-```cpp
-Sparse<Real, true> data = /* ... */;  // 细胞 x 基因
-
-// 计算范数
-Array<Real> norms_sq(data.primary_dim());
-scl::kernel::neighbors::compute_norms(data, norms_sq);
-
-// 找到邻居
-Size k = 15;
-Array<Index> knn_indices(data.primary_dim() * k);
-Array<Real> knn_distances(data.primary_dim() * k);
-
-scl::kernel::neighbors::knn(
-    data, norms_sq, k, knn_indices, knn_distances
-);
-
-// 构建邻接矩阵或图结构
-// 使用 knn_indices 和 knn_distances 构建图
-```
-
-### UMAP / t-SNE 预处理
-
-为降维准备 KNN 图：
-
-```cpp
-// 标准预处理
-Sparse<Real, true> normalized_data = /* ... */;
-
-Array<Real> norms_sq(normalized_data.primary_dim());
-scl::kernel::neighbors::compute_norms(normalized_data, norms_sq);
-
-Size k = 15;
-Array<Index> knn_indices(normalized_data.primary_dim() * k);
-Array<Real> knn_distances(normalized_data.primary_dim() * k);
-
-scl::kernel::neighbors::knn(
-    normalized_data, norms_sq, k, knn_indices, knn_distances
-);
-
-// 将 KNN 图传递给 UMAP/t-SNE
-```
-
-### 聚类预处理
-
-为 Leiden/Louvain 聚类计算 KNN：
-
-```cpp
-// 归一化并计算 KNN
-Sparse<Real, true> data = /* ... */;
-scl::kernel::normalize::normalize_rows_inplace(data, NormMode::L2);
-
-Array<Real> norms_sq(data.primary_dim());
-scl::kernel::neighbors::compute_norms(data, norms_sq);
-
-Array<Index> knn_indices(data.primary_dim() * 15);
-Array<Real> knn_distances(data.primary_dim() * 15);
-
-scl::kernel::neighbors::knn(
-    data, norms_sq, 15, knn_indices, knn_distances
-);
-
-// 转换为图并聚类
-// 与 scl::kernel::leiden 或 scl::kernel::louvain 一起使用
-```
-
-## 性能
-
-### 剪枝优化
-
-Cauchy-Schwarz 下界实现早期终止：
-- 跳过 |norm_i - norm_j| >= current_max_distance 的候选
-- 在典型情况下减少 50-90% 的计算
-
-### 稀疏点积
-
-基于向量大小比例的自适应策略：
-- 线性合并：O(nnz1 + nnz2) 用于相似大小
-- 二分搜索：O(nnz1 * log(nnz2)) 用于比例 >= 32
-- 跳跃搜索：O(nnz1 * log(nnz2/nnz1)) 用于比例 >= 256
-
-### SIMD 优化
-
-- SIMD 优化的范数计算
-- 合并循环中的预取
-- 非重叠范围的 8 路/4 路跳过
-
-### 并行化
-
-- 按样本并行
-- 线程本地堆存储
-- 无同步开销
-
-## 算法细节
-
-### 距离计算
-
-欧氏距离: sqrt(norm_i + norm_j - 2*dot)
-
-其中：
-- norm_i = ||x_i||^2（预计算）
-- norm_j = ||x_j||^2（预计算）
-- dot = x_i · x_j（通过稀疏点积计算）
-
-### Cauchy-Schwarz 剪枝
-
-下界: |norm_i - norm_j| <= ||x_i - x_j||
-
-如果 |norm_i - norm_j| >= current_max_distance：
-- 跳过候选 j（不可能比当前最大值更近）
-
-### 堆管理
-
-大小为 k 的最大堆：
-- 维护到目前为止看到的 k 个最近邻
-- O(log k) 插入
-- 最终排序: O(k log k)
-
-## 参见
-
-- [BBKNN](/zh/cpp/kernels/bbknn) - 批次平衡 KNN
-- [空间](/zh/cpp/kernels/spatial) - 空间邻居搜索
-
+- [BBKNN](/zh/cpp/kernels/bbknn) - 用于批次整合的批次平衡 KNN
+- [Normalization](/zh/cpp/kernels/normalization) - 在计算距离之前归一化矩阵

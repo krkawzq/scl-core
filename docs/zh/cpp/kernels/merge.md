@@ -1,197 +1,193 @@
-# 矩阵合并
+# merge.hpp
 
-垂直和水平堆叠稀疏矩阵。
+> scl/kernel/merge.hpp · 矩阵合并和拼接操作
 
 ## 概述
 
-合并操作提供：
+高效的稀疏矩阵拼接操作，用于沿主维度（行）或次维度（列）合并矩阵。这些操作对于数据整合、批次合并和单细胞分析中的特征组合至关重要。
 
-- **垂直堆叠** - 沿主轴连接矩阵（CSR 为行，CSC 为列）
-- **水平堆叠** - 沿次轴连接矩阵（CSR 为列，CSC 为行）
-- **高效复制** - 带 SIMD 优化的并行内存操作
-- **内存管理** - 灵活的块分配策略
+本文件提供：
+- 垂直堆叠 (vstack) - 沿行拼接
+- 水平堆叠 (hstack) - 沿列拼接
+- SIMD 优化的索引偏移操作
+- 大型矩阵的并行内存复制
 
-## 垂直堆叠
+**头文件**: `#include "scl/kernel/merge.hpp"`
+
+---
+
+## 主要 API
 
 ### vstack
 
-垂直堆叠两个稀疏矩阵（沿主轴连接）。
+::: source_code file="scl/kernel/merge.hpp" symbol="vstack" collapsed
+:::
+
+**算法说明**
+
+通过沿主维度（CSR 为行，CSC 为列）拼接来垂直堆叠两个稀疏矩阵：
+
+1. **维度验证**：检查矩阵是否可以垂直堆叠（次维度可以不同）
+2. **结果大小计算**：
+   - 结果主维度 = matrix1.主维度 + matrix2.主维度
+   - 结果次维度 = max(matrix1.次维度, matrix2.次维度)
+   - 结果 nnz = matrix1.nnz + matrix2.nnz
+3. **内存分配**：使用指定的块策略分配结果矩阵
+4. **数据复制**（并行处理行）：
+   - 将 matrix1 的行复制到 result[0 : n1]（索引不变）
+   - 将 matrix2 的行复制到 result[n1 : n1+n2]（索引不变，如果次维度不同可能有间隙）
+5. **索引指针设置**：为合并结构正确设置 indptr 数组
+
+对于 CSR 矩阵：matrix1 的行放在前面，然后是 matrix2 的行。列索引保持不变。
+
+**边界条件**
+
+- **空 matrix1**：返回 matrix2 的副本
+- **空 matrix2**：返回 matrix1 的副本
+- **两者都为空**：返回具有正确维度的空矩阵
+- **不同的次维度**：使用最大维度，matrix2 索引保持有效（不需要偏移）
+- **一个矩阵的次维度为零**：正确处理，结果使用非零维度
+
+**数据保证（前置条件）**
+
+- 两个矩阵都必须是有效的稀疏矩阵
+- 矩阵必须具有相同的格式（都是 CSR 或都是 CSC）
+- 对于 CSR：次维度（列）可以不同
+- 对于 CSC：次维度（行）可以不同
+- 使用块策略进行结果分配
+
+**复杂度分析**
+
+- **时间**：O(nnz1 + nnz2)，其中 nnz1 和 nnz2 是每个矩阵的非零元素数量。并行复制操作减少了有效时间。
+- **空间**：O(nnz1 + nnz2) 用于结果矩阵存储
+
+**示例**
 
 ```cpp
 #include "scl/kernel/merge.hpp"
-#include "scl/core/sparse.hpp"
 
-Sparse<Real, true> matrix1 = /* ... */;  // 第一个矩阵
-Sparse<Real, true> matrix2 = /* ... */;  // 第二个矩阵
+Sparse<Real, true> matrix1 = /* n1 x m1 稀疏矩阵 */;
+Sparse<Real, true> matrix2 = /* n2 x m2 稀疏矩阵 */;
 
-auto result = scl::kernel::merge::vstack(matrix1, matrix2);
-// result 包含垂直堆叠的矩阵
-```
+// 垂直堆叠（对于 CSR：堆叠行）
+auto vstacked = scl::kernel::merge::vstack(matrix1, matrix2);
 
-**参数：**
-- `matrix1` [in] - 第一个稀疏矩阵
-- `matrix2` [in] - 第二个稀疏矩阵
-- `strategy` [in] - 结果的块分配策略（默认：自适应）
+// 结果是 (n1+n2) x max(m1, m2) 稀疏矩阵
+// 行 0 到 n1-1 来自 matrix1
+// 行 n1 到 n1+n2-1 来自 matrix2
 
-**前置条件：**
-- 对于 CSR：列可以不同（结果使用最大值）
-- 对于 CSC：行可以不同（结果使用最大值）
-
-**后置条件：**
-- 结果 primary_dim = matrix1.primary_dim + matrix2.primary_dim
-- 结果 secondary_dim = max(matrix1.secondary_dim, matrix2.secondary_dim)
-- 行 0..n1-1 来自 matrix1，行 n1..n1+n2-1 来自 matrix2
-- 索引不变（次维保留）
-
-**返回：**
-包含垂直堆叠数据的新稀疏矩阵
-
-**算法：**
-1. 计算结果的行长度
-2. 使用组合结构分配结果矩阵
-3. 并行复制 matrix1 的行到 result[0:n1]
-4. 并行复制 matrix2 的行到 result[n1:n1+n2]
-
-**复杂度：**
-- 时间: O(nnz1 + nnz2)
-- 空间: O(nnz1 + nnz2) 用于结果
-
-**线程安全：**
-安全 - 并行复制独立区域
-
-**使用场景：**
-- 合并具有相同特征的数据集
-- 将新样本追加到现有矩阵
-- 合并时间序列数据
-
-## 水平堆叠
-
-### hstack
-
-水平堆叠两个稀疏矩阵（沿次轴连接）。
-
-```cpp
-auto result = scl::kernel::merge::hstack(matrix1, matrix2);
-// result 包含水平堆叠的矩阵
-```
-
-**参数：**
-- `matrix1` [in] - 第一个稀疏矩阵
-- `matrix2` [in] - 第二个稀疏矩阵
-- `strategy` [in] - 结果的块分配策略（默认：自适应）
-
-**前置条件：**
-- matrix1.primary_dim == matrix2.primary_dim（必须匹配）
-
-**后置条件：**
-- 结果 primary_dim = matrix1.primary_dim（不变）
-- 结果 secondary_dim = matrix1.secondary_dim + matrix2.secondary_dim
-- 对于每一行：[matrix1 列 | 带偏移的 matrix2 列]
-- matrix2 索引偏移 matrix1.secondary_dim
-
-**返回：**
-包含水平堆叠数据的新稀疏矩阵
-
-**算法：**
-1. 验证主维匹配
-2. 计算组合的行长度
-3. 分配结果矩阵
-4. 并行处理行：
-   - 复制 matrix1 的值和索引
-   - 复制 matrix2 的值
-   - 向 matrix2 索引添加偏移（SIMD 优化）
-
-**复杂度：**
-- 时间: O(nnz1 + nnz2)
-- 空间: O(nnz1 + nnz2) 用于结果
-
-**线程安全：**
-安全 - 在独立行上并行
-
-**抛出：**
-`DimensionError` - 如果主维不匹配
-
-**使用场景：**
-- 合并特征集
-- 连接来自不同批次的基因表达
-- 合并具有相同样本的矩阵
-
-## 示例
-
-### 合并数据集
-
-合并具有相同基因的两个表达矩阵：
-
-```cpp
-Sparse<Real, true> batch1 = /* ... */;  // 细胞 x 基因
-Sparse<Real, true> batch2 = /* ... */;  // 细胞 x 基因
-
-// 垂直堆叠（合并细胞）
-auto combined = scl::kernel::merge::vstack(batch1, batch2);
-// combined 有 (batch1.rows() + batch2.rows()) 行
-```
-
-### 连接特征
-
-合并具有相同细胞但不同特征的矩阵：
-
-```cpp
-Sparse<Real, true> rna = /* ... */;    // 细胞 x RNA 基因
-Sparse<Real, true> protein = /* ... */; // 细胞 x 蛋白质
-
-// 水平堆叠（合并特征）
-auto multiome = scl::kernel::merge::hstack(rna, protein);
-// multiome 有 rna.rows() 行和 (rna.cols() + protein.cols()) 列
-```
-
-### 内存策略
-
-为大型矩阵选择分配策略：
-
-```cpp
-// 使用自适应策略（默认）
-auto result1 = scl::kernel::merge::vstack(m1, m2);
-
-// 使用特定策略
-auto result2 = scl::kernel::merge::vstack(
-    m1, m2,
-    BlockStrategy::contiguous()  // 强制连续分配
+// 使用自定义块分配策略
+auto vstacked_custom = scl::kernel::merge::vstack(
+    matrix1, matrix2, BlockStrategy::adaptive()
 );
 ```
 
-## 性能
+---
 
-### 并行化
+### hstack
 
-- 大型块的并行内存复制
-- 独立行处理
-- 无同步开销
+::: source_code file="scl/kernel/merge.hpp" symbol="hstack" collapsed
+:::
 
-### SIMD 优化
+**算法说明**
 
-- SIMD 优化的索引偏移加法
-- 复制循环中的预取
-- 高效的内存访问模式
+通过沿次维度（CSR 为列，CSC 为行）拼接来水平堆叠两个稀疏矩阵：
 
-### 内存效率
+1. **维度验证**：验证主维度匹配（CSR 为行，CSC 为列）
+2. **结果大小计算**：
+   - 结果主维度 = matrix1.主维度（不变）
+   - 结果次维度 = matrix1.次维度 + matrix2.次维度
+   - 结果 nnz = matrix1.nnz + matrix2.nnz
+3. **内存分配**：分配结果矩阵
+4. **数据复制**（对于 CSR 并行处理行）：
+   - 对每一行并行处理：
+     - 将 matrix1 的值和索引复制到结果
+     - 将 matrix2 的值复制到结果
+     - 使用 SIMD 优化的加法将偏移（matrix1.次维度）添加到 matrix2 索引
+     - 如果需要，合并排序的索引（两个矩阵都应有排序的索引）
+5. **索引合并**：合并每行中来自两个矩阵的索引，保持排序顺序
 
-- 自适应块分配
-- 最小化中间分配
-- 高效的稀疏矩阵构建
+对于 CSR 矩阵：每行包含来自 matrix1 的列，后跟来自 matrix2 的列。Matrix2 的列索引偏移了 matrix1.cols()。
+
+**边界条件**
+
+- **空 matrix1**：返回 matrix2，索引不变（不需要偏移）
+- **空 matrix2**：返回 matrix1 的副本
+- **两者都为空**：返回具有正确维度的空矩阵
+- **主维度不匹配**：抛出 DimensionError
+- **零偏移**：早期退出优化（不需要索引调整）
+
+**数据保证（前置条件）**
+
+- 两个矩阵都必须是有效的稀疏矩阵
+- 矩阵必须具有相同的格式（都是 CSR 或都是 CSC）
+- 主维度必须匹配：matrix1.主维度 == matrix2.主维度
+- 索引应在每行（CSR）或每列（CSC）内排序以获得最佳性能
+- 使用块策略进行结果分配
+
+**复杂度分析**
+
+- **时间**：O(nnz1 + nnz2) 用于数据复制。索引偏移加法使用 SIMD 优化进行批量操作。索引合并（如需要）增加 O(n * log(k))，其中 n 是行数，k 是每行平均非零元素数。
+- **空间**：O(nnz1 + nnz2) 用于结果矩阵
+
+**示例**
+
+```cpp
+#include "scl/kernel/merge.hpp"
+
+Sparse<Real, true> matrix1 = /* n x m1 稀疏矩阵 */;
+Sparse<Real, true> matrix2 = /* n x m2 稀疏矩阵 */;  // 相同的行数
+
+// 水平堆叠（对于 CSR：堆叠列）
+auto hstacked = scl::kernel::merge::hstack(matrix1, matrix2);
+
+// 结果是 n x (m1+m2) 稀疏矩阵
+// 每行包含来自 matrix1 的列 0 到 m1-1，
+// 后跟来自 matrix2 的列 m1 到 m1+m2-1
+// Matrix2 的列索引偏移了 m1
+
+// 使用自定义块策略
+auto hstacked_custom = scl::kernel::merge::hstack(
+    matrix1, matrix2, BlockStrategy::adaptive()
+);
+```
+
+---
 
 ## 实现细节
 
-### 索引偏移加法
+### SIMD 优化
 
-对于水平堆叠，matrix2 的索引通过 SIMD 优化的加法偏移 matrix1.secondary_dim：
+`hstack` 函数使用 SIMD（单指令多数据）指令进行高效的索引偏移加法：
 
-```cpp
-// offset == 0: 直接 memcpy（提前退出）
-// 否则：2 路 SIMD 展开循环
-```
+- 当偏移 > 0 时，批量加法使用 2 路 SIMD 展开循环
+- 标量清理处理剩余元素
+- 当偏移 == 0 时早期退出优化（直接 memcpy）
 
-### 并行内存复制
+### 并行处理
 
-大型内存块使用并行复制：
-- count < chunk_size: 单次 memcpy
-- 否则：并行处理块，带预取
+`vstack` 和 `hstack` 都使用并行处理：
+
+- **vstack**：并行复制行/列（主维度）
+- **hstack**：并行处理行（CSR）或列（CSC）
+- 大型数据块使用带预取的并行 memcpy
+
+### 内存管理
+
+- 结果矩阵使用 `BlockStrategy` 分配以进行高效的稀疏存储
+- 默认策略是 `BlockStrategy::adaptive()`，它选择最优的块大小
+- 在可能的情况下连续分配内存以获得更好的缓存性能
+
+## 注意事项
+
+- **索引排序**：为了获得最佳性能，输入矩阵应在每行（CSR）或每列（CSC）内具有排序的索引。实现在结果中保持排序顺序。
+- **格式一致性**：两个输入矩阵必须使用相同的存储格式（都是 CSR 或都是 CSC）。
+- **维度约束**：
+  - `vstack`：次维度可以不同（使用最大值）
+  - `hstack`：主维度必须完全匹配
+- **稀疏效率**：这些操作针对稀疏矩阵进行了优化，并高效地保留稀疏结构。
+
+## 相关内容
+
+- [稀疏矩阵](../core/sparse) - 稀疏矩阵数据结构文档
+- [内存管理](../core/memory) - 块分配策略

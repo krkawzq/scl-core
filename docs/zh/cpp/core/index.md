@@ -13,17 +13,20 @@
 - **错误处理** - 断言和异常
 - **向量化** - 通用向量化操作
 
-## 模块列表
+## 文件列表
 
-| 模块 | 用途 | 关键类型 |
+| 文件 | 说明 | 主要 API |
 |------|------|----------|
-| [类型系统](/zh/cpp/core/types) | 基本类型 | `Real`, `Index`, `Size` |
-| [稀疏矩阵](/zh/cpp/core/sparse) | 稀疏矩阵基础设施 | `Sparse<T, IsCSR>` |
-| [注册表](/zh/cpp/core/registry) | 内存生命周期跟踪 | `Registry`, `BufferID` |
-| [SIMD](/zh/cpp/core/simd) | SIMD 抽象 | `Tag`, `Vec`, SIMD 操作 |
-| [错误处理](/zh/cpp/core/error) | 断言和异常 | `SCL_ASSERT`, `SCL_CHECK_*` |
-| [内存](/zh/cpp/core/memory) | 对齐分配 | `aligned_alloc`, `aligned_free` |
-| [向量化](/zh/cpp/core/vectorize) | 向量化操作 | `dot`, `norm`, `sum` |
+| [type.hpp](./types) | 类型系统 | Real, Index, Size, Array |
+| [sparse.hpp](./sparse) | 稀疏矩阵 | Sparse 类，CSR/CSC 格式 |
+| [registry.hpp](./registry) | 内存注册表 | Registry, BufferID, 引用计数 |
+| [simd.hpp](./simd) | SIMD 抽象 | Tag, Vec, SIMD 操作 |
+| [memory.hpp](./memory) | 内存管理 | aligned_alloc, aligned_free |
+| [vectorize.hpp](./vectorize) | 向量化操作 | dot, norm, sum, 向量化函数 |
+| [sort.hpp](./sort) | 排序 | sort, sort_key_value |
+| [argsort.hpp](./argsort) | 参数排序 | argsort_inplace, argsort_indirect |
+| [error.hpp](./error) | 错误处理 | SCL_ASSERT, SCL_CHECK_*, 异常 |
+| [macros.hpp](./macros) | 宏 | 平台检测，优化提示 |
 
 ## 依赖图
 
@@ -287,13 +290,16 @@ for (size_t i = 0; i < n; ++i) {
 
 详细了解每个核心模块：
 
-- [类型系统](/zh/cpp/core/types) - 类型系统和配置
-- [稀疏矩阵](/zh/cpp/core/sparse) - 稀疏矩阵基础设施
-- [注册表](/zh/cpp/core/registry) - 内存生命周期跟踪
-- [SIMD](/zh/cpp/core/simd) - SIMD 抽象
-- [错误处理](/zh/cpp/core/error) - 断言和异常
-- [内存](/zh/cpp/core/memory) - 对齐分配
-- [向量化](/zh/cpp/core/vectorize) - 向量化操作
+- [类型系统](./types) - 类型系统和配置
+- [稀疏矩阵](./sparse) - 稀疏矩阵基础设施
+- [注册表](./registry) - 内存生命周期跟踪
+- [SIMD](./simd) - SIMD 抽象
+- [内存管理](./memory) - 对齐分配
+- [向量化](./vectorize) - 向量化操作
+- [排序](./sort) - 高性能排序
+- [参数排序](./argsort) - 参数排序（索引）
+- [错误处理](./error) - 断言和异常
+- [宏](./macros) - 编译器宏和平台检测
 
 ---
 

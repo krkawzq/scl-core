@@ -1,360 +1,202 @@
-# 矩阵切片
+# slice.hpp
 
-沿主维或次维切片和过滤稀疏矩阵。
+> scl/kernel/slice.hpp · 稀疏矩阵切片内核
 
 ## 概述
 
-切片操作提供：
+本文件提供用于沿主维度和次维度切片稀疏矩阵的高性能内核。支持高效的检查（统计非零）、物化（复制到预分配数组）和创建新稀疏矩阵的完整切片操作。所有操作都经过并行化并针对缓存效率进行了优化。
 
-- **主维切片** - 选择特定行（CSR）或列（CSC）
-- **次维过滤** - 使用布尔掩码过滤列（CSR）或行（CSC）
-- **高效检查** - 在分配前统计非零数
-- **内存高效** - 两阶段方法（检查然后物化）
+**头文件**: `#include "scl/kernel/slice.hpp"`
 
-## 主维切片
+---
+
+## 主要 API
 
 ### slice_primary
 
-创建包含所选主维切片的新稀疏矩阵。
+::: source_code file="scl/kernel/slice.hpp" symbol="slice_primary" collapsed
+:::
+
+**算法说明**
+
+创建包含选定主维度切片（CSR 的行，CSC 的列）的新稀疏矩阵：
+
+1. 调用 `inspect_slice_primary` 统计选定切片中的总非零数
+2. 分配适当大小的输出数组（data、indices、indptr）
+3. 调用 `materialize_slice_primary` 复制选定的切片
+4. 将数组包装为新 Sparse 矩阵
+5. 结果保留 `keep_indices` 的顺序并保持次维度
+
+**边界条件**
+
+- **空选择**: 返回零行/列的空矩阵
+- **选择所有索引**: 返回原始矩阵的副本
+- **无效索引**: 如果索引超出范围，行为未定义
+- **重复索引**: keep_indices 中的重复索引导致重复行/列
+
+**数据保证（前置条件）**
+
+- `keep_indices` 中的所有索引在范围 [0, primary_dim) 内
+- 源矩阵是有效的 CSR 或 CSC 格式
+- `keep_indices` 可能未排序
+
+**复杂度分析**
+
+- **时间**: O(nnz_output / n_threads + n_keep) - 并行复制加上元数据设置
+- **空间**: O(nnz_output) 用于结果矩阵
+
+**示例**
 
 ```cpp
 #include "scl/kernel/slice.hpp"
-#include "scl/core/sparse.hpp"
 
-Sparse<Real, true> matrix = /* ... */;
-Array<Index> keep_indices = /* ... */;  // 要保留的行的索引
+Sparse<Real, true> matrix = /* 源矩阵，CSR */;
+Array<const Index> keep_indices = /* 要保留的行索引 */;
 
-auto result = scl::kernel::slice::slice_primary(matrix, keep_indices);
-// result 仅包含选定的行
-```
-
-**参数：**
-- `matrix` [in] - 源稀疏矩阵
-- `keep_indices` [in] - 要保留的行（CSR）或列（CSC）的索引
-
-**前置条件：**
-- 所有索引在范围 [0, primary_dim) 内
-
-**后置条件：**
-- 结果仅包含选定的行/列
-- 列/行索引不变（次维保留）
-- 顺序匹配 keep_indices 顺序
-
-**返回：**
-包含选定切片的新稀疏矩阵
-
-**算法：**
-1. inspect_slice_primary 统计输出非零数
-2. 分配输出数组
-3. materialize_slice_primary 复制数据
-4. 包装为新 Sparse 矩阵
-
-**复杂度：**
-- 时间: O(nnz_output / n_threads + n_keep)
-- 空间: O(nnz_output) 用于结果
-
-**线程安全：**
-安全 - 使用并行物化
-
-**使用场景：**
-- 选择样本/细胞子集
-- 按元数据过滤
-- 创建训练/测试分割
-
-### inspect_slice_primary
-
-统计所选主维切片中的总非零数。
-
-```cpp
-Index nnz_output = scl::kernel::slice::inspect_slice_primary(
+Sparse<Real, true> sliced = scl::kernel::slice::slice_primary(
     matrix,
     keep_indices
 );
-// 返回选定切片中的总非零数
+
+// sliced 仅包含选定的行，列保留
 ```
 
-**参数：**
-- `matrix` [in] - 要切片的稀疏矩阵
-- `keep_indices` [in] - 要保留的主维元素的索引
-
-**前置条件：**
-- keep_indices 中的所有索引在范围 [0, primary_dim) 内
-
-**后置条件：**
-- 返回选定索引的行长度之和
-
-**返回：**
-选定切片中的总非零数
-
-**算法：**
-使用 parallel_reduce_nnz 对 keep_indices 进行并行归约
-
-**复杂度：**
-- 时间: O(n_keep / n_threads)
-- 空间: O(n_threads) 用于部分和
-
-**线程安全：**
-安全 - 只读并行归约
-
-**使用场景：**
-- 预分配输出数组
-- 估算内存需求
-
-### materialize_slice_primary
-
-将选定的主维切片复制到预分配的输出数组。
-
-```cpp
-Array<Real> out_data(nnz_output);
-Array<Index> out_indices(nnz_output);
-Array<Index> out_indptr(keep_indices.len + 1);
-
-scl::kernel::slice::materialize_slice_primary(
-    matrix,
-    keep_indices,
-    out_data,
-    out_indices,
-    out_indptr
-);
-```
-
-**参数：**
-- `matrix` [in] - 源稀疏矩阵
-- `keep_indices` [in] - 要保留的行/列的索引
-- `out_data` [out] - 输出值数组
-- `out_indices` [out] - 输出列/行索引数组
-- `out_indptr` [out] - 输出行/列指针数组
-
-**前置条件：**
-- out_data.len >= inspect_slice_primary 结果
-- out_indices.len >= inspect_slice_primary 结果
-- out_indptr.len >= keep_indices.len + 1
-
-**后置条件：**
-- out_data 包含按顺序复制的值
-- out_indices 包含复制的索引（不变）
-- out_indptr[i] = 第 i 个选定行的起始位置
-
-**算法：**
-1. 顺序扫描构建 out_indptr
-2. 使用 fast_copy_with_prefetch 并行复制数据和索引
-
-**复杂度：**
-- 时间: O(nnz_output / n_threads + n_keep)
-- 空间: O(1) 超出输出
-
-**线程安全：**
-安全 - 并行复制到不相交的输出区域
-
-## 次维过滤
+---
 
 ### filter_secondary
 
-创建通过次维掩码过滤的新稀疏矩阵。
+::: source_code file="scl/kernel/slice.hpp" symbol="filter_secondary" collapsed
+:::
+
+**算法说明**
+
+通过次维度掩码（CSR 的列，CSC 的行）过滤创建新稀疏矩阵：
+
+1. 构建从旧到新次维度索引的索引映射（紧凑范围）
+2. 调用 `inspect_filter_secondary` 统计过滤后的非零数
+3. 分配适当大小的输出数组
+4. 调用 `materialize_filter_secondary` 复制并重新映射索引
+5. 结果具有紧凑的次维度 [0, new_secondary_dim)
+
+**边界条件**
+
+- **全零掩码**: 返回空矩阵（零列/行）
+- **全一掩码**: 返回原始矩阵的副本
+- **稀疏掩码**: 高效处理只有少数 1 的掩码
+- **索引重新映射**: 旧索引重新映射到紧凑范围
+
+**数据保证（前置条件）**
+
+- `mask.len >= secondary_dim`
+- 掩码值为 0 或 1
+- 源矩阵是有效的稀疏格式
+
+**复杂度分析**
+
+- **时间**: O(nnz / n_threads + secondary_dim) - 并行过滤加上映射
+- **空间**: O(nnz_output + secondary_dim) 用于结果和索引映射
+
+**示例**
 
 ```cpp
-Array<uint8_t> mask(secondary_dim);  // 1 = 保留, 0 = 移除
-// ... 填充 mask ...
+Array<const uint8_t> mask = /* 列的布尔掩码 */;
 
-auto result = scl::kernel::slice::filter_secondary(matrix, mask);
-// result 仅包含 mask[index] == 1 的元素
-```
-
-**参数：**
-- `matrix` [in] - 源稀疏矩阵
-- `mask` [in] - 列（CSR）或行（CSC）的布尔掩码
-
-**前置条件：**
-- mask.len >= secondary_dim
-- mask 值为 0 或 1
-
-**后置条件：**
-- 结果 secondary_dim = mask 中 1 的计数
-- 仅保留 mask[index] == 1 的元素
-- 索引重新映射到紧凑范围 [0, new_secondary_dim)
-
-**返回：**
-具有过滤次维的新稀疏矩阵
-
-**算法：**
-1. 构建索引映射（旧 -> 新索引）
-2. inspect_filter_secondary 统计输出非零数
-3. 分配输出数组
-4. materialize_filter_secondary 复制并重新映射
-
-**复杂度：**
-- 时间: O(nnz / n_threads + secondary_dim)
-- 空间: O(nnz_output + secondary_dim)
-
-**线程安全：**
-安全 - 使用并行物化
-
-**使用场景：**
-- 选择特征/基因子集
-- 按表达阈值过滤
-- 特征选择
-
-### inspect_filter_secondary
-
-通过次维掩码过滤后统计非零数。
-
-```cpp
-Index nnz_output = scl::kernel::slice::inspect_filter_secondary(
+Sparse<Real, true> filtered = scl::kernel::slice::filter_secondary(
     matrix,
     mask
 );
-// 返回 mask[index] == 1 的元素计数
+
+// filtered 仅包含 mask[col] == 1 的列
+// 列索引重新映射到 [0, new_n_cols)
 ```
 
-**参数：**
-- `matrix` [in] - 要过滤的稀疏矩阵
-- `mask` [in] - 次维的布尔掩码（1 = 保留）
+---
 
-**前置条件：**
-- mask.len >= secondary_dim
-- mask 值为 0 或 1
+## 工具函数
 
-**后置条件：**
-- 返回 mask[index] == 1 的元素计数
+### inspect_slice_primary
 
-**返回：**
-过滤后的总非零数
+统计选定主维度切片中的总非零数。
 
-**算法：**
-使用 count_masked_fast（8 路展开）进行并行归约
+::: source_code file="scl/kernel/slice.hpp" symbol="inspect_slice_primary" collapsed
+:::
 
-**复杂度：**
+**复杂度**
+
+- 时间: O(n_keep / n_threads)
+- 空间: O(n_threads) 用于部分和
+
+---
+
+### materialize_slice_primary
+
+将选定的主维度切片复制到预分配的输出数组。
+
+::: source_code file="scl/kernel/slice.hpp" symbol="materialize_slice_primary" collapsed
+:::
+
+**复杂度**
+
+- 时间: O(nnz_output / n_threads + n_keep)
+- 空间: O(1) 超出输出
+
+---
+
+### inspect_filter_secondary
+
+统计通过次维度掩码过滤后的非零数。
+
+::: source_code file="scl/kernel/slice.hpp" symbol="inspect_filter_secondary" collapsed
+:::
+
+**复杂度**
+
 - 时间: O(nnz / n_threads)
 - 空间: O(n_threads) 用于部分和
 
-**线程安全：**
-安全 - 只读并行归约
+---
 
 ### materialize_filter_secondary
 
-将通过次维掩码的元素复制到预分配的输出。
+将通过次掩码的元素复制到预分配的输出，并进行索引重新映射。
 
-```cpp
-Array<Index> new_indices = /* 从 mask 构建 */;
-Array<Real> out_data(nnz_output);
-Array<Index> out_indices(nnz_output);
-Array<Index> out_indptr(primary_dim + 1);
+::: source_code file="scl/kernel/slice.hpp" symbol="materialize_filter_secondary" collapsed
+:::
 
-scl::kernel::slice::materialize_filter_secondary(
-    matrix,
-    mask,
-    new_indices,
-    out_data,
-    out_indices,
-    out_indptr
-);
-```
+**复杂度**
 
-**参数：**
-- `matrix` [in] - 源稀疏矩阵
-- `mask` [in] - 次维的布尔掩码
-- `new_indices` [in] - 从旧到新次维索引的映射
-- `out_data` [out] - 输出值
-- `out_indices` [out] - 输出索引（重新映射）
-- `out_indptr` [out] - 输出行指针
-
-**前置条件：**
-- new_indices 通过 build_index_mapping 构建
-- 输出数组按 inspect_filter_secondary 调整大小
-
-**后置条件：**
-- out_data 包含 mask[old_index] == 1 的值
-- out_indices 包含通过 new_indices 重新映射的索引
-- out_indptr 包含累积计数
-
-**复杂度：**
 - 时间: O(nnz / n_threads + primary_dim)
 - 空间: O(1) 超出输出
 
-**线程安全：**
-安全 - 在主维上并行
+---
 
-## 示例
+## 配置
 
-### 选择细胞
+内部配置常量：
 
-按索引选择特定细胞：
+- `PARALLEL_THRESHOLD_ROWS = 512`: 并行处理的最小行数
+- `PARALLEL_THRESHOLD_NNZ = 10000`: 并行处理的最小非零数
+- `MEMCPY_THRESHOLD = 8`: memcpy 与循环的最小元素数
 
-```cpp
-Sparse<Real, true> expression = /* ... */;  // 细胞 x 基因
-Array<Index> selected_cells = {0, 5, 10, 15, /* ... */};
+---
 
-auto subset = scl::kernel::slice::slice_primary(expression, selected_cells);
-// subset 仅包含选定的细胞
-```
-
-### 过滤基因
-
-按表达阈值过滤基因：
-
-```cpp
-Sparse<Real, true> expression = /* ... */;  // 细胞 x 基因
-Array<uint8_t> gene_mask(expression.cols());
-
-// 构建掩码：保留平均表达 > 阈值的基因
-for (Index g = 0; g < expression.cols(); ++g) {
-    Real mean_expr = /* 计算均值 */;
-    gene_mask[g] = (mean_expr > threshold) ? 1 : 0;
-}
-
-auto filtered = scl::kernel::slice::filter_secondary(expression, gene_mask);
-// filtered 仅包含高表达基因
-```
-
-### 两阶段方法
-
-使用检查然后物化以提高内存效率：
-
-```cpp
-// 阶段 1：统计非零数
-Index nnz = scl::kernel::slice::inspect_slice_primary(matrix, keep_indices);
-
-// 阶段 2：分配和复制
-Array<Real> out_data(nnz);
-Array<Index> out_indices(nnz);
-Array<Index> out_indptr(keep_indices.len + 1);
-
-scl::kernel::slice::materialize_slice_primary(
-    matrix, keep_indices, out_data, out_indices, out_indptr
-);
-```
-
-## 性能
+## 性能说明
 
 ### 并行化
 
-- 用于检查的并行归约
-- 用于物化的并行复制
-- 无同步开销
-
-### SIMD 优化
-
-- 8 路展开的掩码计数
-- 复制循环中的预取
-- 高效的内存访问模式
+- 主维度切片：并行归约用于计数，并行复制用于物化
+- 次维度过滤：在主维度上并行，使用 8 路展开计数
+- 缓存高效：使用预取和批处理
 
 ### 内存效率
 
-- 两阶段方法减少内存使用
-- 预分配输出数组
-- 最小化中间分配
+- 两阶段方法：先检查以确定输出大小，然后物化
+- 预分配数组：允许调用者管理内存
+- 零拷贝潜力：可以在适当所有权下包装现有数组
 
-## 实现细节
+---
 
-### 掩码计数
+## 相关内容
 
-使用 8 路标量展开来计数掩码元素：
-- 间接访问 mask[indices[k]] 阻止 SIMD gather
-- 8 路标量展开为此模式提供最佳 ILP
-
-### 索引映射
-
-从布尔掩码构建旧到新索引的映射：
-- new_indices[i] = 如果 mask[i] == 1 则为新紧凑索引
-- new_indices[i] = 如果 mask[i] == 0 则为 -1
-- 返回 mask 中 1 的计数
+- [稀疏矩阵](../core/sparse) - 稀疏矩阵操作
+- [内存模块](../core/memory) - 内存管理

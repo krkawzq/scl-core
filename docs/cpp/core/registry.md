@@ -1,523 +1,415 @@
-# Registry
+# registry.hpp
 
-The `Registry` class provides centralized memory tracking and lifetime management for Python integration and debugging.
+> scl/core/registry.hpp · Unified high-performance memory registry with reference counting
 
 ## Overview
 
-`Registry` enables:
+This file provides the Registry class, a thread-safe memory registry system that tracks allocated memory and provides automatic cleanup. It supports both simple pointer tracking (refcount=1) and reference-counted buffers (multiple aliases).
 
-- **Memory tracking** - Track all allocated buffers
-- **Reference counting** - Shared buffers with automatic cleanup
-- **Python integration** - Zero-copy memory transfer
-- **Leak detection** - Debug-mode warnings for leaked memory
-- **Thread safety** - Concurrent access without data races
+Key features:
+- Thread-safe memory tracking
+- Reference counting for buffer aliases
+- Automatic cleanup on unregister
+- Sharded design for reduced lock contention
+- RAII guard for exception safety
 
-## Basic Usage
+**Header**: `#include "scl/core/registry.hpp"`
 
-### Allocating Memory
+---
+
+## Main APIs
+
+### Registry
+
+Thread-safe memory registry with reference counting.
+
+::: source_code file="scl/core/registry.hpp" symbol="Registry" collapsed
+:::
+
+**Algorithm Description**
+
+Registry is a sharded hash table that tracks memory allocations:
+- **Sharded design**: Reduces lock contention via hash-based sharding
+- **Simple pointers**: Tracked with refcount=1, cleaned up immediately on unregister
+- **Reference-counted buffers**: Support multiple aliases (BufferID), cleaned up when refcount reaches 0
+- **Atomic operations**: Thread-safe counters and reference counts
+
+The registry uses ConcurrentFlatMap internally with striped locks for high-performance concurrent access.
+
+**Edge Cases**
+
+- **Double registration**: Overwrites previous registration (may leak if not unregistered first)
+- **Unregister non-existent**: Returns false, no-op
+- **Concurrent access**: All operations are thread-safe
+- **Memory exhausted**: Registry itself may fail if hash table rehashing fails
+
+**Data Guarantees (Preconditions)**
+
+- Pointers must be valid (non-null) when registered
+- Allocation type must match actual allocation method
+- Custom deleter must be valid if AllocType::Custom
+
+**Complexity Analysis**
+
+- **Time**: O(1) average case for register/unregister/is_registered (hash table)
+- **Space**: ~32 bytes per simple pointer, ~48 bytes per reference-counted buffer
+
+**Example**
 
 ```cpp
 #include "scl/core/registry.hpp"
 
 auto& reg = scl::get_registry();
 
-// Allocate array
-Real* data = reg.new_array<Real>(1000);
-
-// Use data...
-
-// Cleanup
-reg.unregister_ptr(data);
-```
-
-### Registering Existing Memory
-
-```cpp
-// Allocate with new[]
+// Register simple pointer
 Real* data = new Real[1000];
-
-// Register
 reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ArrayNew);
 
 // Use data...
 
-// Cleanup (calls delete[])
-reg.unregister_ptr(data);
+// Unregister and cleanup
+reg.unregister_ptr(data);  // Calls delete[] automatically
+
+// Register reference-counted buffer
+BufferID id = reg.new_buffer(1000 * sizeof(Real), AllocType::ArrayNew);
+void* ptr1 = reg.get_buffer(id);  // Get alias
+void* ptr2 = reg.get_buffer(id);  // Get another alias
+
+// Unregister aliases
+reg.unregister_buffer(id);  // Decrements refcount
+reg.unregister_buffer(id);  // Refcount = 0, cleanup happens here
 ```
 
-## Allocation Types
+---
+
+### register_ptr
+
+Register a simple pointer for tracking (refcount = 1).
+
+::: source_code file="scl/core/registry.hpp" symbol="register_ptr" collapsed
+:::
+
+**Algorithm Description**
+
+Registers a pointer with the registry:
+1. Hash pointer address to determine shard
+2. Acquire shard lock
+3. Insert pointer record into hash table
+4. Update statistics (atomic increment)
+
+The pointer will be automatically freed on unregister_ptr() using the appropriate deleter based on AllocType.
+
+**Edge Cases**
+
+- **Already registered**: Overwrites previous registration (may leak)
+- **Null pointer**: Allowed but not useful (cleanup is no-op)
+
+**Data Guarantees (Preconditions)**
+
+- ptr must be allocated with method matching AllocType
+- custom_deleter must be valid if AllocType::Custom
+
+**Complexity Analysis**
+
+- **Time**: O(1) average case
+- **Space**: O(1) - stores metadata in hash table
+
+**Example**
+
+```cpp
+auto& reg = scl::get_registry();
+
+// Register array allocated with new[]
+Real* arr = new Real[1000];
+reg.register_ptr(arr, 1000 * sizeof(Real), AllocType::ArrayNew);
+
+// Register aligned allocation
+Real* aligned = scl::memory::aligned_alloc<Real>(1000, 64);
+reg.register_ptr(aligned, 1000 * sizeof(Real), AllocType::AlignedAlloc);
+```
+
+---
+
+### unregister_ptr
+
+Unregister a pointer and free memory.
+
+::: source_code file="scl/core/registry.hpp" symbol="unregister_ptr" collapsed
+:::
+
+**Algorithm Description**
+
+Unregisters a pointer and frees memory:
+1. Hash pointer address to find shard
+2. Acquire shard lock
+3. Find pointer in hash table
+4. Free memory using appropriate deleter
+5. Remove from hash table
+6. Update statistics
+
+**Edge Cases**
+
+- **Not registered**: Returns false, no-op
+- **Double unregister**: Returns false on second call
+- **Null pointer**: Safe, returns false
+
+**Data Guarantees (Preconditions)**
+
+- ptr must be registered (or nullptr, in which case returns false)
+
+**Complexity Analysis**
+
+- **Time**: O(1) average case
+- **Space**: O(1)
+
+**Example**
+
+```cpp
+auto& reg = scl::get_registry();
+Real* data = new Real[1000];
+reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ArrayNew);
+
+// Use data...
+
+// Unregister and cleanup
+bool success = reg.unregister_ptr(data);  // Returns true, calls delete[]
+// data is now invalid
+```
+
+---
+
+### new_buffer
+
+Create a new reference-counted buffer.
+
+::: source_code file="scl/core/registry.hpp" symbol="new_buffer" collapsed
+:::
+
+**Algorithm Description**
+
+Allocates memory and registers as reference-counted buffer:
+1. Allocate memory based on AllocType
+2. Create BufferID (unique identifier)
+3. Register in hash table with refcount = 1
+4. Return BufferID
+
+Multiple aliases can be obtained via get_buffer() using the same BufferID. The buffer is only freed when refcount reaches 0.
+
+**Edge Cases**
+
+- **Allocation failure**: Returns invalid BufferID (0), check with is_valid_buffer_id()
+- **Zero size**: May return invalid BufferID
+
+**Data Guarantees (Preconditions)**
+
+- size > 0 (typically)
+- AllocType must be valid
+
+**Complexity Analysis**
+
+- **Time**: O(1) average case (hash table insertion) + allocation time
+- **Space**: O(size) for allocated memory + O(1) for metadata
+
+**Example**
+
+```cpp
+auto& reg = scl::get_registry();
+
+// Create buffer
+BufferID id = reg.new_buffer(1000 * sizeof(Real), AllocType::ArrayNew);
+if (!reg.is_valid_buffer_id(id)) {
+    // Handle allocation failure
+    return;
+}
+
+// Get aliases
+void* ptr1 = reg.get_buffer(id);
+void* ptr2 = reg.get_buffer(id);  // Same memory, refcount = 3
+```
+
+---
+
+### get_buffer
+
+Get pointer alias to a reference-counted buffer (increments refcount).
+
+::: source_code file="scl/core/registry.hpp" symbol="get_buffer" collapsed
+:::
+
+**Algorithm Description**
+
+Returns a pointer to the buffer and increments reference count:
+1. Hash BufferID to find shard
+2. Acquire shard lock
+3. Find buffer in hash table
+4. Increment atomic refcount
+5. Return pointer
+
+**Edge Cases**
+
+- **Invalid BufferID**: Returns nullptr
+- **Already freed**: Returns nullptr (race condition handled safely)
+
+**Data Guarantees (Preconditions)**
+
+- BufferID must be valid (obtained from new_buffer)
+
+**Complexity Analysis**
+
+- **Time**: O(1) average case
+- **Space**: O(1)
+
+**Example**
+
+```cpp
+BufferID id = reg.new_buffer(1000 * sizeof(Real), AllocType::ArrayNew);
+void* ptr = reg.get_buffer(id);  // Refcount = 2 (1 from new_buffer + 1 from get_buffer)
+```
+
+---
+
+### unregister_buffer
+
+Unregister a buffer alias (decrements refcount, frees when refcount = 0).
+
+::: source_code file="scl/core/registry.hpp" symbol="unregister_buffer" collapsed
+:::
+
+**Algorithm Description**
+
+Decrements reference count and frees buffer when count reaches 0:
+1. Hash BufferID to find shard
+2. Acquire shard lock
+3. Find buffer in hash table
+4. Decrement atomic refcount
+5. If refcount == 0: free memory and remove from table
+6. Otherwise: just decrement counter
+
+**Edge Cases**
+
+- **Invalid BufferID**: Returns false
+- **Double unregister**: Safe, refcount cannot go below 0
+- **Unregister from multiple threads**: Thread-safe, atomic operations
+
+**Data Guarantees (Preconditions)**
+
+- BufferID must be valid
+
+**Complexity Analysis**
+
+- **Time**: O(1) average case
+- **Space**: O(1)
+
+**Example**
+
+```cpp
+BufferID id = reg.new_buffer(1000 * sizeof(Real), AllocType::ArrayNew);
+void* ptr1 = reg.get_buffer(id);  // Refcount = 2
+void* ptr2 = reg.get_buffer(id);  // Refcount = 3
+
+reg.unregister_buffer(id);  // Refcount = 2
+reg.unregister_buffer(id);  // Refcount = 1
+reg.unregister_buffer(id);  // Refcount = 0, memory freed here
+```
+
+---
+
+## Utility Classes
+
+### RegistryGuard
+
+RAII guard for automatic unregistration.
+
+::: source_code file="scl/core/registry.hpp" symbol="RegistryGuard" collapsed
+:::
+
+**Algorithm Description**
+
+RAII wrapper that automatically unregisters a pointer on scope exit:
+- Constructor: Stores pointer (does not register)
+- Destructor: Calls unregister_ptr() if pointer is still held
+- release(): Prevents automatic unregistration
+
+Useful for exception-safe code where unregistration must happen even if exceptions occur.
+
+**Example**
+
+```cpp
+auto& reg = scl::get_registry();
+Real* data = new Real[1000];
+reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ArrayNew);
+
+{
+    RegistryGuard guard(data);
+    // Use data...
+    // Automatic cleanup on scope exit (even if exception thrown)
+}
+```
+
+---
+
+### get_registry
+
+Get reference to global Registry instance.
+
+**Returns**: Reference to singleton Registry instance
+
+**Thread Safety**: Safe - singleton initialization is thread-safe
+
+**Example**
+
+```cpp
+auto& reg = scl::get_registry();
+reg.register_ptr(ptr, size, AllocType::ArrayNew);
+```
+
+---
+
+## Type Aliases
+
+```cpp
+using BufferID = std::uint64_t;  // Unique identifier for reference-counted buffers
+using HandlerRegistry = Registry;  // Legacy alias
+```
+
+## Enum: AllocType
 
 ```cpp
 enum class AllocType {
-    ArrayNew,      // new[] → delete[]
-    ScalarNew,     // new → delete
-    AlignedAlloc,  // aligned_alloc → aligned_free
-    Custom         // Custom deleter function
+    ArrayNew,      // new[] / delete[]
+    ScalarNew,     // new / delete
+    AlignedAlloc,  // aligned_alloc / aligned_free
+    Custom         // Custom deleter
 };
 ```
 
-### ArrayNew
+## Design Notes
 
-For arrays allocated with `new[]`:
+### Sharded Architecture
 
-```cpp
-Real* data = new Real[1000];
-reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ArrayNew);
+Registry uses hash-based sharding to reduce lock contention:
+- Multiple shards (typically 16-64)
+- Pointer hash determines shard
+- Each shard has its own lock
+- Reduces contention by factor of num_shards
 
-// Cleanup calls delete[]
-reg.unregister_ptr(data);
-```
+### Reference Counting
 
-### ScalarNew
-
-For single objects allocated with `new`:
-
-```cpp
-MyClass* obj = new MyClass();
-reg.register_ptr(obj, sizeof(MyClass), AllocType::ScalarNew);
-
-// Cleanup calls delete
-reg.unregister_ptr(obj);
-```
-
-### AlignedAlloc
-
-For aligned memory:
-
-```cpp
-#include "scl/core/memory.hpp"
-
-Real* data = scl::memory::aligned_alloc<Real>(1000, 64);
-reg.register_ptr(data, 1000 * sizeof(Real), AllocType::AlignedAlloc);
-
-// Cleanup calls aligned_free
-reg.unregister_ptr(data);
-```
-
-### Custom
-
-For custom allocation:
-
-```cpp
-void my_deleter(void* ptr) {
-    // Custom cleanup logic
-    my_free(ptr);
-}
-
-void* data = my_alloc(1000);
-reg.register_ptr(data, 1000, AllocType::Custom, my_deleter);
-
-// Cleanup calls my_deleter
-reg.unregister_ptr(data);
-```
-
-## Reference Counting
-
-For shared buffers with multiple aliases:
-
-```cpp
-// Allocate main buffer
-Real* main_ptr = new Real[1000];
-
-// Create aliases (e.g., column views)
-std::vector<void*> aliases;
-for (size_t i = 0; i < 10; ++i) {
-    aliases.push_back(main_ptr + i * 100);
-}
-
-// Register with reference counting
-BufferID id = reg.register_buffer_with_aliases(
-    main_ptr,                    // Real pointer to free
-    1000 * sizeof(Real),         // Byte size
-    aliases,                     // Alias pointers
-    AllocType::ArrayNew          // Allocation type
-);
-
-// Refcount = 11 (main + 10 aliases)
-
-// Unregister aliases
-for (auto* alias : aliases) {
-    reg.unregister_ptr(alias);  // Decrements refcount
-}
-
-// Unregister main pointer
-reg.unregister_ptr(main_ptr);  // Refcount = 0, frees memory
-```
-
-## Python Integration
-
-### Zero-Copy Transfer
-
-Transfer ownership to Python without copying:
-
-```cpp
-// C++ side: Allocate and register
-auto& reg = scl::get_registry();
-Real* data = reg.new_array<Real>(1000);
-
-// ... fill data ...
-
-// Python binding: Transfer ownership
-py::capsule deleter(data, [](void* ptr) {
-    scl::get_registry().unregister_ptr(ptr);
-});
-
-return py::array_t<Real>(
-    {1000},           // Shape
-    {sizeof(Real)},   // Strides
-    data,             // Data pointer
-    deleter           // Cleanup callback
-);
-```
-
-**Flow:**
-1. C++ allocates and registers memory
-2. Python takes ownership via capsule
-3. When Python array is deleted, capsule calls deleter
-4. Deleter unregisters from Registry
-5. Registry frees memory
-
-### Shared Buffers
-
-For sparse matrices with block allocation:
-
-```cpp
-// C++ side: Register with aliases
-BufferID id = reg.register_buffer_with_aliases(
-    real_ptr, byte_size, aliases, AllocType::ArrayNew);
-
-// Python side: Each alias gets a separate array
-for (auto* alias : aliases) {
-    py::capsule deleter(alias, [](void* ptr) {
-        scl::get_registry().unregister_ptr(ptr);
-    });
-    
-    // Create Python array for this alias
-    py::array_t<Real> arr(
-        {alias_size},
-        {sizeof(Real)},
-        alias,
-        deleter
-    );
-    
-    // Deleter decrements refcount when array is deleted
-}
-
-// Memory freed when last Python array is deleted
-```
-
-## Query Operations
-
-### Check Registration
-
-```cpp
-if (reg.is_registered(ptr)) {
-    std::cout << "Pointer is registered\n";
-}
-```
-
-### Get Statistics
-
-```cpp
-size_t num_ptrs = reg.get_num_pointers();
-size_t num_buffers = reg.get_num_buffers();
-size_t total_bytes = reg.get_total_bytes();
-
-std::cout << "Registered: " << num_ptrs << " pointers, "
-          << num_buffers << " buffers, "
-          << total_bytes << " bytes\n";
-```
-
-### Get Pointer Info
-
-```cpp
-if (auto record = reg.get_ptr_record(ptr)) {
-    std::cout << "Size: " << record->byte_size << " bytes\n";
-    std::cout << "Type: " << static_cast<int>(record->type) << "\n";
-}
-```
-
-### Get Buffer Info
-
-```cpp
-if (auto buffer = reg.get_buffer(ptr)) {
-    std::cout << "Real ptr: " << buffer->info.real_ptr << "\n";
-    std::cout << "Size: " << buffer->info.byte_size << " bytes\n";
-    std::cout << "Refcount: " << buffer->refcount.load() << "\n";
-}
-```
-
-## Architecture
-
-### Sharded Design
-
-Registry uses sharding to reduce lock contention:
-
-```
-Registry
-├── Shard 0 (hash % num_shards == 0)
-│   ├── PtrMap: { ptr → PtrRecord }
-│   └── BufferMap: { ptr → RefCountedBuffer }
-├── Shard 1
-│   ├── PtrMap
-│   └── BufferMap
-└── ...
-```
-
-**Benefits:**
-- Parallel access to different shards
-- Reduced lock contention
-- Better cache locality per shard
-
-**Default shards:** `std::thread::hardware_concurrency()`
+Reference-counted buffers support multiple aliases:
+- Each get_buffer() increments refcount
+- Each unregister_buffer() decrements refcount
+- Buffer freed when refcount reaches 0
+- Thread-safe using atomic operations
 
 ### Thread Safety
 
 All public methods are thread-safe:
+- Internal synchronization via striped locks
+- Atomic reference counts
+- Concurrent reads supported
+- Write operations are mutually exclusive per shard
 
-```cpp
-// Safe: Concurrent registration
-parallel_for(Size(0), n, [&](size_t i) {
-    Real* data = reg.new_array<Real>(100);
-    // ...
-    reg.unregister_ptr(data);
-});
-```
+## See Also
 
-**Internal synchronization:**
-- Shared mutex for rehashing (readers can proceed concurrently)
-- Striped locks for slot-level access (reduces contention)
-- Atomic operations for counters and reference counts
-
-## Performance
-
-### Overhead
-
-- **Per-pointer:** ~32 bytes (hash table slot + metadata)
-- **Per-buffer:** ~48 bytes (RefCountedBuffer + hash table slot)
-- **Lookup:** O(1) average, O(n) worst case (hash collision)
-
-### When to Use Registry
-
-**Use Registry for:**
-- Memory transferred to Python
-- Shared buffers with multiple aliases
-- Long-lived allocations
-- Debugging memory leaks
-
-**Don't use Registry for:**
-- Stack-allocated buffers
-- Short-lived temporaries in hot loops
-- Memory managed by external libraries
-- Performance-critical hot paths (use pre-allocated workspaces)
-
-## Debugging
-
-### Leak Detection
-
-In debug builds, Registry warns about leaked memory:
-
-```cpp
-// At program exit
-~Registry() {
-    #ifdef SCL_DEBUG
-    if (get_num_pointers() > 0 || get_num_buffers() > 0) {
-        std::cerr << "WARNING: Memory leak detected!\n";
-        std::cerr << "  Pointers: " << get_num_pointers() << "\n";
-        std::cerr << "  Buffers: " << get_num_buffers() << "\n";
-        std::cerr << "  Bytes: " << get_total_bytes() << "\n";
-    }
-    #endif
-}
-```
-
-### Print Statistics
-
-```cpp
-void print_registry_stats() {
-    auto& reg = scl::get_registry();
-    
-    std::cout << "Registry Statistics:\n";
-    std::cout << "  Pointers:  " << reg.get_num_pointers() << "\n";
-    std::cout << "  Buffers:   " << reg.get_num_buffers() << "\n";
-    std::cout << "  Bytes:     " << reg.get_total_bytes() << "\n";
-    std::cout << "  Avg size:  " 
-              << (reg.get_num_pointers() > 0 
-                  ? reg.get_total_bytes() / reg.get_num_pointers() 
-                  : 0) 
-              << " bytes\n";
-}
-```
-
-## Best Practices
-
-### 1. Use RAII
-
-Wrap Registry operations in RAII guards:
-
-```cpp
-class RegistryGuard {
-    void* ptr_;
-    
-public:
-    explicit RegistryGuard(void* ptr) : ptr_(ptr) {}
-    
-    ~RegistryGuard() {
-        if (ptr_) {
-            scl::get_registry().unregister_ptr(ptr_);
-        }
-    }
-    
-    void* release() {
-        void* p = ptr_;
-        ptr_ = nullptr;
-        return p;
-    }
-    
-    RegistryGuard(const RegistryGuard&) = delete;
-    RegistryGuard& operator=(const RegistryGuard&) = delete;
-};
-
-// Usage
-auto* data = reg.new_array<Real>(1000);
-RegistryGuard guard(data);
-// Automatic cleanup on scope exit
-```
-
-### 2. Prefer new_array
-
-Use `new_array` for automatic registration:
-
-```cpp
-// GOOD: Automatic registration
-auto* data = reg.new_array<Real>(1000);
-
-// BAD: Manual registration (error-prone)
-Real* data = new Real[1000];
-reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ArrayNew);
-```
-
-### 3. Match Allocation Type
-
-Ensure allocation type matches deallocation:
-
-```cpp
-// GOOD: Correct type
-Real* data = new Real[1000];
-reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ArrayNew);
-
-// BAD: Wrong type (undefined behavior!)
-Real* data = new Real[1000];
-reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ScalarNew);
-```
-
-### 4. Document Ownership
-
-Clearly document who owns memory:
-
-```cpp
-// Returns registered pointer - caller must unregister
-Real* allocate_buffer(size_t n);
-
-// Takes ownership of registered pointer
-void consume_buffer(Real* ptr);
-
-// Returns non-owning view - do not unregister
-const Real* get_data_view() const;
-```
-
-### 5. Avoid Registry in Hot Loops
-
-```cpp
-// BAD: Registry operations in hot loop
-for (size_t i = 0; i < n; ++i) {
-    Real* temp = reg.new_array<Real>(100);  // Expensive!
-    // ...
-    reg.unregister_ptr(temp);
-}
-
-// GOOD: Pre-allocate workspace
-Real* workspace = reg.new_array<Real>(100);
-for (size_t i = 0; i < n; ++i) {
-    // Reuse workspace
-}
-reg.unregister_ptr(workspace);
-```
-
-## Advanced Usage
-
-### Custom Shard Count
-
-```cpp
-// Create registry with custom shard count
-Registry reg(32);  // 32 shards
-```
-
-### Batch Operations
-
-For better performance, batch registrations:
-
-```cpp
-std::vector<Real*> pointers;
-
-// Allocate all
-for (size_t i = 0; i < n; ++i) {
-    pointers.push_back(reg.new_array<Real>(100));
-}
-
-// Use pointers...
-
-// Cleanup all
-for (auto* ptr : pointers) {
-    reg.unregister_ptr(ptr);
-}
-```
-
-### Reference Counting Details
-
-```cpp
-// Register buffer
-BufferID id = reg.register_buffer_with_aliases(
-    real_ptr, byte_size, aliases, AllocType::ArrayNew);
-
-// Query refcount
-if (auto buffer = reg.get_buffer(real_ptr)) {
-    uint32_t refcount = buffer->refcount.load();
-    std::cout << "Refcount: " << refcount << "\n";
-}
-
-// Unregister decrements refcount
-for (auto* alias : aliases) {
-    reg.unregister_ptr(alias);
-    
-    if (auto buffer = reg.get_buffer(real_ptr)) {
-        std::cout << "Refcount now: " << buffer->refcount.load() << "\n";
-    }
-}
-```
-
-## Global Registry
-
-SCL-Core provides a global registry instance:
-
-```cpp
-Registry& get_registry();
-```
-
-**Usage:**
-
-```cpp
-auto& reg = scl::get_registry();
-Real* data = reg.new_array<Real>(1000);
-```
-
-**Thread safety:** The global registry is thread-safe.
-
-**Lifetime:** The global registry is destroyed at program exit.
-
----
-
-::: tip Memory Safety
-Always pair allocations with cleanup. Use RAII guards to ensure cleanup even in the presence of exceptions.
-:::
-
+- [Memory Management](./memory) - Allocation functions that return pointers for registration
+- [Sparse Matrix](./sparse) - Uses Registry for metadata array tracking

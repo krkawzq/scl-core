@@ -62,8 +62,8 @@ function toggle() {
 }
 
 onMounted(() => {
-  // The code HTML is already highlighted by VitePress and passed as a prop
-  // We just need to set it
+  // The code HTML is already highlighted by markdown-it and passed as a prop
+  // It's already escaped HTML, so we can use it directly
   highlightedCode.value = props.code
 })
 </script>

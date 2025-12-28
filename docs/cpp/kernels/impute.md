@@ -1,412 +1,367 @@
-# Imputation
+# impute.hpp
 
-High-performance imputation kernels for single-cell expression data.
+> scl/kernel/impute.hpp · High-performance imputation kernels for single-cell expression data
 
 ## Overview
 
-The `impute` module provides efficient imputation methods for sparse single-cell data:
+This file provides efficient imputation methods for sparse single-cell RNA-seq data. Imputation fills in missing values (dropouts) to recover true expression signals and improve downstream analysis quality.
 
-- **KNN imputation**: K-nearest neighbor averaging
-- **Diffusion imputation**: MAGIC-style diffusion-based imputation
-- **ALRA**: Adaptively-thresholded Low-Rank Approximation
-- **Weighted KNN**: Distance-weighted neighbor averaging
+This file provides:
+- K-nearest neighbor (KNN) imputation
+- Diffusion-based imputation (MAGIC-style)
+- ALRA (Adaptively-thresholded Low-Rank Approximation)
+- Distance-weighted KNN imputation
+- Dropout detection and quality assessment
 
-All operations are:
-- Parallelized over cells
-- Memory-efficient with sparse inputs
-- Support both sparse and dense outputs
+**Header**: `#include "scl/kernel/impute.hpp"`
 
-## Core Functions
+---
+
+## Main APIs
 
 ### knn_impute_dense
 
-Impute missing values using K-nearest neighbor averaging on dense output.
+::: source_code file="scl/kernel/impute.hpp" symbol="knn_impute_dense" collapsed
+:::
+
+**Algorithm Description**
+
+Impute missing values using K-nearest neighbor averaging on dense output:
+
+1. **Affinity-weighted averaging**: For each cell i in parallel:
+   - Compute weighted sum: X_imputed[i, j] = sum_k(affinity[i, k] * X_sparse[k, j])
+   - Normalize by row sum: X_imputed[i, j] /= sum_k(affinity[i, k])
+   - Uses sparse matrix operations for efficiency
+
+2. **Edge case handling**:
+   - If row sum < epsilon: copy original row (no neighbors)
+   - Handles missing values in sparse input gracefully
+
+3. **Output format**: Dense matrix suitable for downstream dense operations
+
+**Edge Cases**
+
+- **No neighbors**: Cells with zero affinity row sum copy original values
+- **Empty affinity matrix**: Returns original sparse matrix converted to dense
+- **All zeros**: Cells with no expression remain zero after imputation
+
+**Data Guarantees (Preconditions)**
+
+- `X_sparse` must be CSR format (cells x genes)
+- `affinity` must be row-normalized (rows sum to 1)
+- `X_imputed` must be pre-allocated with n_cells * n_genes elements
+- Affinity matrix should be pre-computed (e.g., from KNN graph)
+
+**Complexity Analysis**
+
+- **Time**: O(n_cells * avg_neighbors * n_genes)
+  - O(n_cells * avg_neighbors) for sparse matrix access
+  - O(n_cells * avg_neighbors * n_genes) for weighted averaging
+- **Space**: O(n_cells * n_genes) for dense output
+
+**Example**
 
 ```cpp
 #include "scl/kernel/impute.hpp"
 
-Sparse<Real, true> X_sparse = /* sparse expression matrix */;
-Sparse<Real, true> affinity = /* cell-cell affinity matrix */;
-Real* X_imputed = /* pre-allocated [n_cells * n_genes] */;
+// Sparse expression matrix: cells x genes
+Sparse<Real, true> X_sparse = /* ... */;
+Index n_cells = X_sparse.rows();
+Index n_genes = X_sparse.cols();
 
+// Pre-computed affinity matrix (e.g., from KNN)
+Sparse<Real, true> affinity = /* ... */;
+// ... ensure affinity is row-normalized ...
+
+// Pre-allocate dense output
+Array<Real> X_imputed(n_cells * n_genes);
+
+// Impute missing values
 scl::kernel::impute::knn_impute_dense(
-    X_sparse, affinity, n_cells, n_genes, X_imputed
+    X_sparse,
+    affinity,
+    n_cells,
+    n_genes,
+    X_imputed.data()
 );
+
+// X_imputed now contains dense imputed expression
 ```
 
-**Parameters:**
-- `X_sparse` [in] - Input sparse expression matrix (n_cells x n_genes)
-- `affinity` [in] - Cell-cell affinity matrix (n_cells x n_cells)
-- `n_cells` [in] - Number of cells
-- `n_genes` [in] - Number of genes
-- `X_imputed` [out] - Dense imputed matrix (n_cells x n_genes, row-major)
-
-**Preconditions:**
-- `X_sparse` must be CSR format (cells x genes)
-- `affinity` must be row-normalized (rows sum to 1)
-- `X_imputed` must be pre-allocated with n_cells * n_genes elements
-
-**Postconditions:**
-- `X_imputed[i, j]` = weighted average of gene j across neighbors of cell i
-- Weights from affinity matrix define neighbor contributions
-- Dense output suitable for downstream dense operations
-
-**Complexity:**
-- Time: O(n_cells * avg_neighbors * n_genes)
-- Space: O(n_cells * n_genes) for output
-
-**Thread Safety:** Safe - parallelized over cells, each writes to independent memory
-
-### knn_impute_weighted_dense
-
-Impute with distance-weighted KNN contributions.
-
-```cpp
-const Index* knn_indices = /* KNN indices [n_cells * k] */;
-const Real* knn_distances = /* KNN distances [n_cells * k] */;
-
-scl::kernel::impute::knn_impute_weighted_dense(
-    X_sparse, knn_indices, knn_distances, n_cells, n_genes, k, X_imputed
-);
-```
-
-**Parameters:**
-- `X_sparse` [in] - Input sparse expression matrix
-- `knn_indices` [in] - K-nearest neighbor indices [n_cells x k]
-- `knn_distances` [in] - K-nearest neighbor distances [n_cells x k]
-- `n_cells` [in] - Number of cells
-- `n_genes` [in] - Number of genes
-- `k` [in] - Number of neighbors
-- `X_imputed` [out] - Dense imputed matrix
-
-**Preconditions:**
-- `knn_indices` and `knn_distances` pre-computed for all cells
-- `k <= n_cells - 1`
-- `X_imputed` must be pre-allocated
-
-**Postconditions:**
-- `X_imputed[i,j]` = sum_k(weight[k] * X[neighbor_k, j]) / sum(weights)
-- Weights inversely proportional to distance
-
-**Complexity:**
-- Time: O(n_cells * k * n_genes)
-- Space: O(n_cells * n_genes)
-
-**Thread Safety:** Safe - parallelized over cells
+---
 
 ### magic_impute
 
-MAGIC (Markov Affinity-based Graph Imputation of Cells) algorithm.
+::: source_code file="scl/kernel/impute.hpp" symbol="magic_impute" collapsed
+:::
 
-```cpp
-Sparse<Real, true> transition_matrix = /* MAGIC diffusion operator */;
-Index t = 3;  // Diffusion time
+**Algorithm Description**
 
-scl::kernel::impute::magic_impute(
-    X_sparse, transition_matrix, n_cells, n_genes, t, X_imputed
-);
-```
+MAGIC (Markov Affinity-based Graph Imputation of Cells) algorithm for diffusion-based imputation:
 
-**Parameters:**
-- `X_sparse` [in] - Input sparse expression matrix
-- `transition_matrix` [in] - Diffusion operator (from MAGIC)
-- `n_cells` [in] - Number of cells
-- `n_genes` [in] - Number of genes
-- `t` [in] - Diffusion time parameter
-- `X_imputed` [out] - Dense imputed matrix
+1. **Diffusion process**: Apply t steps of diffusion:
+   - X_new = T * X_old (sparse matrix multiplication)
+   - T is the transition matrix (symmetric normalized)
+   - Each step smooths expression across the cell graph
 
-**Preconditions:**
+2. **Double buffering**: Use two buffers to avoid data races:
+   - Buffer A: current state
+   - Buffer B: next state
+   - Swap after each step
+
+3. **Convergence**: Higher t = more smoothing/imputation
+   - Typical t in [1, 5] for single-cell data
+   - t=1: minimal smoothing
+   - t=5: strong smoothing, may over-impute
+
+**Edge Cases**
+
+- **t=0**: Returns original matrix (no diffusion)
+- **Isolated cells**: Cells with no neighbors remain unchanged
+- **Zero transition matrix**: Returns original matrix
+
+**Data Guarantees (Preconditions)**
+
 - `transition_matrix` from MAGIC preprocessing (symmetric normalized)
 - `t >= 1`, typically t in [1, 5]
 - `X_imputed` must be pre-allocated
 
-**Postconditions:**
-- `X_imputed = (T^t) * X`
-- Denoised and imputed expression values
-- Preserves overall expression structure
+**Complexity Analysis**
 
-**Complexity:**
-- Time: O(t * n_cells * avg_nnz * n_genes)
-- Space: O(2 * n_cells * n_genes)
+- **Time**: O(t * n_cells * avg_nnz * n_genes)
+  - O(n_cells * avg_nnz * n_genes) per diffusion step
+  - t steps total
+- **Space**: O(2 * n_cells * n_genes) for double buffering
 
-**Thread Safety:** Safe - all operations parallelized
-
-**Reference:**
-- van Dijk et al., MAGIC, Cell 2018
-
-### alra_impute
-
-ALRA (Adaptively-thresholded Low-Rank Approximation) imputation.
+**Example**
 
 ```cpp
-const Real* X_dense = /* dense normalized expression */;
-Index n_components = 50;
+// Pre-compute MAGIC transition matrix
+Sparse<Real, true> transition_matrix = /* ... */;
 
-scl::kernel::impute::alra_impute(
-    X_dense, n_cells, n_genes, n_components, X_imputed, 5, 42
+Array<Real> X_imputed(n_cells * n_genes);
+
+// Apply MAGIC imputation with t=3
+scl::kernel::impute::magic_impute(
+    X_sparse,
+    transition_matrix,
+    n_cells,
+    n_genes,
+    3,  // diffusion time
+    X_imputed.data()
 );
 ```
 
-**Parameters:**
-- `X_dense` [in] - Dense normalized expression [n_cells x n_genes]
-- `n_cells` [in] - Number of cells
-- `n_genes` [in] - Number of genes
-- `n_components` [in] - Number of SVD components (rank)
-- `X_imputed` [out] - Dense imputed matrix
-- `n_iter` [in] - Number of power iterations for SVD (default: 5)
-- `seed` [in] - Random seed (default: 42)
+---
 
-**Preconditions:**
+### alra_impute
+
+::: source_code file="scl/kernel/impute.hpp" symbol="alra_impute" collapsed
+:::
+
+**Algorithm Description**
+
+ALRA (Adaptively-thresholded Low-Rank Approximation) imputation using randomized SVD:
+
+1. **Randomized SVD**: Compute rank-k approximation:
+   - Random Gaussian projection for efficiency
+   - Power iteration for numerical stability
+   - QR orthogonalization
+   - X_approx = U * S * V^T
+
+2. **Thresholding**: Set negative values to zero:
+   - Biological constraint: expression cannot be negative
+   - X_imputed = max(0, X_approx)
+
+3. **Preserve originals**: Where imputed < original non-zero, keep original:
+   - Prevents over-imputation of true zeros
+
+**Edge Cases**
+
+- **k > min(n_cells, n_genes)**: Clamped to minimum dimension
+- **Zero variance genes**: Genes with zero variance excluded from SVD
+- **All zeros**: Returns zero matrix if input is all zeros
+
+**Data Guarantees (Preconditions)**
+
 - `X_dense` already log-normalized
 - `n_components <= min(n_cells, n_genes)`
 - `X_imputed` must be pre-allocated
 
-**Postconditions:**
-- `X_imputed = U * S * V^T` (rank-k approximation)
-- Negative values set to zero (biological constraint)
-- Original non-zero values preserved where imputed < original
+**Complexity Analysis**
 
-**Complexity:**
-- Time: O(n_iter * n_cells * n_genes * n_components)
-- Space: O(n_cells * n_components + n_genes * n_components)
+- **Time**: O(n_iter * n_cells * n_genes * n_components)
+  - O(n_cells * n_genes * n_components) per power iteration
+  - n_iter iterations (default: 5)
+- **Space**: O(n_cells * n_components + n_genes * n_components) for SVD factors
 
-**Thread Safety:** Safe - parallel matrix operations
-
-**Reference:**
-- Linderman et al., ALRA, bioRxiv 2018
-
-### diffusion_impute_sparse_transition
-
-Diffusion-based imputation using sparse transition matrix.
+**Example**
 
 ```cpp
-Sparse<Real, true> transition_matrix = /* row-stochastic transition matrix */;
-Index n_steps = 3;
+// Dense normalized expression (log-normalized)
+Array<Real> X_dense(n_cells * n_genes);
+// ... fill X_dense ...
 
-scl::kernel::impute::diffusion_impute_sparse_transition(
-    X_sparse, transition_matrix, n_cells, n_genes, n_steps, X_imputed
+Array<Real> X_imputed(n_cells * n_genes);
+
+// ALRA imputation with 50 components
+scl::kernel::impute::alra_impute(
+    X_dense.data(),
+    n_cells,
+    n_genes,
+    50,   // n_components
+    X_imputed.data(),
+    5,    // n_iter
+    42    // seed
 );
 ```
 
-**Parameters:**
-- `X_sparse` [in] - Input sparse expression matrix
-- `transition_matrix` [in] - Row-stochastic transition matrix
-- `n_cells` [in] - Number of cells
-- `n_genes` [in] - Number of genes
-- `n_steps` [in] - Number of diffusion steps
-- `X_imputed` [out] - Dense imputed matrix
+---
 
-**Preconditions:**
+### diffusion_impute_sparse_transition
+
+::: source_code file="scl/kernel/impute.hpp" symbol="diffusion_impute_sparse_transition" collapsed
+:::
+
+**Algorithm Description**
+
+Diffusion-based imputation using sparse transition matrix:
+
+1. **Convert to dense**: Initialize dense buffer from sparse input
+2. **Iterative diffusion**: For t = 1 to n_steps:
+   - SpMM: buffer_out = T * buffer_in (parallel)
+   - Swap buffers (double buffering)
+3. **Output**: Copy final result to X_imputed
+
+**Edge Cases**
+
+- **n_steps=0**: Returns original matrix
+- **Zero transition**: Returns original matrix
+
+**Data Guarantees (Preconditions)**
+
 - `transition_matrix` must be row-stochastic (rows sum to 1)
 - `n_steps >= 1`
 - `X_imputed` must be pre-allocated
 
-**Postconditions:**
-- `X_imputed = T^n_steps * X` where T is transition matrix
-- Higher n_steps = more smoothing/imputation
+**Complexity Analysis**
 
-**Complexity:**
-- Time: O(n_steps * n_cells * avg_nnz_per_row * n_genes)
-- Space: O(2 * n_cells * n_genes) for double buffering
+- **Time**: O(n_steps * n_cells * avg_nnz_per_row * n_genes)
+- **Space**: O(2 * n_cells * n_genes) for double buffering
 
-**Thread Safety:** Safe - uses double buffering with parallel SpMM
+---
 
-## Auxiliary Functions
+### knn_impute_weighted_dense
+
+::: source_code file="scl/kernel/impute.hpp" symbol="knn_impute_weighted_dense" collapsed
+:::
+
+**Algorithm Description**
+
+Impute with distance-weighted KNN contributions:
+
+1. **Weight computation**: For each cell i:
+   - weights[k] = 1 / (dist[k] + epsilon) for k neighbors
+   - Normalize weights to sum to 1
+
+2. **Weighted averaging**: X_imputed[i, j] = sum_k(weight[k] * X[neighbor_k, j])
+
+**Edge Cases**
+
+- **Zero distances**: Handled with epsilon to avoid division by zero
+- **k=0**: Returns original values
+
+**Data Guarantees (Preconditions)**
+
+- `knn_indices` and `knn_distances` pre-computed for all cells
+- `k <= n_cells - 1`
+- `X_imputed` must be pre-allocated
+
+**Complexity Analysis**
+
+- **Time**: O(n_cells * k * n_genes)
+- **Space**: O(n_cells * n_genes)
+
+---
+
+## Utility Functions
 
 ### impute_selected_genes
 
 Impute only a subset of genes for efficiency.
 
-```cpp
-const Index* gene_indices = /* genes to impute [n_selected] */;
-Real* X_imputed = /* output [n_cells * n_selected] */;
+::: source_code file="scl/kernel/impute.hpp" symbol="impute_selected_genes" collapsed
+:::
 
-scl::kernel::impute::impute_selected_genes(
-    X_sparse, affinity, gene_indices, n_selected, n_cells, X_imputed
-);
-```
+**Complexity**
 
-**Parameters:**
-- `X_sparse` [in] - Input sparse expression matrix
-- `affinity` [in] - Cell-cell affinity matrix
-- `gene_indices` [in] - Indices of genes to impute
-- `n_selected` [in] - Number of genes to impute
-- `n_cells` [in] - Number of cells
-- `X_imputed` [out] - Imputed values for selected genes [n_cells x n_selected]
-
-**Preconditions:**
-- All gene indices in [0, n_genes)
-- `X_imputed` pre-allocated with n_cells * n_selected elements
-
-**Postconditions:**
-- `X_imputed[i, j]` contains imputed value for cell i, selected gene j
-- Only computes imputation for specified genes (memory efficient)
-
-**Complexity:**
 - Time: O(n_cells * avg_neighbors * n_selected)
 - Space: O(n_cells * n_selected)
 
-**Thread Safety:** Safe - parallelized over cells
-
-### smooth_expression
-
-Smooth expression profiles using local averaging.
-
-```cpp
-Real alpha = 0.5;  // Smoothing factor
-scl::kernel::impute::smooth_expression(
-    X_sparse, affinity, n_cells, n_genes, alpha, X_smooth
-);
-```
-
-**Parameters:**
-- `X_sparse` [in] - Input sparse expression matrix
-- `affinity` [in] - Cell-cell affinity matrix
-- `n_cells` [in] - Number of cells
-- `n_genes` [in] - Number of genes
-- `alpha` [in] - Smoothing factor (0 = original, 1 = full neighbor average)
-- `X_smooth` [out] - Smoothed dense matrix
-
-**Preconditions:**
-- `alpha` in [0, 1]
-- `affinity` row-normalized
-- `X_smooth` must be pre-allocated
-
-**Postconditions:**
-- `X_smooth[i] = (1 - alpha) * X[i] + alpha * neighbor_average[i]`
-- Interpolates between original and fully smoothed
-
-**Complexity:**
-- Time: O(n_cells * avg_neighbors * n_genes)
-- Space: O(n_cells * n_genes)
-
-**Thread Safety:** Safe - parallelized over cells
+---
 
 ### detect_dropouts
 
 Detect likely dropout events (technical zeros vs biological zeros).
 
-```cpp
-const Real* gene_means = /* pre-computed gene means [n_genes] */;
-Index* n_dropouts = /* output [n_genes] */;
+::: source_code file="scl/kernel/impute.hpp" symbol="detect_dropouts" collapsed
+:::
 
-scl::kernel::impute::detect_dropouts(
-    X_sparse, gene_means, n_cells, n_genes, n_dropouts, 0.5
-);
-```
+**Complexity**
 
-**Parameters:**
-- `X_sparse` [in] - Input sparse expression matrix
-- `gene_means` [in] - Pre-computed gene means [n_genes]
-- `n_cells` [in] - Number of cells
-- `n_genes` [in] - Number of genes
-- `n_dropouts` [out] - Count of detected dropouts [n_genes]
-- `threshold` [in] - Detection threshold (default: 0.5)
-
-**Preconditions:**
-- `gene_means` pre-computed from normalized data
-- `n_dropouts` must be pre-allocated with n_genes elements
-
-**Postconditions:**
-- `n_dropouts[g]` = number of cells where gene g is likely dropout
-- Uses gene mean and detection rate to infer dropouts
-
-**Complexity:**
 - Time: O(n_cells * n_genes)
-- Space: O(n_genes) for output
-
-**Thread Safety:** Safe - uses atomic accumulation
-
-## Configuration
-
-```cpp
-namespace scl::kernel::impute::config {
-    constexpr Real DISTANCE_EPSILON = Real(1e-10);
-    constexpr Real DEFAULT_ALPHA = Real(1.0);
-    constexpr Index DEFAULT_K_NEIGHBORS = 15;
-    constexpr Index DEFAULT_N_STEPS = 3;
-    constexpr Index DEFAULT_N_COMPONENTS = 50;
-    constexpr Size PARALLEL_THRESHOLD = 32;
-    constexpr Size GENE_BLOCK_SIZE = 64;
-    constexpr Size CELL_BLOCK_SIZE = 32;
-}
-```
-
-## Use Cases
-
-### KNN Imputation
-
-```cpp
-// 1. Compute cell-cell affinity (e.g., from neighbors)
-Sparse<Real, true> affinity = /* compute from KNN graph */;
-
-// 2. Normalize affinity matrix (rows sum to 1)
-scl::kernel::normalize::normalize_rows_inplace(affinity, NormMode::L1);
-
-// 3. Impute expression
-Real* X_imputed = new Real[n_cells * n_genes];
-scl::kernel::impute::knn_impute_dense(
-    X_sparse, affinity, n_cells, n_genes, X_imputed
-);
-```
-
-### MAGIC Imputation
-
-```cpp
-// 1. Build MAGIC transition matrix (from diffusion kernel)
-Sparse<Real, true> transition = /* MAGIC transition matrix */;
-
-// 2. Apply MAGIC imputation
-Index t = 3;  // Diffusion time
-Real* X_imputed = new Real[n_cells * n_genes];
-scl::kernel::impute::magic_impute(
-    X_sparse, transition, n_cells, n_genes, t, X_imputed
-);
-```
-
-### ALRA Imputation
-
-```cpp
-// 1. Normalize and log-transform
-Sparse<Real, true> X_normalized = /* normalized expression */;
-scl::kernel::log1p::log1p_inplace(X_normalized);
-
-// 2. Convert to dense
-Real* X_dense = /* convert sparse to dense */;
-
-// 3. Apply ALRA
-Index n_components = 50;
-Real* X_imputed = new Real[n_cells * n_genes];
-scl::kernel::impute::alra_impute(
-    X_dense, n_cells, n_genes, n_components, X_imputed
-);
-```
-
-### Selective Gene Imputation
-
-```cpp
-// Impute only highly variable genes
-Array<Index> hvg_indices = /* highly variable gene indices */;
-Real* X_hvg_imputed = new Real[n_cells * n_hvgs];
-
-scl::kernel::impute::impute_selected_genes(
-    X_sparse, affinity, hvg_indices.ptr, n_hvgs, n_cells, X_hvg_imputed
-);
-```
-
-## Performance
-
-- **Parallelization**: Scales linearly with number of cells
-- **Memory efficient**: Sparse input, optional dense output
-- **Block processing**: Optimized for cache locality
-- **SIMD acceleration**: Vectorized averaging operations
+- Space: O(n_genes)
 
 ---
 
-::: tip Method Selection
-- **KNN**: Fast, good for small datasets
-- **MAGIC**: Best for preserving biological structure
-- **ALRA**: Good for large datasets, rank-based denoising
-- **Weighted KNN**: Better when distance information is available
+### imputation_quality
+
+Compute imputation quality metrics (correlation with held-out data).
+
+::: source_code file="scl/kernel/impute.hpp" symbol="imputation_quality" collapsed
 :::
 
+**Complexity**
+
+- Time: O(n_cells * n_genes)
+- Space: O(n_threads)
+
+---
+
+### smooth_expression
+
+Smooth expression profiles using local averaging.
+
+::: source_code file="scl/kernel/impute.hpp" symbol="smooth_expression" collapsed
+:::
+
+**Complexity**
+
+- Time: O(n_cells * avg_neighbors * n_genes)
+- Space: O(n_cells * n_genes)
+
+---
+
+## Notes
+
+**Method Selection**:
+- **KNN**: Fast, simple, good for most cases
+- **MAGIC**: Strong smoothing, preserves structure, may over-impute
+- **ALRA**: Low-rank approximation, good for denoising, preserves global structure
+- **Weighted KNN**: Accounts for distance, more accurate than uniform KNN
+
+**Performance**:
+- All methods parallelized over cells
+- Sparse input preserved where possible
+- Dense output for downstream analysis
+
+**Typical Workflow**:
+1. Pre-compute affinity/transition matrix from KNN graph
+2. Choose imputation method based on data characteristics
+3. Impute missing values
+4. Assess quality with imputation_quality if ground truth available
+
+## See Also
+
+- [Neighbors](/cpp/kernels/neighbors) - KNN computation for affinity matrices
+- [Normalization](/cpp/kernels/normalize) - Expression normalization before imputation

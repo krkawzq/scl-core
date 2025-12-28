@@ -1,411 +1,351 @@
-# Sampling
+# sampling.hpp
 
-Sampling and downsampling kernels for cell selection and data reduction.
+> scl/kernel/sampling.hpp · Sampling and downsampling kernels for cell selection
 
 ## Overview
 
-The `sampling` module provides diverse sampling strategies:
+This file provides various cell sampling strategies for selecting representative subsets of cells from large datasets. Different strategies preserve different properties: geometric coverage, density distribution, cluster representation, etc.
 
-- **Geometric sketching**: Preserve rare populations with uniform manifold coverage
-- **Density-preserving**: Maintain local density distribution
-- **Landmark selection**: KMeans++-style diverse sampling
-- **Representative cells**: Select cells closest to cluster centroids
-- **Balanced/Stratified**: Equal representation across groups/strata
-- **Uniform/Reservoir**: Simple random sampling
+Key features:
+- Geometric sketching for uniform manifold coverage
+- Density-preserving sampling
+- Landmark selection (KMeans++ style)
+- Representative cell selection from clusters
+- Balanced and stratified sampling
+- Uniform and importance sampling
 
-All operations are:
-- Memory-efficient
-- Reproducible with seeds
-- Optimized for large datasets
+**Header**: `#include "scl/kernel/sampling.hpp"`
 
-## Core Functions
+---
+
+## Main APIs
 
 ### geometric_sketching
 
-Sample cells using geometric sketching to preserve rare populations.
+::: source_code file="scl/kernel/sampling.hpp" symbol="geometric_sketching" collapsed
+:::
+
+**Algorithm Description**
+
+Sample cells using geometric sketching to preserve rare populations:
+
+1. **Compute bounds**: Find min/max for each feature dimension
+2. **Create grid**: Divide feature space into `DEFAULT_BINS` bins per dimension
+3. **Hash assignment**: Assign each cell to a grid bucket via hash function
+4. **Sort by bucket**: Sort cells by bucket ID using VQSort
+5. **Proportional sampling**: Sample proportionally from each bucket to ensure uniform coverage
+
+Geometric sketching ensures that cells are sampled uniformly across the data manifold, preserving rare cell types that might be missed by random sampling.
+
+**Edge Cases**
+
+- **Empty data**: Returns 0 selected cells
+- **target_size >= n_cells**: Returns all cells
+- **Very sparse data**: Some buckets may be empty
+- **High-dimensional data**: Grid becomes sparse (curse of dimensionality)
+
+**Data Guarantees (Preconditions)**
+
+- Matrix must be valid CSR format (cells x features)
+- `selected_indices` has capacity >= min(target_size, data.rows())
+- `target_size > 0`
+
+**Complexity Analysis**
+
+- **Time**: O(n * d + n log n) where n = cells, d = features
+  - O(n * d) for bounds computation and hashing
+  - O(n log n) for sorting by bucket
+  - O(n) for sampling
+- **Space**: O(n + d) auxiliary for buckets and bounds
+
+**Example**
 
 ```cpp
 #include "scl/kernel/sampling.hpp"
 
-Sparse<Real, true> data = /* expression matrix */;
-Index* selected = new Index[target_size];
+Sparse<Real, true> data = /* ... */;  // Expression matrix (cells x genes)
+Size target_size = 10000;  // Desired sample size
+Index* selected_indices = /* allocate target_size */;
 Size n_selected;
 
 scl::kernel::sampling::geometric_sketching(
-    data, target_size, selected, n_selected, 42
+    data,
+    target_size,
+    selected_indices,
+    n_selected,
+    42  // seed
 );
+
+// selected_indices[0..n_selected) contains selected cell indices
+// Cells are sampled uniformly from geometric grid buckets
 ```
 
-**Parameters:**
-- `data` [in] - Expression matrix (cells x genes, CSR)
-- `target_size` [in] - Desired number of cells to select
-- `selected_indices` [out] - Indices of selected cells
-- `n_selected` [out] - Actual number of cells selected
-- `seed` [in] - Random seed for reproducibility (default: 42)
-
-**Preconditions:**
-- `selected_indices` has capacity >= min(target_size, data.rows())
-- `target_size > 0`
-
-**Postconditions:**
-- `n_selected <= target_size`
-- `selected_indices[0..n_selected)` contains selected cell indices
-- Cells are sampled uniformly from geometric grid buckets
-
-**Complexity:**
-- Time: O(n * d + n log n) where n = cells, d = features
-- Space: O(n + d) auxiliary
-
-**Thread Safety:** Unsafe - sequential implementation
+---
 
 ### density_preserving
 
-Sample cells while preserving local density distribution.
+::: source_code file="scl/kernel/sampling.hpp" symbol="density_preserving" collapsed
+:::
 
-```cpp
-Sparse<Index, true> neighbors = /* KNN graph */;
-scl::kernel::sampling::density_preserving(
-    data, neighbors, target_size, selected, n_selected
-);
-```
+**Algorithm Description**
 
-**Parameters:**
-- `data` [in] - Expression matrix
-- `neighbors` [in] - KNN graph (CSR)
-- `target_size` [in] - Desired number of cells
-- `selected_indices` [out] - Indices of selected cells
-- `n_selected` [out] - Actual number selected
+Sample cells while preserving local density distribution:
 
-**Preconditions:**
+1. **Compute local density**: For each cell, count neighbors in KNN graph
+2. **Compute weights**: `weight[i] = 1 / (density[i] + epsilon)` - inverse density
+3. **Normalize weights**: Sum weights to 1
+4. **Systematic sampling**: Sample with probability proportional to weights
+
+This ensures that cells from sparse regions (rare cell types) are more likely to be selected, preserving the density distribution in the sample.
+
+**Edge Cases**
+
+- **Isolated cells**: Have very high weight (likely to be selected)
+- **Dense clusters**: Have lower weight per cell
+- **Empty KNN graph**: Falls back to uniform sampling
+
+**Data Guarantees (Preconditions)**
+
 - `data.rows() == neighbors.rows()`
 - `selected_indices` has capacity >= min(target_size, data.rows())
+- KNN graph must be valid CSR format
 
-**Postconditions:**
-- Cells from sparse regions are more likely to be selected
-- Local density distribution is preserved in sample
+**Complexity Analysis**
 
-**Complexity:**
-- Time: O(n)
-- Space: O(n) auxiliary
+- **Time**: O(n) - single pass through cells and neighbors
+- **Space**: O(n) auxiliary for density and weights
 
-**Thread Safety:** Unsafe - sequential implementation
+**Example**
+
+```cpp
+Sparse<Real, true> data = /* ... */;
+Sparse<Index, true> neighbors = /* ... */;  // KNN graph
+
+scl::kernel::sampling::density_preserving(
+    data,
+    neighbors,
+    target_size,
+    selected_indices,
+    n_selected
+);
+
+// Cells from sparse regions are more likely to be selected
+```
+
+---
 
 ### landmark_selection
 
-Select diverse landmark cells using KMeans++ initialization.
+::: source_code file="scl/kernel/sampling.hpp" symbol="landmark_selection" collapsed
+:::
+
+**Algorithm Description**
+
+Select diverse landmark cells using KMeans++ initialization:
+
+1. **First center**: Select uniformly at random
+2. **Subsequent centers**: For each new center:
+   - Compute squared distance from each cell to nearest existing center
+   - Sample cell with probability proportional to squared distance
+   - Add to landmarks
+3. **Repeat**: Until n_landmarks selected
+
+KMeans++ ensures landmarks are maximally spread in expression space, providing good coverage for dimensionality reduction or clustering initialization.
+
+**Edge Cases**
+
+- **n_landmarks >= n_cells**: Returns all cells
+- **Single landmark**: Returns one random cell
+- **Empty data**: Returns 0 landmarks
+
+**Data Guarantees (Preconditions)**
+
+- Matrix must be valid CSR format
+- `landmark_indices` has capacity >= min(n_landmarks, data.rows())
+- `n_landmarks > 0`
+
+**Complexity Analysis**
+
+- **Time**: O(n_landmarks * n * d) for sparse distance computation
+  - For each landmark: O(n * d) to compute distances
+- **Space**: O(n) auxiliary for distances
+
+**Example**
 
 ```cpp
+Size n_landmarks = 1000;
+Index* landmark_indices = /* allocate n_landmarks */;
+Size n_selected;
+
 scl::kernel::sampling::landmark_selection(
-    data, n_landmarks, landmark_indices, n_selected, 42
+    data,
+    n_landmarks,
+    landmark_indices,
+    n_selected,
+    42  // seed
 );
+
+// Landmarks are maximally spread in expression space
 ```
 
-**Parameters:**
-- `data` [in] - Expression matrix
-- `n_landmarks` [in] - Number of landmarks to select
-- `landmark_indices` [out] - Indices of selected landmarks
-- `n_selected` [out] - Actual number selected
-- `seed` [in] - Random seed (default: 42)
-
-**Preconditions:**
-- `landmark_indices` has capacity >= min(n_landmarks, data.rows())
-
-**Postconditions:**
-- `n_selected = min(n_landmarks, data.rows())`
-- Landmarks are maximally spread in expression space
-
-**Complexity:**
-- Time: O(n_landmarks * n * d) for sparse distance computation
-- Space: O(n) auxiliary
-
-**Thread Safety:** Unsafe - sequential KMeans++
+---
 
 ### representative_cells
 
-Select representative cells from each cluster.
+::: source_code file="scl/kernel/sampling.hpp" symbol="representative_cells" collapsed
+:::
+
+**Algorithm Description**
+
+Select representative cells from each cluster:
+
+1. **For each cluster**:
+   - Compute centroid as mean of all cells in cluster
+   - Compute squared distance from each cell to centroid
+   - Use partial_sort to find closest `per_cluster` cells
+   - Add to representatives list
+
+Representative cells are those closest to cluster centroids, useful for visualization or downstream analysis.
+
+**Edge Cases**
+
+- **Empty clusters**: Skipped
+- **Small clusters**: Returns all cells if cluster_size < per_cluster
+- **per_cluster = 0**: Returns 0 representatives
+
+**Data Guarantees (Preconditions)**
+
+- `data.rows() == cluster_labels.len`
+- `representatives` has sufficient capacity
+- Cluster labels must be non-negative integers
+
+**Complexity Analysis**
+
+- **Time**: O(n * d + n_clusters * cluster_size * per_cluster)
+  - O(n * d) for centroid computation
+  - O(cluster_size * per_cluster) per cluster for sorting
+- **Space**: O(n + d * n_clusters) auxiliary
+
+**Example**
 
 ```cpp
-Array<const Index> cluster_labels = /* cluster assignments */;
-Index* representatives = new Index[max_representatives];
+Array<Index> cluster_labels = /* ... */;  // Cluster assignment per cell
+Size per_cluster = 10;  // Representatives per cluster
+Index* representatives = /* allocate */;
 Size n_selected;
 
 scl::kernel::sampling::representative_cells(
-    data, cluster_labels, per_cluster, representatives, n_selected, 42
+    data,
+    cluster_labels,
+    per_cluster,
+    representatives,
+    n_selected,
+    42  // seed
 );
+
+// Representatives are closest cells to each cluster centroid
 ```
 
-**Parameters:**
-- `data` [in] - Expression matrix
-- `cluster_labels` [in] - Cluster assignment for each cell
-- `per_cluster` [in] - Number of representatives per cluster
-- `representatives` [out] - Indices of representative cells
-- `n_selected` [out] - Total representatives selected
-- `seed` [in] - Random seed (default: 42)
+---
 
-**Preconditions:**
-- `data.rows() == cluster_labels.len`
-- `representatives` has sufficient capacity
-
-**Postconditions:**
-- `n_selected = sum(min(per_cluster, cluster_size))` over clusters
-- Representatives are closest cells to each cluster centroid
-
-**Complexity:**
-- Time: O(n * d + n_clusters * cluster_size * per_cluster)
-- Space: O(n + d * n_clusters) auxiliary
-
-**Thread Safety:** Unsafe - sequential implementation
-
-## Balanced and Stratified Sampling
+## Utility Functions
 
 ### balanced_sampling
 
 Sample equal numbers from each group/label category.
 
-```cpp
-Array<const Index> labels = /* group labels */;
-Index* selected = new Index[target_size];
-Size n_selected;
+::: source_code file="scl/kernel/sampling.hpp" symbol="balanced_sampling" collapsed
+:::
 
-scl::kernel::sampling::balanced_sampling(
-    labels, target_size, selected, n_selected, 42
-);
-```
+**Complexity**
 
-**Parameters:**
-- `labels` [in] - Group labels for each element
-- `target_size` [in] - Total desired sample size
-- `selected_indices` [out] - Indices of selected elements
-- `n_selected` [out] - Actual number selected
-- `seed` [in] - Random seed (default: 42)
-
-**Preconditions:**
-- `selected_indices` has capacity >= target_size
-- Labels are non-negative integers
-
-**Postconditions:**
-- Each non-empty group contributes roughly target_size / n_groups samples
-- Remainder distributed to first groups
-
-**Complexity:**
 - Time: O(n)
 - Space: O(n) auxiliary
 
-**Thread Safety:** Unsafe - sequential implementation
+---
 
 ### stratified_sampling
 
 Sample from strata defined by binning a continuous variable.
 
-```cpp
-Array<const Real> values = /* continuous values */;
-scl::kernel::sampling::stratified_sampling(
-    values, n_strata, target_size, selected, n_selected, 42
-);
-```
+::: source_code file="scl/kernel/sampling.hpp" symbol="stratified_sampling" collapsed
+:::
 
-**Parameters:**
-- `values` [in] - Continuous values to stratify by
-- `n_strata` [in] - Number of strata to create
-- `target_size` [in] - Total desired sample size
-- `selected_indices` [out] - Indices of selected elements
-- `n_selected` [out] - Actual number selected
-- `seed` [in] - Random seed (default: 42)
+**Complexity**
 
-**Preconditions:**
-- `values.len > 0`
-- `n_strata > 0`
-
-**Postconditions:**
-- Elements are binned into n_strata equal-width strata
-- `balanced_sampling` is applied to strata labels
-
-**Complexity:**
 - Time: O(n)
 - Space: O(n) auxiliary
 
-**Thread Safety:** Unsafe - sequential implementation
-
-## Simple Sampling
+---
 
 ### uniform_sampling
 
 Simple uniform random sampling without replacement.
 
-```cpp
-scl::kernel::sampling::uniform_sampling(
-    n, target_size, selected_indices, n_selected, 42
-);
-```
+::: source_code file="scl/kernel/sampling.hpp" symbol="uniform_sampling" collapsed
+:::
 
-**Parameters:**
-- `n` [in] - Total population size
-- `target_size` [in] - Desired sample size
-- `selected_indices` [out] - Indices of selected elements
-- `n_selected` [out] - Actual number selected
-- `seed` [in] - Random seed (default: 42)
+**Complexity**
 
-**Preconditions:**
-- `selected_indices` has capacity >= min(target_size, n)
-
-**Postconditions:**
-- `n_selected = min(target_size, n)`
-- Each element has equal probability of selection
-
-**Complexity:**
 - Time: O(n) for initialization, O(target_size) for sampling
 - Space: O(n) auxiliary
 
-**Thread Safety:** Unsafe - sequential implementation
+---
 
 ### importance_sampling
 
-Sample elements with probability proportional to given weights.
+Sample elements with probability proportional to given weights (with replacement).
 
-```cpp
-Array<const Real> weights = /* sampling weights */;
-scl::kernel::sampling::importance_sampling(
-    weights, target_size, selected_indices, n_selected, 42
-);
-```
+::: source_code file="scl/kernel/sampling.hpp" symbol="importance_sampling" collapsed
+:::
 
-**Parameters:**
-- `weights` [in] - Sampling weights (non-negative)
-- `target_size` [in] - Number of samples to draw
-- `selected_indices` [out] - Indices of selected elements
-- `n_selected` [out] - Actual number selected
-- `seed` [in] - Random seed (default: 42)
+**Complexity**
 
-**Preconditions:**
-- `weights.len > 0`
-- All weights >= 0
-
-**Postconditions:**
-- `n_selected = target_size`
-- P(select i) proportional to weights[i]
-- Same element may appear multiple times (with replacement)
-
-**Complexity:**
 - Time: O(n + target_size * log n)
 - Space: O(n) auxiliary
 
-**Thread Safety:** Unsafe - sequential implementation
+---
 
 ### reservoir_sampling
 
-Select k items uniformly at random from a stream using reservoir sampling.
+Select k items uniformly at random from a stream using reservoir sampling (Algorithm R).
 
-```cpp
-scl::kernel::sampling::reservoir_sampling(
-    stream_size, reservoir_size, reservoir, n_selected, 42
-);
-```
+::: source_code file="scl/kernel/sampling.hpp" symbol="reservoir_sampling" collapsed
+:::
 
-**Parameters:**
-- `stream_size` [in] - Total number of items in stream
-- `reservoir_size` [in] - Number of items to select
-- `reservoir` [out] - Indices of selected items
-- `n_selected` [out] - Actual number selected
-- `seed` [in] - Random seed (default: 42)
+**Complexity**
 
-**Preconditions:**
-- `reservoir` has capacity >= min(reservoir_size, stream_size)
-
-**Postconditions:**
-- `n_selected = min(reservoir_size, stream_size)`
-- Each item has equal probability of being in reservoir
-
-**Complexity:**
 - Time: O(stream_size)
 - Space: O(reservoir_size)
 
-**Thread Safety:** Unsafe - sequential implementation
-
-## Configuration
-
-```cpp
-namespace scl::kernel::sampling::config {
-    constexpr Real EPSILON = Real(1e-10);
-    constexpr Size DEFAULT_BINS = 64;
-    constexpr Size MAX_ITERATIONS = 1000;
-    constexpr Real CONVERGENCE_TOL = Real(1e-6);
-    constexpr Size PARALLEL_THRESHOLD = 256;
-}
-```
-
-## Use Cases
-
-### Preserving Rare Populations
-
-```cpp
-// Use geometric sketching to preserve rare cell types
-Sparse<Real, true> expression = /* ... */;
-Index* selected = new Index[10000];
-Size n_selected;
-
-scl::kernel::sampling::geometric_sketching(
-    expression, 10000, selected, n_selected, 42
-);
-// Selected cells have uniform coverage of expression space
-```
-
-### Cluster Representatives
-
-```cpp
-// Select representative cells from each cluster
-Array<const Index> clusters = /* cluster labels */;
-Index* reps = new Index[n_clusters * 5];
-Size n_reps;
-
-scl::kernel::sampling::representative_cells(
-    expression, clusters, 5, reps, n_reps, 42
-);
-// 5 representatives per cluster, closest to centroids
-```
-
-### Balanced Sampling
-
-```cpp
-// Sample equal numbers from each batch
-Array<const Index> batches = /* batch labels */;
-Index* selected = new Index[1000];
-Size n_selected;
-
-scl::kernel::sampling::balanced_sampling(
-    batches, 1000, selected, n_selected, 42
-);
-// Each batch contributes roughly equal number of cells
-```
-
-### Stratified by Expression
-
-```cpp
-// Stratify by total UMI counts
-Array<Real> total_counts = /* compute row sums */;
-Index* selected = new Index[5000];
-Size n_selected;
-
-scl::kernel::sampling::stratified_sampling(
-    total_counts, 10, 5000, selected, n_selected, 42
-);
-// Sample from 10 UMI count strata
-```
-
-## Performance
-
-- **Memory efficient**: Minimal allocations for large datasets
-- **Reproducible**: Deterministic with fixed seeds
-- **Fast RNG**: Xoshiro128+ for high-quality randomness
-- **Scalable**: Handles millions of cells efficiently
-
 ---
 
-::: tip Method Selection
-- **Geometric sketching**: Best for preserving rare populations
-- **Density-preserving**: Best for maintaining local structure
-- **Landmark selection**: Best for diverse coverage
-- **Representative cells**: Best for cluster summarization
-- **Balanced/Stratified**: Best for equal representation
-- **Uniform**: Simplest, fastest for random sampling
-:::
+## Notes
 
+**Sampling Strategy Selection**
+
+- **Geometric sketching**: For preserving rare populations and uniform coverage
+- **Density-preserving**: For maintaining density distribution
+- **Landmark selection**: For diverse, spread-out samples
+- **Representative cells**: For cluster-based selection
+- **Balanced sampling**: For equal representation across groups
+- **Uniform sampling**: For simple random sampling
+
+**Thread Safety**
+
+Most functions are sequential (unsafe for parallel execution) due to:
+- Random number generation dependencies
+- Sorting operations
+- Cumulative computations
+
+**Use Cases**
+
+- **Data reduction**: Reduce dataset size for faster computation
+- **Visualization**: Select representative cells for plotting
+- **Downstream analysis**: Prepare samples for specific algorithms
+- **Quality control**: Sample for manual inspection
+
+## See Also
+
+- [Resample](/cpp/kernels/resample) - Count resampling operations
+- [Statistics](/cpp/kernels/statistics) - Statistical analysis

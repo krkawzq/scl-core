@@ -1,211 +1,307 @@
-# Quality Control
+# qc.hpp
 
-Quality control metrics computation with SIMD optimization for single-cell data.
+> scl/kernel/qc.hpp · Quality control metrics with SIMD optimization
 
 ## Overview
 
-The `qc` module provides efficient computation of quality control metrics commonly used in single-cell analysis:
+This file provides high-performance quality control metric computation for single-cell expression data, including gene counts, total counts, and subset percentages.
 
-- **Gene counts**: Number of expressed genes per cell
-- **Total counts**: Total UMI counts per cell
-- **Subset percentages**: Percentage of counts from specific gene subsets (e.g., mitochondrial genes)
+This file provides:
+- Basic QC metrics (gene counts, total counts)
+- Subset percentage computation (e.g., mitochondrial genes)
+- Fused QC computation (all metrics in single pass)
+- SIMD-optimized operations
 
-All operations are:
-- SIMD-accelerated with fused operations
-- Parallelized over cells
-- Zero-allocation (output arrays pre-allocated)
+**Header**: `#include "scl/kernel/qc.hpp"`
 
-## Functions
+---
+
+## Main APIs
 
 ### compute_basic_qc
 
-Compute basic quality control metrics: number of genes and total counts per cell.
+::: source_code file="scl/kernel/qc.hpp" symbol="compute_basic_qc" collapsed
+:::
+
+**Algorithm Description**
+
+Compute basic quality control metrics: number of genes and total counts per cell:
+
+1. **Parallel Processing**: Process each cell in parallel:
+   - Each thread handles independent cells
+   - No synchronization needed
+
+2. **Per-Cell Metrics**: For each cell:
+   - **Gene Count**: Count non-zero elements in row
+     - Iterate over non-zero values
+     - Count distinct genes (non-zero entries)
+   - **Total Counts**: Sum all values using SIMD-optimized sum
+     - Use vectorized accumulation
+     - Handle sparse zeros efficiently
+
+3. **Output**: Store metrics in output arrays:
+   - `out_n_genes[i]` = number of expressed genes in cell i
+   - `out_total_counts[i]` = sum of all counts in cell i
+
+**Edge Cases**
+
+- **Empty cells**: Cells with no expression get n_genes = 0, total_counts = 0
+- **Dense cells**: Cells with many expressed genes handled efficiently
+- **Zero values**: Sparse format may not store zeros (handled correctly)
+- **Very sparse cells**: Minimal overhead for cells with few genes
+
+**Data Guarantees (Preconditions)**
+
+- `out_n_genes.len == matrix.rows()`
+- `out_total_counts.len == matrix.rows()`
+- Matrix must be valid CSR format
+- Output arrays must be pre-allocated
+
+**Complexity Analysis**
+
+- **Time**: O(nnz) for iterating over all non-zeros
+  - Each non-zero accessed once
+  - Parallelized over cells
+  - SIMD reduces constant factor
+- **Space**: O(1) auxiliary space per thread
+
+**Example**
 
 ```cpp
 #include "scl/kernel/qc.hpp"
 
-Sparse<Real, true> matrix = /* expression matrix [n_cells x n_genes] */;
-Array<Index> n_genes(matrix.rows());
-Array<Real> total_counts(matrix.rows());
+scl::Sparse<Real, true> expression = /* ... */;  // [n_cells x n_genes]
+scl::Array<Index> n_genes(n_cells);
+scl::Array<Real> total_counts(n_cells);
 
-scl::kernel::qc::compute_basic_qc(matrix, n_genes, total_counts);
+scl::kernel::qc::compute_basic_qc(
+    expression,
+    n_genes,
+    total_counts
+);
+
+// n_genes[i] contains number of expressed genes in cell i
+// total_counts[i] contains total UMI count in cell i
 ```
 
-**Parameters:**
-- `matrix` [in] - Expression matrix (cells x genes, CSR)
-- `out_n_genes` [out] - Number of expressed genes per cell [n_cells]
-- `out_total_counts` [out] - Total UMI counts per cell [n_cells]
-
-**Preconditions:**
-- `out_n_genes.len == matrix.rows()`
-- `out_total_counts.len == matrix.rows()`
-- Matrix must be valid CSR format
-
-**Postconditions:**
-- `out_n_genes[i]` contains number of non-zero genes in cell i
-- `out_total_counts[i]` contains sum of all counts in cell i
-- Matrix is unchanged
-
-**Complexity:**
-- Time: O(nnz)
-- Space: O(1) auxiliary
-
-**Thread Safety:** Safe - parallelized over cells
-
-**Algorithm:**
-For each cell in parallel:
-1. Count non-zero elements (number of genes)
-2. Sum all values using SIMD-optimized sum
-3. Write results to output arrays
+---
 
 ### compute_subset_pct
 
-Compute percentage of total counts that come from a subset of genes (e.g., mitochondrial genes) for each cell.
+::: source_code file="scl/kernel/qc.hpp" symbol="compute_subset_pct" collapsed
+:::
 
-```cpp
-Array<const uint8_t> mito_mask(n_genes);  // 1 for mitochondrial genes
-Array<Real> mito_pct(n_cells);
+**Algorithm Description**
 
-scl::kernel::qc::compute_subset_pct(matrix, mito_mask, mito_pct);
-```
+Compute percentage of total counts that come from a subset of genes (e.g., mitochondrial genes):
 
-**Parameters:**
-- `matrix` [in] - Expression matrix (cells x genes, CSR)
-- `subset_mask` [in] - Mask array, non-zero indicates subset gene [n_genes]
-- `out_pcts` [out] - Percentage values [n_cells]
+1. **Parallel Processing**: Process each cell in parallel
 
-**Preconditions:**
+2. **Fused Computation**: For each cell:
+   - **Total Counts**: Sum all values (SIMD-optimized)
+   - **Subset Counts**: Sum values where mask[gene] != 0
+     - Check mask for each non-zero gene
+     - Accumulate subset counts separately
+   - **Percentage**: Compute (subset / total) * 100
+     - Handle zero total counts (return 0.0)
+
+3. **Output**: Store percentages in output array:
+   - `out_pcts[i]` = percentage (0-100) of counts from subset in cell i
+
+**Edge Cases**
+
+- **Zero total counts**: Returns 0.0 (avoid division by zero)
+- **All subset**: If all genes in subset, percentage = 100.0
+- **No subset**: If no genes in subset, percentage = 0.0
+- **Empty cells**: Cells with no expression get percentage = 0.0
+
+**Data Guarantees (Preconditions)**
+
 - `out_pcts.len == matrix.rows()`
 - `subset_mask.len >= matrix.cols()`
 - Matrix must be valid CSR format
+- Mask values: 0 = not in subset, non-zero = in subset
 
-**Postconditions:**
-- `out_pcts[i]` contains percentage (0-100) of counts from subset in cell i
-- Returns 0.0 if total counts are zero
-- Matrix is unchanged
+**Complexity Analysis**
 
-**Complexity:**
-- Time: O(nnz)
-- Space: O(1) auxiliary
+- **Time**: O(nnz) for checking mask and summing
+  - Each non-zero checked against mask
+  - Parallelized over cells
+  - SIMD for efficient accumulation
+- **Space**: O(1) auxiliary space
 
-**Thread Safety:** Safe - parallelized over cells
+**Example**
 
-**Algorithm:**
-For each cell in parallel:
-1. Compute total counts and subset counts using fused SIMD operation
-2. Compute percentage = (subset / total) * 100
-3. Write result to output
+```cpp
+scl::Sparse<Real, true> expression = /* ... */;
+scl::Array<const uint8_t> mito_mask(n_genes);  // Mitochondrial gene mask
+
+// Set mask: 1 for mitochondrial genes, 0 otherwise
+for (Index g = 0; g < n_genes; ++g) {
+    if (is_mitochondrial(g)) {
+        mito_mask[g] = 1;
+    }
+}
+
+scl::Array<Real> mito_pct(n_cells);
+
+scl::kernel::qc::compute_subset_pct(
+    expression,
+    mito_mask,
+    mito_pct
+);
+
+// mito_pct[i] contains percentage of mitochondrial counts in cell i
+```
+
+---
 
 ### compute_fused_qc
 
-Compute all QC metrics in a single pass: gene counts, total counts, and subset percentages.
+::: source_code file="scl/kernel/qc.hpp" symbol="compute_fused_qc" collapsed
+:::
 
-```cpp
-Array<const uint8_t> mito_mask(n_genes);
-Array<Index> n_genes(n_cells);
-Array<Real> total_counts(n_cells);
-Array<Real> mito_pct(n_cells);
+**Algorithm Description**
 
-scl::kernel::qc::compute_fused_qc(
-    matrix, mito_mask, n_genes, total_counts, mito_pct
-);
-```
+Compute all QC metrics in a single pass: gene counts, total counts, and subset percentages:
 
-**Parameters:**
-- `matrix` [in] - Expression matrix (cells x genes, CSR)
-- `subset_mask` [in] - Mask array for subset genes [n_genes]
-- `out_n_genes` [out] - Number of expressed genes per cell [n_cells]
-- `out_total_counts` [out] - Total UMI counts per cell [n_cells]
-- `out_pcts` [out] - Subset percentages per cell [n_cells]
+1. **Parallel Processing**: Process each cell in parallel
 
-**Preconditions:**
+2. **Fused Computation**: For each cell in single loop:
+   - **Gene Count**: Count non-zero elements
+   - **Total Counts**: Sum all values (SIMD)
+   - **Subset Counts**: Sum values where mask != 0 (SIMD)
+   - **Percentage**: Compute (subset / total) * 100
+
+3. **Output**: Store all metrics in output arrays:
+   - `out_n_genes[i]` = number of expressed genes
+   - `out_total_counts[i]` = total UMI counts
+   - `out_pcts[i]` = subset percentage
+
+**Edge Cases**
+
+- **Same as individual functions**: Handles all edge cases
+- **Efficiency**: Single pass more efficient than multiple passes
+- **Memory**: Better cache locality than separate calls
+
+**Data Guarantees (Preconditions)**
+
 - All output arrays have length == matrix.rows()
 - `subset_mask.len >= matrix.cols()`
 - Matrix must be valid CSR format
 
-**Postconditions:**
-- All metrics computed for each cell
-- Matrix is unchanged
+**Complexity Analysis**
 
-**Complexity:**
-- Time: O(nnz)
-- Space: O(1) auxiliary
+- **Time**: O(nnz) for single pass over all non-zeros
+  - More efficient than calling functions separately
+  - Parallelized over cells
+- **Space**: O(1) auxiliary space
 
-**Thread Safety:** Safe - parallelized over cells
-
-**Algorithm:**
-For each cell in parallel:
-1. Count non-zero elements
-2. Compute total and subset counts using fused SIMD operation
-3. Compute percentage
-4. Write all results to output arrays
-
-## Configuration
+**Example**
 
 ```cpp
-namespace scl::kernel::qc::config {
-    constexpr Size PREFETCH_DISTANCE = 16;
-    constexpr Real PCT_SCALE = Real(100);
-}
-```
+scl::Sparse<Real, true> expression = /* ... */;
+scl::Array<const uint8_t> mito_mask(n_genes);
+scl::Array<Index> n_genes(n_cells);
+scl::Array<Real> total_counts(n_cells);
+scl::Array<Real> mito_pct(n_cells);
 
-## Use Cases
-
-### Standard QC Pipeline
-
-```cpp
-// Load expression matrix
-Sparse<Real, true> expression = /* ... */;
-
-// Create mitochondrial gene mask
-Array<uint8_t> mito_mask(n_genes, 0);
-for (Index g = 0; g < n_genes; ++g) {
-    if (gene_names[g].starts_with("MT-")) {
-        mito_mask.ptr[g] = 1;
-    }
-}
-
-// Compute all QC metrics in one pass
-Array<Index> n_genes(n_cells);
-Array<Real> total_counts(n_cells);
-Array<Real> mito_pct(n_cells);
-
+// Compute all QC metrics in single pass
 scl::kernel::qc::compute_fused_qc(
-    expression, mito_mask, n_genes, total_counts, mito_pct
+    expression,
+    mito_mask,
+    n_genes,
+    total_counts,
+    mito_pct
 );
 
-// Filter cells based on QC metrics
-for (Index i = 0; i < n_cells; ++i) {
-    if (n_genes.ptr[i] < 200 || total_counts.ptr[i] < 1000 || 
-        mito_pct.ptr[i] > 20.0) {
-        // Mark cell for removal
-    }
-}
+// All metrics computed efficiently
 ```
-
-### Individual Metric Computation
-
-```cpp
-// Compute only basic metrics
-Array<Index> n_genes(n_cells);
-Array<Real> total_counts(n_cells);
-scl::kernel::qc::compute_basic_qc(expression, n_genes, total_counts);
-
-// Compute only subset percentage
-Array<Real> mito_pct(n_cells);
-scl::kernel::qc::compute_subset_pct(expression, mito_mask, mito_pct);
-```
-
-## Performance
-
-- **Fused operations**: Single pass for multiple metrics reduces memory traffic
-- **SIMD acceleration**: 4-way unrolled accumulation for maximum throughput
-- **Parallelization**: Scales linearly with CPU cores
-- **Zero allocations**: All output arrays must be pre-allocated
 
 ---
 
-::: tip Performance Tip
-Use `compute_fused_qc` when you need multiple metrics - it's faster than calling individual functions separately.
-:::
+## Configuration
 
+Default parameters in `scl::kernel::qc::config`:
+
+- `PREFETCH_DISTANCE = 16`: Cache line prefetch distance
+- `PCT_SCALE = 100`: Scale factor for percentage (0-100)
+
+---
+
+## Performance Notes
+
+### SIMD Optimization
+
+- All operations use SIMD for vectorized accumulation
+- Fused operations reduce memory access
+- Efficient sparse matrix traversal
+
+### Parallelization
+
+- All functions parallelize over cells
+- No synchronization needed (distinct output elements)
+- Scales with hardware concurrency
+
+---
+
+## Use Cases
+
+### Basic QC Filtering
+
+```cpp
+// Compute basic metrics
+scl::Array<Index> n_genes(n_cells);
+scl::Array<Real> total_counts(n_cells);
+scl::kernel::qc::compute_basic_qc(expression, n_genes, total_counts);
+
+// Filter cells
+for (Index i = 0; i < n_cells; ++i) {
+    if (n_genes[i] < 200 || total_counts[i] < 1000) {
+        // Low quality cell
+    }
+}
+```
+
+### Mitochondrial Filtering
+
+```cpp
+// Compute mitochondrial percentage
+scl::Array<Real> mito_pct(n_cells);
+scl::kernel::qc::compute_subset_pct(expression, mito_mask, mito_pct);
+
+// Filter high-mito cells
+for (Index i = 0; i < n_cells; ++i) {
+    if (mito_pct[i] > 20.0) {
+        // High mitochondrial content (damaged cell)
+    }
+}
+```
+
+### Comprehensive QC
+
+```cpp
+// Compute all metrics in single pass
+scl::kernel::qc::compute_fused_qc(
+    expression, mito_mask,
+    n_genes, total_counts, mito_pct
+);
+
+// Apply comprehensive filtering
+for (Index i = 0; i < n_cells; ++i) {
+    bool pass = (n_genes[i] >= 200) &&
+                (n_genes[i] <= 5000) &&
+                (total_counts[i] >= 1000) &&
+                (total_counts[i] <= 50000) &&
+                (mito_pct[i] <= 20.0);
+    // Use pass flag
+}
+```
+
+---
+
+## See Also
+
+- [Outlier Detection](../outlier)
+- [Normalization](../normalization)
+- [Sparse Matrices](../core/sparse)

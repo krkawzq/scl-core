@@ -281,21 +281,26 @@ export function sourceCodePlugin(md: MarkdownIt, options: PluginOptions) {
           const title = params.title || params.symbol
           const lang = params.lang || 'cpp'
           
+          // Render the code block using markdown-it's fence renderer
+          // This will use VitePress's built-in highlighting
+          const codeMarkdown = '```' + lang + '\n' + result.code + '\n```'
+          const codeHtml = md.render(codeMarkdown)
+          
           // Output CollapsibleCode component as Vue component tag
-          // Pass raw code string, component will render it as code block
+          // Pass highlighted HTML code
           const collapsedAttr = params.collapsed ? ' collapsed' : ''
           const titleAttr = params.title ? ` title="${escapeHtml(params.title)}"` : ''
           
-          // Escape the raw code for use in Vue template string
-          const escapedCode = result.code
+          // Escape the HTML for use in Vue template attribute
+          const escapedCodeHtml = codeHtml
             .replace(/\\/g, '\\\\')
-            .replace(/`/g, '\\`')
-            .replace(/\$/g, '\\$')
+            .replace(/"/g, '&quot;')
+            .replace(/\n/g, '\\n')
           
           const html = `<CollapsibleCode
   file="${escapeHtml(result.file)}"
   symbol="${escapeHtml(params.symbol)}"
-  code="${escapeHtml(escapedCode)}"
+  code="${escapedCodeHtml}"
   start-line="${result.startLine}"
   end-line="${result.endLine}"
   lang="${lang}"${titleAttr}${collapsedAttr}

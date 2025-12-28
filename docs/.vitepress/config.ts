@@ -60,7 +60,7 @@ export default defineConfig({
         // Navigation bar
         nav: [
           { text: 'Home', link: '/' },
-          { text: 'Guide', link: '/guide/getting-started' },
+          { text: 'C++ Developer', link: '/cpp/' },
           { 
             text: 'API Reference',
             items: [
@@ -69,37 +69,16 @@ export default defineConfig({
               { text: 'C API', link: '/api/c-api/' }
             ]
           },
-          { text: 'C++ Developer', link: '/cpp/' },
-          { text: 'Examples', link: '/examples/basic-usage' },
           {
             text: 'v0.2',
             items: [
-              { text: 'Changelog', link: '/changelog' },
-              { text: 'Contributing', link: '/contributing' }
+              { text: 'Contributing', link: '/CONTRIBUTING.md' }
             ]
           }
         ],
         
         // Sidebar
         sidebar: {
-          '/guide/': [
-            {
-              text: 'Introduction',
-              items: [
-                { text: 'What is SCL-Core?', link: '/guide/what-is-scl' },
-                { text: 'Getting Started', link: '/guide/getting-started' },
-                { text: 'Installation', link: '/guide/installation' }
-              ]
-            },
-            {
-              text: 'Core Concepts',
-              items: [
-                { text: 'Architecture', link: '/guide/architecture' },
-                { text: 'Performance', link: '/guide/performance' },
-                { text: 'C-ABI Interface', link: '/guide/c-abi' }
-              ]
-            }
-          ],
           '/api/': [
             {
               text: 'API Overview',
@@ -134,16 +113,6 @@ export default defineConfig({
               ]
             }
           ],
-          '/examples/': [
-            {
-              text: 'Examples',
-              items: [
-                { text: 'Basic Usage', link: '/examples/basic-usage' },
-                { text: 'Performance Tuning', link: '/examples/performance' },
-                { text: 'Custom Operators', link: '/examples/custom-operators' }
-              ]
-            }
-          ],
           '/cpp/': [
             {
               text: 'C++ Developer Guide',
@@ -175,7 +144,7 @@ export default defineConfig({
               collapsed: false,
               items: [
                 { text: 'Overview', link: '/cpp/threading/' },
-                { text: 'Parallel For', link: '/cpp/threading/parallel-for' },
+                { text: 'Parallel For', link: '/cpp/threading/parallel_for' },
                 { text: 'Scheduler', link: '/cpp/threading/scheduler' },
                 { text: 'Workspace', link: '/cpp/threading/workspace' }
               ]
@@ -185,8 +154,10 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { text: 'Overview', link: '/cpp/kernels/' },
-                { text: 'Sparse Tools', link: '/cpp/kernels/sparse-tools' },
-                { text: 'Linear Algebra', link: '/cpp/kernels/algebra' },
+                { text: 'Algebra', link: '/cpp/kernels/algebra' },
+                { text: 'Alignment', link: '/cpp/kernels/alignment' },
+                { text: 'Annotation', link: '/cpp/kernels/annotation' },
+                { text: 'Association', link: '/cpp/kernels/association' },
                 { text: 'Feature Statistics', link: '/cpp/kernels/feature' },
                 { text: 'Scaling', link: '/cpp/kernels/scale' },
                 { text: 'Normalization', link: '/cpp/kernels/normalization' },
@@ -206,6 +177,11 @@ export default defineConfig({
                 { text: 'Slice', link: '/cpp/kernels/slice' },
                 { text: 'Group', link: '/cpp/kernels/group' },
                 { text: 'Log1p Transform', link: '/cpp/kernels/log1p' },
+                { text: 'Outlier Detection', link: '/cpp/kernels/outlier' },
+                { text: 'Permutation Tests', link: '/cpp/kernels/permutation' },
+                { text: 'Projection', link: '/cpp/kernels/projection' },
+                { text: 'Propagation', link: '/cpp/kernels/propagation' },
+                { text: 'Pseudotime', link: '/cpp/kernels/pseudotime' },
                 { text: 'Quality Control', link: '/cpp/kernels/qc' },
                 { text: 'Resampling', link: '/cpp/kernels/resample' },
                 { text: 'Entropy', link: '/cpp/kernels/entropy' },
@@ -214,16 +190,20 @@ export default defineConfig({
                 { text: 'Imputation', link: '/cpp/kernels/impute' },
                 { text: 'Connected Components', link: '/cpp/kernels/components' },
                 { text: 'Clustering Metrics', link: '/cpp/kernels/metrics' },
-                { text: 'Outlier Detection', link: '/cpp/kernels/outlier' },
                 { text: 'Sampling', link: '/cpp/kernels/sampling' },
-                { text: 'Statistics', link: '/cpp/kernels/statistics' },
-                { text: 'Clustering', link: '/cpp/kernels/clustering' },
+                { text: 'Multiple Testing', link: '/cpp/kernels/multiple_testing' },
+                { text: 'Scoring', link: '/cpp/kernels/scoring' },
                 { text: 'Spatial', link: '/cpp/kernels/spatial' },
-                { text: 'Subpopulation', link: '/cpp/kernels/subpopulation' },
-                { text: 'Clonotype', link: '/cpp/kernels/clonotype' },
-                { text: 'Lineage', link: '/cpp/kernels/lineage' },
                 { text: 'Spatial Pattern', link: '/cpp/kernels/spatial-pattern' },
-                { text: 'Tissue Architecture', link: '/cpp/kernels/tissue' }
+                { text: 'State', link: '/cpp/kernels/state' },
+                { text: 'Subpopulation', link: '/cpp/kernels/subpopulation' },
+                { text: 'Tissue Architecture', link: '/cpp/kernels/tissue' },
+                { text: 'Transition', link: '/cpp/kernels/transition' },
+                { text: 'Velocity', link: '/cpp/kernels/velocity' },
+                { text: 'Clonotype', link: '/cpp/kernels/clonotype' },
+                { text: 'Leiden', link: '/cpp/kernels/leiden' },
+                { text: 'Lineage', link: '/cpp/kernels/lineage' },
+                { text: 'Markers', link: '/cpp/kernels/markers' }
               ]
             }
           ]
@@ -284,7 +264,7 @@ export default defineConfig({
         // Navigation bar
         nav: [
           { text: '首页', link: '/zh/' },
-          { text: '指南', link: '/zh/guide/getting-started' },
+          { text: 'C++ 开发者', link: '/zh/cpp/' },
           { 
             text: 'API 参考',
             items: [
@@ -293,37 +273,16 @@ export default defineConfig({
               { text: 'C API', link: '/zh/api/c-api/' }
             ]
           },
-          { text: 'C++ 开发者', link: '/zh/cpp/' },
-          { text: '示例', link: '/zh/examples/basic-usage' },
           {
             text: 'v0.2',
             items: [
-              { text: '更新日志', link: '/zh/changelog' },
-              { text: '贡献指南', link: '/zh/contributing' }
+              { text: '贡献指南', link: '/CONTRIBUTING.md' }
             ]
           }
         ],
         
         // Sidebar
         sidebar: {
-          '/zh/guide/': [
-            {
-              text: '介绍',
-              items: [
-                { text: '什么是 SCL-Core?', link: '/zh/guide/what-is-scl' },
-                { text: '快速开始', link: '/zh/guide/getting-started' },
-                { text: '安装', link: '/zh/guide/installation' }
-              ]
-            },
-            {
-              text: '核心概念',
-              items: [
-                { text: '架构', link: '/zh/guide/architecture' },
-                { text: '性能', link: '/zh/guide/performance' },
-                { text: 'C-ABI 接口', link: '/zh/guide/c-abi' }
-              ]
-            }
-          ],
           '/zh/api/': [
             {
               text: 'API 概览',
@@ -358,16 +317,6 @@ export default defineConfig({
               ]
             }
           ],
-          '/zh/examples/': [
-            {
-              text: '示例',
-              items: [
-                { text: '基本用法', link: '/zh/examples/basic-usage' },
-                { text: '性能优化', link: '/zh/examples/performance' },
-                { text: '自定义算子', link: '/zh/examples/custom-operators' }
-              ]
-            }
-          ],
           '/zh/cpp/': [
             {
               text: 'C++ 开发者指南',
@@ -399,7 +348,7 @@ export default defineConfig({
               collapsed: false,
               items: [
                 { text: '概览', link: '/zh/cpp/threading/' },
-                { text: '并行循环', link: '/zh/cpp/threading/parallel-for' },
+                { text: '并行循环', link: '/zh/cpp/threading/parallel_for' },
                 { text: '调度器', link: '/zh/cpp/threading/scheduler' },
                 { text: '工作空间', link: '/zh/cpp/threading/workspace' }
               ]
@@ -409,8 +358,11 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { text: '概览', link: '/zh/cpp/kernels/' },
-                { text: '稀疏工具', link: '/zh/cpp/kernels/sparse-tools' },
                 { text: '线性代数', link: '/zh/cpp/kernels/algebra' },
+                { text: '对齐', link: '/zh/cpp/kernels/alignment' },
+                { text: '注释', link: '/zh/cpp/kernels/annotation' },
+                { text: '关联', link: '/zh/cpp/kernels/association' },
+                { text: '稀疏工具', link: '/zh/cpp/kernels/sparse-tools' },
                 { text: '特征统计', link: '/zh/cpp/kernels/feature' },
                 { text: '缩放', link: '/zh/cpp/kernels/scale' },
                 { text: '归一化', link: '/zh/cpp/kernels/normalization' },
@@ -442,16 +394,20 @@ export default defineConfig({
                 { text: '插补', link: '/zh/cpp/kernels/impute' },
                 { text: '连通分量', link: '/zh/cpp/kernels/components' },
                 { text: '聚类度量', link: '/zh/cpp/kernels/metrics' },
-                { text: '异常值检测', link: '/zh/cpp/kernels/outlier' },
                 { text: '采样', link: '/zh/cpp/kernels/sampling' },
-                { text: '统计', link: '/zh/cpp/kernels/statistics' },
-                { text: '聚类', link: '/zh/cpp/kernels/clustering' },
+                { text: '多重检验', link: '/zh/cpp/kernels/multiple_testing' },
+                { text: '评分', link: '/zh/cpp/kernels/scoring' },
                 { text: '空间分析', link: '/zh/cpp/kernels/spatial' },
-                { text: '亚群分析', link: '/zh/cpp/kernels/subpopulation' },
-                { text: '克隆型', link: '/zh/cpp/kernels/clonotype' },
-                { text: '谱系追踪', link: '/zh/cpp/kernels/lineage' },
                 { text: '空间模式', link: '/zh/cpp/kernels/spatial-pattern' },
-                { text: '组织结构', link: '/zh/cpp/kernels/tissue' }
+                { text: '状态', link: '/zh/cpp/kernels/state' },
+                { text: '亚群分析', link: '/zh/cpp/kernels/subpopulation' },
+                { text: '组织结构', link: '/zh/cpp/kernels/tissue' },
+                { text: '转换', link: '/zh/cpp/kernels/transition' },
+                { text: '速度', link: '/zh/cpp/kernels/velocity' },
+                { text: '克隆型', link: '/zh/cpp/kernels/clonotype' },
+                { text: 'Leiden', link: '/zh/cpp/kernels/leiden' },
+                { text: '谱系追踪', link: '/zh/cpp/kernels/lineage' },
+                { text: '标记基因', link: '/zh/cpp/kernels/markers' }
               ]
             }
           ]

@@ -1,578 +1,497 @@
-# 熵
+# entropy.hpp
 
-用于稀疏数据分析的信息论度量，包括熵、散度和互信息。
+> scl/kernel/entropy.hpp · 稀疏数据分析的信息论度量
 
 ## 概述
 
-熵模块提供：
+本文件提供用于分析稀疏单细胞数据的信息论度量，包括熵、互信息和特征选择方法。所有操作都针对稀疏矩阵进行了优化，并支持并行处理。
 
-- **Shannon 熵** - 从计数或稀疏矩阵计算信息熵
-- **KL 散度** - 分布之间的 Kullback-Leibler 散度
-- **JS 散度** - Jensen-Shannon 散度（对称、有限）
-- **互信息** - 变量之间共享的信息
-- **特征选择** - 基于 MI 和 mRMR 的特征选择
-- **离散化** - 等宽和等频分箱
+**头文件**: `#include "scl/kernel/entropy.hpp"`
 
-## 基本熵
+主要特性：
+- Shannon 熵计算
+- Kullback-Leibler 和 Jensen-Shannon 散度
+- 互信息和归一化变体
+- 通过 MI 和 mRMR 进行特征选择
+- 连续数据的离散化方法
+
+---
+
+## 主要 API
 
 ### count_entropy
 
+::: source_code file="scl/kernel/entropy.hpp" symbol="count_entropy" collapsed
+:::
+
+**算法说明**
+
 从计数数组计算 Shannon 熵：
+
+1. 计算总计数：`total = sum(counts)`
+2. 对于每个非零计数：
+   - 计算概率：`p_i = counts[i] / total`
+   - 累加：`entropy -= p_i * log(p_i)`
+3. 返回熵 H = -sum(p_i * log(p_i))
+4. 如果 `use_log2 = true` 使用以 2 为底的对数，否则使用自然对数
+
+**边界条件**
+
+- **总计数 = 0**：返回 0.0
+- **单个非零计数**：返回 0.0（无不确定性）
+- **均匀分布**：返回最大熵 = log(n)
+- **全零**：返回 0.0
+
+**数据保证（前置条件）**
+
+- 所有计数 >= 0
+- `n > 0`
+
+**复杂度分析**
+
+- **时间**：O(n)
+- **空间**：O(1) 辅助
+
+**示例**
 
 ```cpp
 #include "scl/kernel/entropy.hpp"
 
-const Real* counts = /* ... */;  // 计数值 [n]
+Real counts[] = {10, 20, 30, 40};
+Size n = 4;
 
-Real entropy = scl::kernel::entropy::count_entropy(
-    counts,
-    n,
-    false  // use_log2 = false（使用自然对数）
-);
-```
+Real entropy = scl::kernel::entropy::count_entropy(counts, n, false);
 
-**参数：**
-- `counts`: 计数值 [n]
-- `n`: 元素数量
-- `use_log2`: 如果为 true，使用以 2 为底的对数
-
-**返回：** 熵 H = -sum(p_i * log(p_i))
-
-**后置条件：**
-- 如果总计数为零，返回 0
-- 所有计数 >= 0
-
-**复杂度：**
-- 时间：O(n)
-- 空间：O(1) 辅助空间
-
-**使用场景：**
-- 分布熵
-- 多样性度量
-- 信息内容
-
-### row_entropy
-
-计算稀疏矩阵每行的 Shannon 熵：
-
-```cpp
-Sparse<Real, true> X = /* ... */;
-Array<Real> entropies(X.rows());
-
-scl::kernel::entropy::row_entropy(
-    X,
-    entropies,
-    false,  // normalize = false
-    false   // use_log2 = false
-);
-```
-
-**参数：**
-- `X`: 稀疏矩阵（CSR 或 CSC）
-- `entropies`: 输出的熵值 [n_rows]
-- `normalize`: 如果为 true，按最大熵归一化
-- `use_log2`: 如果为 true，使用以 2 为底的对数
-
-**后置条件：**
-- `entropies[i]` 包含行 i 的熵
-- 如果 normalize=true，值在 [0, 1] 范围内
-
-**复杂度：**
-- 时间：O(nnz)
-- 空间：O(1) 辅助空间（每行）
-
-**使用场景：**
-- 细胞表达多样性
-- 特征熵分析
-- 行级信息内容
-
-## 散度度量
-
-### kl_divergence
-
-计算两个概率分布之间的 Kullback-Leibler 散度：
-
-```cpp
-Array<const Real> p = /* ... */;  // 第一个分布 [n]
-Array<const Real> q = /* ... */;  // 第二个分布 [n]
-
-Real kl = scl::kernel::entropy::kl_divergence(
-    p,
-    q,
-    false  // use_log2
-);
-```
-
-**参数：**
-- `p`: 第一个分布 [n]
-- `q`: 第二个分布 [n]
-- `use_log2`: 如果为 true，使用以 2 为底的对数
-
-**返回：** KL(p || q) = sum(p_i * log(p_i / q_i))
-
-**后置条件：**
-- 如果 q_i = 0 且 p_i > 0，返回大值
-- 两个数组都表示概率分布
-
-**复杂度：**
-- 时间：O(n)
-- 空间：O(1) 辅助空间
-
-**使用场景：**
-- 分布比较
-- 模型评估
-- 信息增益
-
-### js_divergence
-
-计算两个概率分布之间的 Jensen-Shannon 散度：
-
-```cpp
-Real js = scl::kernel::entropy::js_divergence(
-    p,
-    q,
-    false  // use_log2
-);
-```
-
-**返回：** JS(p || q) = 0.5 * KL(p || m) + 0.5 * KL(q || m)，其中 m = (p+q)/2
-
-**后置条件：**
-- 始终有限且对称
-- 使用 log2 时值在 [0, 1] 范围内
-
-**复杂度：**
-- 时间：O(n)
-- 空间：O(1) 辅助空间
-
-**使用场景：**
-- 对称散度度量
-- 当 KL 散度未定义时
-- 距离度量
-
-## 离散化
-
-### discretize_equal_width
-
-将连续值离散化为等宽分箱：
-
-```cpp
-const Real* values = /* ... */;
-Index* binned = /* 分配 n */;
-
-scl::kernel::entropy::discretize_equal_width(
-    values,
-    n,
-    n_bins,  // 分箱数量
-    binned
-);
-```
-
-**参数：**
-- `values`: 连续值 [n]
-- `n`: 值数量
-- `n_bins`: 分箱数量
-- `binned`: 输出的分箱索引 [n]
-
-**后置条件：**
-- `binned[i]` 包含分箱索引，范围 [0, n_bins-1]
-- 同一分箱中的所有值具有相同范围
-
-**复杂度：**
-- 时间：O(n)
-- 空间：O(1) 辅助空间
-
-**使用场景：**
-- 连续到离散转换
-- 直方图计算
-- 熵估计
-
-### discretize_equal_frequency
-
-将连续值离散化为等频分箱：
-
-```cpp
-scl::kernel::entropy::discretize_equal_frequency(
-    values,
-    n,
-    n_bins,
-    binned
-);
-```
-
-**后置条件：**
-- `binned[i]` 包含分箱索引，范围 [0, n_bins-1]
-- 每个分箱包含大约 n/n_bins 个值
-
-**复杂度：**
-- 时间：O(n log n) 用于排序
-- 空间：O(n) 辅助空间
-
-**使用场景：**
-- 基于分位数的分箱
-- 对异常值鲁棒
-- 等样本大小分箱
-
-## 联合和条件熵
-
-### histogram_2d
-
-从分箱数据计算 2D 直方图：
-
-```cpp
-const Index* x_binned = /* ... */;
-const Index* y_binned = /* ... */;
-Size* counts = /* 分配 n_bins_x * n_bins_y */;
-
-scl::kernel::entropy::histogram_2d(
-    x_binned,
-    y_binned,
-    n,
-    n_bins_x,
-    n_bins_y,
-    counts
-);
-```
-
-**参数：**
-- `x_binned`: 分箱的 x 值 [n]
-- `y_binned`: 分箱的 y 值 [n]
-- `n`: 样本数量
-- `n_bins_x`: x 分箱数量
-- `n_bins_y`: y 分箱数量
-- `counts`: 输出的直方图计数 [n_bins_x * n_bins_y]
-
-**后置条件：**
-- `counts[i * n_bins_y + j]` 包含分箱 (i, j) 的计数
-
-**复杂度：**
-- 时间：O(n)
-- 空间：O(n_bins_x * n_bins_y) 辅助空间
-
-**使用场景：**
-- 联合分布估计
-- 2D 直方图计算
-- 列联表
-
-### joint_entropy
-
-从分箱数据计算联合熵 H(X, Y)：
-
-```cpp
-Real h_xy = scl::kernel::entropy::joint_entropy(
-    x_binned,
-    y_binned,
-    n,
-    n_bins_x,
-    n_bins_y,
-    false  // use_log2
-);
-```
-
-**返回：** H(X, Y) = -sum(p_ij * log(p_ij))
-
-**复杂度：**
-- 时间：O(n + n_bins_x * n_bins_y)
-- 空间：O(n_bins_x * n_bins_y) 辅助空间
-
-**使用场景：**
-- 联合信息内容
-- 多变量熵
-- 依赖性分析
-
-### marginal_entropy
-
-从分箱数据计算边际熵 H(X)：
-
-```cpp
-Real h_x = scl::kernel::entropy::marginal_entropy(
-    binned,
-    n,
-    n_bins,
-    false  // use_log2
-);
-```
-
-**返回：** H(X) = -sum(p_i * log(p_i))
-
-**复杂度：**
-- 时间：O(n + n_bins)
-- 空间：O(n_bins) 辅助空间
-
-**使用场景：**
-- 单变量熵
-- 边际信息内容
-- 单变量分析
-
-### conditional_entropy
-
-从分箱数据计算条件熵 H(Y | X)：
-
-```cpp
-Real h_y_given_x = scl::kernel::entropy::conditional_entropy(
-    x_binned,
-    y_binned,
-    n,
-    n_bins_x,
-    n_bins_y,
-    false  // use_log2
-);
-```
-
-**返回：** H(Y | X) = H(X, Y) - H(X)
-
-**复杂度：**
-- 时间：O(n + n_bins_x * n_bins_y)
-- 空间：O(n_bins_x * n_bins_y) 辅助空间
-
-**使用场景：**
-- 条件信息
-- 预测信息
-- 依赖性量化
-
-## 互信息
-
-### mutual_information
-
-从分箱数据计算互信息 I(X; Y)：
-
-```cpp
-Real mi = scl::kernel::entropy::mutual_information(
-    x_binned,
-    y_binned,
-    n,
-    n_bins_x,
-    n_bins_y,
-    false  // use_log2
-);
-```
-
-**返回：** I(X; Y) = H(X) + H(Y) - H(X, Y)
-
-**后置条件：**
-- 始终 >= 0
-- 如果 X 和 Y 独立，则 I(X; Y) = 0
-
-**复杂度：**
-- 时间：O(n + n_bins_x * n_bins_y)
-- 空间：O(n_bins_x * n_bins_y) 辅助空间
-
-**使用场景：**
-- 特征选择
-- 依赖性检测
-- 信息增益
-
-### normalized_mi
-
-计算两个标记之间的归一化互信息：
-
-```cpp
-Array<const Index> labels1 = /* ... */;
-Array<const Index> labels2 = /* ... */;
-
-Real nmi = scl::kernel::entropy::normalized_mi(
-    labels1,
-    labels2,
-    n_clusters1,
-    n_clusters2
-);
-```
-
-**返回：** NMI = 2 * I(X;Y) / (H(X) + H(Y))
-
-**后置条件：**
-- 值在 [0, 1] 范围内，其中 1 表示完全一致
-
-**复杂度：**
-- 时间：O(n + n_clusters1 * n_clusters2)
-- 空间：O(n_clusters1 * n_clusters2) 辅助空间
-
-**使用场景：**
-- 聚类评估
-- 标签一致性
-- 共识聚类
-
-### adjusted_mi
-
-计算调整互信息（机会校正）：
-
-```cpp
-Real ami = scl::kernel::entropy::adjusted_mi(
-    labels1,
-    labels2,
-    n_clusters1,
-    n_clusters2
-);
-```
-
-**返回：** AMI = (MI - E[MI]) / (max(H1, H2) - E[MI])
-
-**后置条件：**
-- 值在 [-1, 1] 范围内，其中 1 表示完全一致
-- 针对随机机会进行校正
-
-**复杂度：**
-- 时间：O(n + n_clusters1 * n_clusters2)
-- 空间：O(n_clusters1 * n_clusters2) 辅助空间
-
-**使用场景：**
-- 带机会校正的聚类评估
-- 比 NMI 更鲁棒
-- 当聚类数量不同时
-
-## 特征选择
-
-### select_features_mi
-
-使用与目标的互信息选择顶级特征：
-
-```cpp
-Sparse<Real, true> X = /* ... */;
-Array<const Index> target = /* ... */;  // 目标标签
-Array<Index> selected_features(n_to_select);
-Array<Real> mi_scores(n_features);
-
-scl::kernel::entropy::select_features_mi(
-    X,
-    target,
-    n_features,
-    n_to_select,
-    selected_features,
-    mi_scores,
-    config::DEFAULT_N_BINS  // n_bins = 10
-);
-```
-
-**参数：**
-- `X`: 特征矩阵（CSR 或 CSC）
-- `target`: 目标标签 [n_samples]
-- `n_features`: 特征总数
-- `n_to_select`: 要选择的特征数量
-- `selected_features`: 选择的特征索引 [n_to_select]
-- `mi_scores`: 所有特征的 MI 分数 [n_features]
-- `n_bins`: 用于离散化的分箱数量
-
-**后置条件：**
-- `selected_features` 包含按 MI 排序的前 n_to_select 个特征
-- `mi_scores` 包含每个特征的 MI 分数
-
-**复杂度：**
-- 时间：O(n_features * n_samples * log(nnz_per_sample))
-- 空间：O(n_samples) 辅助空间
-
-**使用场景：**
-- 特征选择
-- 基因选择
-- 降维
-
-### mrmr_selection
-
-使用最小冗余最大相关性（mRMR）选择特征：
-
-```cpp
-Array<Index> selected_features(n_to_select);
-
-scl::kernel::entropy::mrmr_selection(
-    X,
-    target,
-    n_features,
-    n_to_select,
-    selected_features,
-    config::DEFAULT_N_BINS
-);
-```
-
-**后置条件：**
-- `selected_features` 包含 mRMR 选择的特征
-- 特征最大化相关性并最小化冗余
-
-**算法：**
-贪心选择：
-1. 选择与目标具有最高 MI 的特征
-2. 对于每个剩余特征：
-   - 计算相关性（与目标的 MI）
-   - 计算冗余（与已选特征的平均 MI）
-   - 选择 max(相关性 - 冗余) 的特征
-
-**复杂度：**
-- 时间：O(n_to_select * n_features * n_samples)
-- 空间：O(n_features * n_samples) 辅助空间
-
-**使用场景：**
-- 带冗余控制的特征选择
-- 当特征相关时
-- 比简单 MI 排序更好
-
-## 配置
-
-`scl::kernel::entropy::config` 中的默认参数：
-
-```cpp
-namespace config {
-    constexpr Real LOG_BASE_E = 2.718281828459045;
-    constexpr Real LOG_2 = 0.693147180559945;
-    constexpr Real INV_LOG_2 = 1.4426950408889634;
-    constexpr Real EPSILON = 1e-15;
-    constexpr Index DEFAULT_N_BINS = 10;
-    constexpr Size PARALLEL_THRESHOLD = 128;
-    constexpr Size SIMD_THRESHOLD = 16;
-    constexpr size_t PREFETCH_DISTANCE = 64;
-}
-```
-
-## 性能考虑
-
-### 并行化
-
-- `row_entropy`: 在行上并行
-- `histogram_2d`: 使用原子累加并行
-- `mutual_information`: 并行操作
-- `select_features_mi`: 顺序（但可以在每个特征上并行）
-
-### 内存效率
-
-- 预分配的输出缓冲区
-- 高效的直方图计算
-- 最少的临时分配
-
-## 最佳实践
-
-### 1. 选择适当的分箱
-
-```cpp
-// 均匀分布的等宽
-scl::kernel::entropy::discretize_equal_width(values, n, n_bins, binned);
-
-// 偏斜分布的等频
-scl::kernel::entropy::discretize_equal_frequency(values, n, n_bins, binned);
-```
-
-### 2. 使用 JS 散度获得对称性
-
-```cpp
-// 当需要对称时
-Real js = scl::kernel::entropy::js_divergence(p, q);
-
-// 当方向重要时
-Real kl = scl::kernel::entropy::kl_divergence(p, q);
-```
-
-### 3. 使用 mRMR 进行特征选择
-
-```cpp
-// 当特征相关时
-scl::kernel::entropy::mrmr_selection(X, target, n_features, n_to_select, selected);
-
-// 当特征独立时
-scl::kernel::entropy::select_features_mi(X, target, n_features, n_to_select, selected, scores);
+// entropy = -sum((count/total) * log(count/total))
 ```
 
 ---
 
-::: tip 对数底
-对信息论度量使用 log2（比特），对一般熵使用自然对数。
+### row_entropy
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="row_entropy" collapsed
 :::
 
-::: warning 离散化
-分箱方法和分箱数量的选择显著影响熵估计。对偏斜数据使用等频。
+**算法说明**
+
+计算稀疏矩阵每一行的 Shannon 熵：
+
+1. 对于每一行 i（并行）：
+   - 提取第 i 行中的非零值
+   - 计算行和：`row_sum = sum(row_i)`
+   - 对于每个非零值：
+     - 概率：`p_j = value / row_sum`
+     - 累加：`entropy[i] -= p_j * log(p_j)`
+2. 如果 `normalize = true`：除以最大熵（log(n_cols)）
+3. 如果归一化，返回 [0, 1] 范围内的熵值
+
+**边界条件**
+
+- **空行**：熵 = 0.0
+- **单个非零**：熵 = 0.0
+- **均匀行**：最大熵
+- **全零**：熵 = 0.0
+
+**数据保证（前置条件）**
+
+- `entropies.len >= X.rows()`
+- X 必须是有效的 CSR 或 CSC 格式
+
+**复杂度分析**
+
+- **时间**：O(nnz) - 与非零元素数成正比
+- **空间**：O(1) 辅助每行
+
+**示例**
+
+```cpp
+scl::Sparse<Real, true> X = /* 表达矩阵 */;
+scl::Array<Real> entropies(X.rows());
+
+scl::kernel::entropy::row_entropy(X, entropies, false, false);
+
+// entropies[i] = 第 i 行的熵（基因表达分布）
+```
+
+---
+
+### kl_divergence
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="kl_divergence" collapsed
 :::
+
+**算法说明**
+
+计算两个概率分布之间的 Kullback-Leibler 散度：
+
+1. 对于每个元素 i：
+   - 如果 `p[i] > 0` 且 `q[i] > 0`：累加 `p[i] * log(p[i] / q[i])`
+   - 如果 `p[i] > 0` 且 `q[i] = 0`：返回大值（无穷大）
+   - 如果 `p[i] = 0`：跳过（0 * log(0) = 0）
+2. 返回 KL(p || q) = sum(p_i * log(p_i / q_i))
+3. 非对称：KL(p||q) != KL(q||p)
+
+**边界条件**
+
+- **q[i] = 0 且 p[i] > 0**：返回大值（散度未定义）
+- **p = q**：返回 0.0
+- **p 全零**：返回 0.0
+- **q 全零且 p 不全零**：返回大值
+
+**数据保证（前置条件）**
+
+- `p.len == q.len`
+- 两个数组都表示概率分布（和为 1.0）
+- 所有值 >= 0
+
+**复杂度分析**
+
+- **时间**：O(n)
+- **空间**：O(1) 辅助
+
+**示例**
+
+```cpp
+scl::Array<Real> p = {0.5, 0.3, 0.2};  // 分布 1
+scl::Array<Real> q = {0.4, 0.4, 0.2};  // 分布 2
+
+Real kl = scl::kernel::entropy::kl_divergence(p, q, false);
+
+// kl = KL(p || q) = sum(p_i * log(p_i / q_i))
+```
+
+---
+
+### js_divergence
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="js_divergence" collapsed
+:::
+
+**算法说明**
+
+计算两个概率分布之间的 Jensen-Shannon 散度：
+
+1. 计算混合：`m = (p + q) / 2`
+2. 计算 JS = 0.5 * KL(p || m) + 0.5 * KL(q || m)
+3. 总是有限且对称：JS(p||q) = JS(q||p)
+4. 有界：如果使用以 2 为底的对数，JS 在 [0, 1] 范围内
+
+**边界条件**
+
+- **p = q**：返回 0.0
+- **p 和 q 不相交**：返回最大 JS
+- **总是有限**：与 KL 不同，从不返回无穷大
+
+**数据保证（前置条件）**
+
+- `p.len == q.len`
+- 两个数组都表示概率分布
+- 所有值 >= 0
+
+**复杂度分析**
+
+- **时间**：O(n)
+- **空间**：O(1) 辅助
+
+**示例**
+
+```cpp
+scl::Array<Real> p = {0.5, 0.3, 0.2};
+scl::Array<Real> q = {0.4, 0.4, 0.2};
+
+Real js = scl::kernel::entropy::js_divergence(p, q, false);
+
+// js = 0.5 * KL(p || m) + 0.5 * KL(q || m) 其中 m = (p+q)/2
+// 总是有限且对称
+```
+
+---
+
+### mutual_information
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="mutual_information" collapsed
+:::
+
+**算法说明**
+
+从分箱数据计算互信息 I(X; Y)：
+
+1. 计算 2D 直方图：`counts[i][j]` = 在箱 (i, j) 中的样本数
+2. 计算联合熵：H(X, Y) = -sum(p_ij * log(p_ij))
+3. 计算边际熵：H(X) 和 H(Y)
+4. 返回 MI = H(X) + H(Y) - H(X, Y)
+5. 总是 >= 0，如果 X 和 Y 独立则等于 0
+
+**边界条件**
+
+- **X 和 Y 独立**：MI = 0.0
+- **X = Y**：MI = H(X)（最大值）
+- **无样本**：返回 0.0
+- **所有样本在一个箱中**：MI = 0.0
+
+**数据保证（前置条件）**
+
+- 所有箱索引有效：`x_binned[i] in [0, n_bins_x)`，`y_binned[i] in [0, n_bins_y)`
+- `n > 0`
+
+**复杂度分析**
+
+- **时间**：O(n + n_bins_x * n_bins_y)
+- **空间**：O(n_bins_x * n_bins_y) 辅助
+
+**示例**
+
+```cpp
+// 首先离散化连续值
+scl::Array<Index> x_binned = /* 分箱的 x 值 */;
+scl::Array<Index> y_binned = /* 分箱的 y 值 */;
+
+Real mi = scl::kernel::entropy::mutual_information(
+    x_binned.data(), y_binned.data(), n,
+    n_bins_x, n_bins_y, false
+);
+
+// mi = I(X; Y) = H(X) + H(Y) - H(X, Y)
+// 更高的 MI 表示更强的依赖性
+```
+
+---
+
+### normalized_mi
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="normalized_mi" collapsed
+:::
+
+**算法说明**
+
+计算两个标记之间的归一化互信息：
+
+1. 从标记计算互信息 I(X; Y)
+2. 计算边际熵 H(X) 和 H(Y)
+3. 返回 NMI = 2 * I(X; Y) / (H(X) + H(Y))
+4. 值在 [0, 1] 范围内，其中 1 表示完美一致
+5. 对称：NMI(X, Y) = NMI(Y, X)
+
+**边界条件**
+
+- **完美一致**：NMI = 1.0
+- **独立标记**：NMI = 0.0
+- **一个标记只有一个聚类**：NMI = 0.0（H = 0）
+
+**数据保证（前置条件）**
+
+- `labels1.len == labels2.len`
+- 所有标记索引有效：`labels1[i] in [0, n_clusters1)`，`labels2[i] in [0, n_clusters2)`
+
+**复杂度分析**
+
+- **时间**：O(n + n_clusters1 * n_clusters2)
+- **空间**：O(n_clusters1 * n_clusters2) 辅助
+
+**示例**
+
+```cpp
+scl::Array<Index> labels1 = /* 第一个聚类 */;
+scl::Array<Index> labels2 = /* 第二个聚类 */;
+
+Real nmi = scl::kernel::entropy::normalized_mi(
+    labels1, labels2, n_clusters1, n_clusters2
+);
+
+// nmi 在 [0, 1] 范围内，越高 = 一致性越好
+```
+
+---
+
+### select_features_mi
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="select_features_mi" collapsed
+:::
+
+**算法说明**
+
+使用与目标的互信息选择顶级特征：
+
+1. 对于每个特征 f：
+   - 将特征值离散化为 n_bins
+   - 计算离散化特征与目标标记之间的 MI
+   - 存储 MI 分数
+2. 按 MI 分数对特征进行排序（降序）
+3. 选择前 n_to_select 个特征
+4. 返回选定的特征和所有 MI 分数
+
+**边界条件**
+
+- **n_to_select = 0**：返回空选择
+- **n_to_select >= n_features**：返回所有特征
+- **常量特征**：MI = 0.0
+- **完美相关**：MI = H(target)
+
+**数据保证（前置条件）**
+
+- `selected_features` 容量 >= n_to_select
+- `mi_scores` 容量 >= n_features
+- `target` 包含有效的标记索引
+- X 必须是有效的 CSR 或 CSC 格式
+
+**复杂度分析**
+
+- **时间**：O(n_features * n_samples * log(nnz_per_sample))
+- **空间**：O(n_samples) 辅助
+
+**示例**
+
+```cpp
+scl::Sparse<Real, true> X = /* 特征矩阵 */;
+scl::Array<Index> target = /* 目标标记 */;
+Index n_to_select = 100;
+
+scl::Array<Index> selected_features(n_to_select);
+scl::Array<Real> mi_scores(n_features);
+
+scl::kernel::entropy::select_features_mi(
+    X, target, n_features, n_to_select,
+    selected_features, mi_scores, 10  // n_bins
+);
+
+// selected_features 包含按 MI 排序的前 100 个特征
+// mi_scores 包含所有特征的 MI 分数
+```
+
+---
+
+### mrmr_selection
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="mrmr_selection" collapsed
+:::
+
+**算法说明**
+
+使用最小冗余最大相关性（mRMR）选择特征：
+
+1. 初始化：选择与目标具有最高 MI 的特征
+2. 对于每个剩余选择：
+   - 对于每个未选择的特征 f：
+     - 计算相关性：MI(f, target)
+     - 计算冗余：mean(MI(f, selected_features))
+     - 分数：相关性 - 冗余
+   - 选择分数最高的特征
+3. 贪心选择平衡相关性和冗余
+4. 按选择顺序返回选定的特征
+
+**边界条件**
+
+- **n_to_select = 0**：返回空选择
+- **n_to_select = 1**：返回单个最佳特征
+- **所有特征冗余**：可能选择少于请求的数量
+
+**数据保证（前置条件）**
+
+- `selected_features` 容量 >= n_to_select
+- `target` 包含有效的标记索引
+- X 必须是有效的 CSR 或 CSC 格式
+
+**复杂度分析**
+
+- **时间**：O(n_to_select * n_features * n_samples)
+- **空间**：O(n_features * n_samples) 辅助
+
+**示例**
+
+```cpp
+scl::Array<Index> selected_features(n_to_select);
+
+scl::kernel::entropy::mrmr_selection(
+    X, target, n_features, n_to_select,
+    selected_features, 10  // n_bins
+);
+
+// selected_features 包含 mRMR 选择的特征
+// 特征最大化相关性并最小化冗余
+```
+
+---
+
+## 工具函数
+
+### discretize_equal_width
+
+将连续值离散化为等宽箱。
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="discretize_equal_width" collapsed
+:::
+
+**复杂度**
+
+- 时间：O(n)
+- 空间：O(1) 辅助
+
+---
+
+### discretize_equal_frequency
+
+将连续值离散化为等频箱。
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="discretize_equal_frequency" collapsed
+:::
+
+**复杂度**
+
+- 时间：O(n log n) 用于排序
+- 空间：O(n) 辅助
+
+---
+
+### joint_entropy
+
+从分箱数据计算联合熵 H(X, Y)。
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="joint_entropy" collapsed
+:::
+
+**复杂度**
+
+- 时间：O(n + n_bins_x * n_bins_y)
+- 空间：O(n_bins_x * n_bins_y) 辅助
+
+---
+
+### conditional_entropy
+
+从分箱数据计算条件熵 H(Y | X)。
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="conditional_entropy" collapsed
+:::
+
+**复杂度**
+
+- 时间：O(n + n_bins_x * n_bins_y)
+- 空间：O(n_bins_x * n_bins_y) 辅助
+
+---
+
+### adjusted_mi
+
+计算调整后的互信息（机会校正）。
+
+::: source_code file="scl/kernel/entropy.hpp" symbol="adjusted_mi" collapsed
+:::
+
+**复杂度**
+
+- 时间：O(n + n_clusters1 * n_clusters2)
+- 空间：O(n_clusters1 * n_clusters2) 辅助
+
+---
+
+## 注意事项
+
+- 熵需要概率分布 - 确保归一化
+- 在计算 MI 之前，对连续数据进行离散化是必要的
+- mRMR 比简单的 MI 更适合特征选择（减少冗余）
+- 归一化 MI 对于比较不同大小的聚类很有用
+
+## 相关内容
+
+- [特征选择模块](./feature) - 其他特征选择方法
+- [统计模块](../math/statistics) - 统计度量

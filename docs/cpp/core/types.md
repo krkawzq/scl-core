@@ -1,407 +1,396 @@
-# Type System
+# type.hpp
 
-SCL-Core uses a unified type system with compile-time configuration for precision and index types.
+> scl/core/type.hpp · Unified type system with compile-time configuration
 
 ## Overview
 
-The type system provides:
+This file defines the fundamental type system for SCL-Core, providing compile-time configurable precision and index types. The type system enables a single codebase to support multiple precision levels (float32/float64/float16) and index sizes (int16/int32/int64) without runtime overhead.
 
-- **`Real`** - Configurable floating-point type (float32/float64/float16)
-- **`Index`** - Signed integer for indexing (int16/int32/int64)
-- **`Size`** - Unsigned integer for sizes and byte counts
+Key features:
+- Compile-time type selection via preprocessor macros
+- Zero-overhead type aliases (no runtime cost)
+- Type-safe array views (Array<T>)
+- Generic concepts for container interoperability (ArrayLike, CSRLike)
 
-## Fundamental Types
+**Header**: `#include "scl/core/type.hpp"`
 
-### Real - Floating-Point Type
+---
 
-Primary floating-point type for numerical computation.
+## Main APIs
 
-```cpp
-using Real = /* float | double | _Float16 */;
-```
+### Real
 
-**Configuration:**
+Primary floating-point type for numerical computation, configured at compile time.
 
-Selected at compile-time via one of:
-- `SCL_USE_FLOAT32`: `Real = float` (32-bit IEEE 754)
-- `SCL_USE_FLOAT64`: `Real = double` (64-bit IEEE 754)
-- `SCL_USE_FLOAT16`: `Real = _Float16` (16-bit IEEE 754-2008)
+::: source_code file="scl/core/type.hpp" symbol="Real" collapsed
+:::
 
-**Metadata:**
+**Algorithm Description**
 
-```cpp
-constexpr int DTYPE_CODE;         // 0, 1, or 2
-constexpr const char* DTYPE_NAME; // "float32", "float64", or "float16"
-```
+Real is a type alias selected at compile time via one of three preprocessor macros:
+- `SCL_USE_FLOAT32`: Real = float (32-bit IEEE 754)
+- `SCL_USE_FLOAT64`: Real = double (64-bit IEEE 754)
+- `SCL_USE_FLOAT16`: Real = _Float16 (16-bit IEEE 754-2008)
 
-**Precision Requirements:**
+The selection is enforced at compile time: exactly one macro must be defined, otherwise compilation error. The precision is library-wide and cannot be mixed within a single build.
 
-| Type | Bits | Mantissa | Exponent | Range |
-|------|------|----------|----------|-------|
-| float32 | 32 | 23 | 8 | ±3.4e38 |
-| float64 | 64 | 52 | 11 | ±1.7e308 |
-| float16 | 16 | 10 | 5 | ±65504 |
+**Edge Cases**
 
-**Usage Guidelines:**
+- **No macro defined**: Compilation error (exactly one must be defined)
+- **Multiple macros defined**: Compilation error (conflicting definitions)
+- **float16 compatibility**: Requires GCC >= 12 or Clang >= 15
 
-- Use `Real` for all numerical computations
-- Do NOT hardcode `float` or `double` in library code
-- Precision is library-wide, cannot mix within single build
+**Data Guarantees (Preconditions)**
 
-**Performance:**
+- One and only one of SCL_USE_FLOAT32, SCL_USE_FLOAT64, SCL_USE_FLOAT16 must be defined
+- Precision is consistent across entire library build
 
-- **float32**: Fastest on most hardware, 2x throughput vs float64 on SIMD
-- **float64**: Slower but better numerical stability
-- **float16**: 4x throughput on modern GPUs, limited CPU support
+**Complexity Analysis**
 
-**Example:**
+- **Time**: O(1) - compile-time selection, zero runtime overhead
+- **Space**: O(1) - type alias, no storage overhead
+
+**Example**
 
 ```cpp
 #include "scl/core/type.hpp"
 
-using namespace scl;
-
-Real x = 3.14;
-Real y = 2.71;
-Real z = x * y;
-
-std::cout << "Using " << DTYPE_NAME << " precision\n";
-```
-
-### Index - Signed Integer for Indexing
-
-Signed integer type for array indexing and dimensions.
-
-```cpp
-using Index = /* int16_t | int32_t | int64_t */;
-```
-
-**Configuration:**
-
-Selected at compile-time via one of:
-- `SCL_USE_INT16`: `Index = int16_t` (16-bit signed)
-- `SCL_USE_INT32`: `Index = int32_t` (32-bit signed)
-- `SCL_USE_INT64`: `Index = int64_t` (64-bit signed)
-
-**Metadata:**
-
-```cpp
-constexpr int INDEX_DTYPE_CODE;         // 0, 1, or 2
-constexpr const char* INDEX_DTYPE_NAME; // "int16", "int32", or "int64"
-```
-
-**Rationale for Signed:**
-
-- Allows negative indices for reverse iteration
-- Simplifies loop bounds checking (`i >= 0`)
-- Compatible with BLAS/LAPACK conventions
-- Prevents unsigned underflow bugs in loops
-
-**Size Guidelines:**
-
-| Type | Range | Max Matrix Size | Use Case |
-|------|-------|-----------------|----------|
-| int16 | ±32K | 32K × 32K | Small matrices, saves memory |
-| int32 | ±2B | 2B × 2B | Standard choice |
-| int64 | ±9E18 | Very large | Huge matrices, increases memory |
-
-**Usage Guidelines:**
-
-- Use `Index` for all array indexing, dimensions, loop counters
-- Do NOT use `int` or `size_t` for indexing
-- Use `Size` (unsigned) only for memory/byte sizes
-
-**Performance:**
-
-Smaller indices reduce memory traffic and improve cache performance, but must be large enough for your data.
-
-**Example:**
-
-```cpp
-#include "scl/core/type.hpp"
-
-using namespace scl;
-
-Index rows = 1000;
-Index cols = 500;
-
-for (Index i = 0; i < rows; ++i) {
-    for (Index j = 0; j < cols; ++j) {
-        // Process element (i, j)
-    }
-}
-```
-
-### Size - Unsigned Integer for Sizes
-
-Unsigned integer type for sizes and byte counts.
-
-```cpp
-using Size = size_t;
-```
-
-**Usage Guidelines:**
-
-- Use `Size` for memory sizes, byte counts, capacities
-- Use `Size` for loop counters that never go negative
-- Do NOT use `Size` for array indexing (use `Index`)
-
-**Example:**
-
-```cpp
-#include "scl/core/type.hpp"
-
-using namespace scl;
-
-Size num_bytes = 1024 * 1024;  // 1 MB
-Size capacity = 10000;
-
-Real* data = new Real[capacity];
-Size byte_size = capacity * sizeof(Real);
-```
-
-## Type Traits
-
-### Numeric Limits
-
-```cpp
-#include <limits>
-
-// Real limits
-constexpr Real real_min = std::numeric_limits<Real>::min();
-constexpr Real real_max = std::numeric_limits<Real>::max();
-constexpr Real real_epsilon = std::numeric_limits<Real>::epsilon();
-
-// Index limits
-constexpr Index index_min = std::numeric_limits<Index>::min();
-constexpr Index index_max = std::numeric_limits<Index>::max();
-```
-
-### Type Queries
-
-```cpp
-#include <type_traits>
-
-// Check if Real is float
-constexpr bool is_float32 = std::is_same_v<Real, float>;
-
-// Check if Index is int32
-constexpr bool is_int32 = std::is_same_v<Index, int32_t>;
-
-// Size of types
-constexpr size_t real_size = sizeof(Real);
-constexpr size_t index_size = sizeof(Index);
-```
-
-## Compile-Time Configuration
-
-### CMake Configuration
-
-```cmake
-# In CMakeLists.txt
-
-# Set Real type
-option(SCL_USE_FLOAT32 "Use float32 for Real" ON)
-option(SCL_USE_FLOAT64 "Use float64 for Real" OFF)
-option(SCL_USE_FLOAT16 "Use float16 for Real" OFF)
-
-# Set Index type
-option(SCL_USE_INT16 "Use int16 for Index" OFF)
-option(SCL_USE_INT32 "Use int32 for Index" ON)
-option(SCL_USE_INT64 "Use int64 for Index" OFF)
-
-# Generate config.hpp
-configure_file(
-    "${CMAKE_SOURCE_DIR}/scl/config.hpp.in"
-    "${CMAKE_BINARY_DIR}/scl/config.hpp"
-)
-```
-
-### Manual Configuration
-
-```cpp
-// In scl/config.hpp
-
-// Real type (exactly one must be defined)
-#define SCL_USE_FLOAT32
-// #define SCL_USE_FLOAT64
-// #define SCL_USE_FLOAT16
-
-// Index type (exactly one must be defined)
-// #define SCL_USE_INT16
-#define SCL_USE_INT32
-// #define SCL_USE_INT64
-```
-
-## Type Conversion
-
-### Safe Conversions
-
-```cpp
-// Index to Size (always safe)
-Index i = 100;
-Size s = static_cast<Size>(i);
-
-// Size to Index (check bounds)
-Size s = 1000;
-if (s <= static_cast<Size>(std::numeric_limits<Index>::max())) {
-    Index i = static_cast<Index>(s);
-}
-
-// Real to Index (truncation)
-Real x = 3.14;
-Index i = static_cast<Index>(x);  // i = 3
-```
-
-### Unsafe Conversions
-
-```cpp
-// BAD: Size to Index without check
-Size s = 3000000000;  // 3 billion
-Index i = static_cast<Index>(s);  // Overflow if Index = int32_t!
-
-// BAD: Mixing signed and unsigned in comparisons
-Index i = -1;
-Size s = 10;
-if (i < s) {  // WARNING: i converted to Size, becomes huge!
-    // ...
-}
-```
-
-## Best Practices
-
-### 1. Use Correct Type for Purpose
-
-```cpp
-// GOOD
-Index row = 0;           // Array index
-Size capacity = 1000;    // Memory size
-Real value = 3.14;       // Numerical value
-
-// BAD
-int row = 0;             // Use Index
-unsigned capacity = 1000; // Use Size
-float value = 3.14;      // Use Real
-```
-
-### 2. Avoid Mixing Signed and Unsigned
-
-```cpp
-// BAD: Mixing signed and unsigned
-Index i = -1;
-Size n = 10;
-if (i < n) {  // i converted to Size, comparison wrong!
-    // ...
-}
-
-// GOOD: Use same signedness
-Index i = -1;
-Index n = 10;
-if (i < n) {  // Correct comparison
-    // ...
-}
-```
-
-### 3. Check Bounds for Conversions
-
-```cpp
-// BAD: Unchecked conversion
-Size large = 5000000000;
-Index i = static_cast<Index>(large);  // Overflow!
-
-// GOOD: Check bounds
-Size large = 5000000000;
-if (large <= static_cast<Size>(std::numeric_limits<Index>::max())) {
-    Index i = static_cast<Index>(large);
-} else {
-    // Handle error
-}
-```
-
-### 4. Use Type Aliases Consistently
-
-```cpp
-// GOOD: Use type aliases
-void process(const Real* data, Index n);
-
-// BAD: Hardcode types
-void process(const float* data, int n);
-```
-
-## Type Selection Guidelines
-
-### Choosing Real Type
-
-**Use float32 when:**
-- Performance is critical
-- Memory bandwidth is limited
-- Numerical precision is adequate
-- SIMD throughput matters
-
-**Use float64 when:**
-- High numerical precision required
-- Accumulating many values
-- Iterative algorithms (error accumulation)
-- Scientific computing standards
-
-**Use float16 when:**
-- GPU acceleration available
-- Memory extremely limited
-- Reduced precision acceptable
-- Inference (not training)
-
-### Choosing Index Type
-
-**Use int16 when:**
-- Matrices < 32K × 32K
-- Memory is very limited
-- Cache performance critical
-- Embedded systems
-
-**Use int32 when:**
-- Standard use case
-- Matrices < 2B × 2B
-- Good balance of range and memory
-
-**Use int64 when:**
-- Very large matrices
-- Future-proofing
-- Memory not a concern
-- 64-bit pointers anyway
-
-## Debugging Type Issues
-
-### Print Type Information
-
-```cpp
-#include <iostream>
-#include <typeinfo>
-
-std::cout << "Real type: " << typeid(Real).name() << "\n";
-std::cout << "Real size: " << sizeof(Real) << " bytes\n";
-std::cout << "Index type: " << typeid(Index).name() << "\n";
-std::cout << "Index size: " << sizeof(Index) << " bytes\n";
-```
-
-### Compile-Time Assertions
-
-```cpp
-// Ensure Real is float or double
-static_assert(std::is_floating_point_v<Real>, 
-              "Real must be floating-point type");
-
-// Ensure Index is signed
-static_assert(std::is_signed_v<Index>, 
-              "Index must be signed integer type");
-
-// Ensure Size is unsigned
-static_assert(std::is_unsigned_v<Size>, 
-              "Size must be unsigned integer type");
+// Compile with: -DSCL_USE_FLOAT32
+Real x = 3.14f;  // Real is float
+
+// Compile with: -DSCL_USE_FLOAT64
+Real y = 3.14;   // Real is double
+
+// Metadata available at compile time
+constexpr int dtype_code = DTYPE_CODE;         // 0, 1, or 2
+constexpr const char* dtype_name = DTYPE_NAME; // "float32", "float64", or "float16"
 ```
 
 ---
 
-::: tip Type Consistency
-Always use `Real`, `Index`, and `Size` instead of hardcoded types. This ensures your code works with any configuration.
+### Index
+
+Signed integer type for array indexing and dimensions, configured at compile time.
+
+::: source_code file="scl/core/type.hpp" symbol="Index" collapsed
 :::
 
+**Algorithm Description**
+
+Index is a signed integer type selected at compile time via one of three preprocessor macros:
+- `SCL_USE_INT16`: Index = int16_t (16-bit signed, supports up to 32K x 32K matrices)
+- `SCL_USE_INT32`: Index = int32_t (32-bit signed, standard choice, supports 2B x 2B matrices)
+- `SCL_USE_INT64`: Index = int64_t (64-bit signed, for very large matrices)
+
+The use of signed integers (instead of unsigned) allows:
+- Negative indices for reverse iteration
+- Simpler loop bounds checking (i >= 0)
+- Compatibility with BLAS/LAPACK conventions
+- Prevention of unsigned underflow bugs
+
+**Edge Cases**
+
+- **No macro defined**: Compilation error (exactly one must be defined)
+- **Multiple macros defined**: Compilation error (conflicting definitions)
+- **Overflow**: Index arithmetic can overflow if values exceed type range
+
+**Data Guarantees (Preconditions)**
+
+- One and only one of SCL_USE_INT16, SCL_USE_INT32, SCL_USE_INT64 must be defined
+- Index values should be non-negative for array indexing (though signed type allows negative values for special purposes)
+
+**Complexity Analysis**
+
+- **Time**: O(1) - compile-time selection, zero runtime overhead
+- **Space**: Smaller indices reduce memory traffic and improve cache performance (especially for sparse matrix index arrays)
+
+**Example**
+
+```cpp
+#include "scl/core/type.hpp"
+
+// Compile with: -DSCL_USE_INT32
+Index i = 1000;      // Index is int32_t
+Index j = -1;        // Allowed (can be used for reverse iteration)
+
+// Metadata
+constexpr int index_code = INDEX_DTYPE_CODE;         // 0, 1, or 2
+constexpr const char* index_name = INDEX_DTYPE_NAME; // "int16", "int32", or "int64"
+
+// Use for array indexing
+Array<Real> data(n);
+for (Index idx = 0; idx < n; ++idx) {
+    Real value = data[idx];
+}
+```
+
+---
+
+### Array<T>
+
+Lightweight, non-owning view of a contiguous 1D array. Zero-overhead POD type with trivial copy.
+
+::: source_code file="scl/core/type.hpp" symbol="Array" collapsed
+:::
+
+**Algorithm Description**
+
+Array<T> is a struct containing a pointer and length:
+- `ptr`: Pointer to first element (T*)
+- `len`: Number of elements (Size)
+
+Design philosophy:
+- **Non-owning**: No destructor, no allocation, no deallocation
+- **Zero-overhead**: POD type with trivial copy (16 bytes on 64-bit systems)
+- **Const-correct**: Array<T> (mutable) vs Array<const T> (immutable)
+- **Public members**: Direct access for performance-critical code
+- **Copyable**: Shallow copy of view, not the underlying data
+
+The struct provides standard container-like methods (size, empty, begin, end, operator[]) all force-inlined for zero function call overhead.
+
+**Edge Cases**
+
+- **Empty array**: ptr = nullptr, len = 0
+- **Null pointer with non-zero length**: Undefined behavior (caller must ensure validity)
+- **Out-of-bounds access**: Debug builds assert, release builds undefined behavior
+- **Lifetime**: Array view must not outlive the underlying data
+
+**Data Guarantees (Preconditions)**
+
+- If len > 0, ptr must point to valid array of at least len elements
+- If len == 0, ptr can be nullptr or any value (ignored)
+- Underlying data lifetime must exceed Array view lifetime
+
+**Complexity Analysis**
+
+- **Time**: O(1) for all operations (all methods are force-inlined)
+- **Space**: sizeof(Array<T>) = sizeof(T*) + sizeof(Size) = 16 bytes on 64-bit systems
+
+**Example**
+
+```cpp
+#include "scl/core/type.hpp"
+
+// Create from pointer and size
+Real* data = new Real[100];
+Array<Real> arr(data, 100);
+
+// Access elements
+Real x = arr[0];
+arr[5] = 3.14;
+
+// Iterate
+for (Index i = 0; i < arr.size(); ++i) {
+    arr[i] *= 2.0;
+}
+
+// Const view
+Array<const Real> const_view = arr;  // Implicit conversion
+// const_view[0] = 1.0;  // Error: cannot modify const view
+
+// Empty array
+Array<Real> empty;  // ptr = nullptr, len = 0
+```
+
+---
+
+### Size
+
+Unsigned integer type for memory sizes and byte counts.
+
+**Definition**: `using Size = std::size_t;`
+
+**Usage Guidelines**
+- Use for memory allocation sizes
+- Use for byte counts and buffer lengths
+- Do NOT use for array indexing (use Index instead)
+- Do NOT use for loop counters over array elements
+
+**Example**
+
+```cpp
+Size buffer_size = 1024 * sizeof(Real);  // Memory size in bytes
+Real* data = new Real[100];
+Size n_bytes = 100 * sizeof(Real);       // Size in bytes
+
+// Conversion from Index to Size (ensure non-negative)
+Index idx = 100;
+Size sz = static_cast<Size>(idx);  // Only if idx >= 0
+```
+
+---
+
+### Byte
+
+Unsigned 8-bit integer for raw memory operations.
+
+**Definition**: `using Byte = std::uint8_t;`
+
+**Usage Guidelines**
+- Use for raw memory buffers
+- Use for serialization/deserialization
+- Use for byte-level I/O operations
+
+**Example**
+
+```cpp
+Byte* raw_buffer = new Byte[1024];
+// Use for raw memory operations
+```
+
+---
+
+### Pointer
+
+Generic untyped pointer for discontiguous storage and C-ABI boundaries.
+
+**Definition**: `using Pointer = void*;`
+
+**Usage Guidelines**
+- Use for type-erased pointers across C-ABI
+- Use for generic memory handles
+- Always cast to proper type before dereferencing
+
+**Warning**: Void pointers bypass type safety. Use only at API boundaries where type erasure is necessary (e.g., Python bindings).
+
+---
+
+## Utility Concepts
+
+### ArrayLike<A>
+
+Concept for 1D array-like containers with random access.
+
+::: source_code file="scl/core/type.hpp" symbol="ArrayLike" collapsed
+:::
+
+**Requirements**
+
+- `value_type`: Member type alias for element type
+- `size()`: Returns number of elements (convertible to Size)
+- `operator[](Index)`: Random access to elements
+- `begin()`: Returns iterator to first element
+- `end()`: Returns iterator to one-past-last element
+
+**Satisfied By**
+
+- `scl::Array<T>`
+- `std::vector<T>`
+- `std::array<T, N>`
+- `std::deque<T>`
+- `std::span<T>` (C++20)
+- Custom containers with compatible interface
+
+**Example**
+
+```cpp
+template <ArrayLike A>
+void process(const A& arr) {
+    for (Index i = 0; i < arr.size(); ++i) {
+        do_something(arr[i]);
+    }
+}
+
+// Works with any ArrayLike type
+Array<Real> arr = ...;
+std::vector<Real> vec = ...;
+process(arr);  // OK
+process(vec);  // OK
+```
+
+---
+
+### CSRLike<M>
+
+Concept for CSR (Compressed Sparse Row) sparse matrices.
+
+::: source_code file="scl/core/type.hpp" symbol="CSRLike" collapsed
+:::
+
+**Requirements**
+
+- `ValueType`: Element type alias
+- `Tag`: Must be `TagSparse<true>`
+- `is_csr`: Static constexpr bool == true
+- `rows()`, `cols()`, `nnz()`: Matrix dimensions
+- `primary_values(i)`, `primary_indices(i)`, `primary_length(i)`: Row access
+
+Enables generic algorithms that work with any CSR-like sparse matrix type.
+
+---
+
+### TagSparse<IsCSR>
+
+Tag type for sparse matrix format selection.
+
+::: source_code file="scl/core/type.hpp" symbol="TagSparse" collapsed
+:::
+
+**Template Parameters**
+
+- `IsCSR` [bool]: true for CSR (row-major), false for CSC (column-major)
+
+**Static Members**
+
+- `is_csr`: constexpr bool, equals IsCSR
+- `is_csc`: constexpr bool, equals !IsCSR
+
+Enables compile-time dispatch and type traits for sparse matrices.
+
+---
+
+## Type Configuration
+
+### Compile-Time Selection
+
+Types are configured at compile time via preprocessor macros:
+
+```cpp
+// In CMakeLists.txt or config.hpp
+#define SCL_USE_FLOAT32  // or FLOAT64, FLOAT16
+#define SCL_USE_INT32    // or INT16, INT64
+```
+
+This enables:
+- Single codebase for multiple precisions
+- Zero runtime overhead for type selection
+- Optimal code generation
+
+### Metadata
+
+Runtime-accessible metadata:
+
+```cpp
+constexpr int dtype_code = DTYPE_CODE;         // 0 (float32), 1 (float64), 2 (float16)
+constexpr const char* dtype_name = DTYPE_NAME; // "float32", "float64", or "float16"
+
+constexpr int index_code = INDEX_DTYPE_CODE;         // 0 (int16), 1 (int32), 2 (int64)
+constexpr const char* index_name = INDEX_DTYPE_NAME; // "int16", "int32", or "int64"
+```
+
+## Design Principles
+
+### Zero Dependencies
+
+Core types depend only on:
+- C++17 standard library
+- Standard headers: `<cstddef>`, `<cstdint>`, `<type_traits>`, `<concepts>`
+
+### Zero Runtime Overhead
+
+- Type aliases (Real, Index) are compile-time selections
+- Array<T> is a POD type with trivial copy
+- All methods are force-inlined
+- Concepts are compile-time checks (zero runtime cost)
+
+### Explicit Resource Management
+
+Array<T> does NOT own memory:
+- No destructor
+- No allocation/deallocation
+- Lifetime of underlying data must exceed Array view lifetime
+
+## See Also
+
+- [Sparse Matrix](./sparse) - Uses Array<T> for sparse matrix storage
+- [Memory Management](./memory) - Allocation functions return pointers used with Array<T>

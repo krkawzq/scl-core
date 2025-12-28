@@ -1,238 +1,276 @@
-# Softmax
+# softmax.hpp
 
-带 SIMD 优化和温度缩放的 Softmax 归一化操作。
+> scl/kernel/softmax.hpp · Softmax 操作
 
 ## 概述
 
-Softmax 操作提供：
+本文件为密集数组和稀疏矩阵提供高性能的 softmax 和 log-softmax 操作。所有操作都是就地操作以提高效率，并根据输入大小使用自适应 SIMD 策略。支持温度缩放以控制分布的锐度。
 
-- **原地归一化** - 将值转换为概率分布
-- **温度缩放** - 控制分布的尖锐程度
-- **Log-softmax** - 数值稳定的对数概率
-- **稀疏矩阵支持** - 稀疏矩阵的行级 softmax
+**头文件**: `#include "scl/kernel/softmax.hpp"`
 
-## 密集数组操作
+---
 
-### softmax_inplace
+## 主要 API
 
-对密集数组原地应用 softmax 归一化。
+### softmax_inplace (密集数组)
 
-```cpp
-#include "scl/kernel/softmax.hpp"
+::: source_code file="scl/kernel/softmax.hpp" symbol="softmax_inplace" collapsed
+:::
 
-Real values[100];
-Size len = 100;
+**算法说明**
 
-// 标准 softmax
-scl::kernel::softmax::softmax_inplace(values, len);
+使用 3 层自适应策略对密集数组应用就地 softmax 归一化：
 
-// 带温度缩放
-scl::kernel::softmax::softmax_inplace(values, len, 0.5);
-```
-
-**参数：**
-- `vals` [in,out] - 值数组指针，原地修改
-- `len` [in] - 数组长度
-- `temperature` [in] - 可选温度参数（值越大越均匀）
-
-**后置条件：**
-- 所有值在 [0, 1] 范围内且和为 1.0
-- 对于 temperature > 0: softmax(x / temperature)
-- 对于 temperature <= 0: 在最大值处为 one-hot
-
-**算法：**
-根据数组长度的 3 层自适应策略：
-1. 短数组 (< 16): 标量循环
-2. 中等数组 (< 128): 4 路 SIMD 展开，带预取
-3. 长数组 (>= 128): 8 路 SIMD 展开，8 个累加器用于指令级并行
+1. **短数组 (< 16)**: 标量循环以最小化开销
+2. **中等数组 (< 128)**: 4 路 SIMD 展开加预取
+3. **长数组 (>= 128)**: 8 路 SIMD 展开，8 个累加器用于指令级并行
 
 步骤：
-1. 找到最大值以保持数值稳定性
-2. 同时计算 exp(x - max) 和求和
-3. 通过除以和来归一化每个元素
+1. 查找最大值以保持数值稳定性：`max_val = max(vals)`
+2. 使用 SIMD 同时计算 `exp(x - max)` 和和
+3. 归一化：`vals[i] = exp(vals[i] - max) / sum`
 
-**复杂度：**
-- 时间: O(n)
-- 空间: O(1) 辅助空间
+**边界条件**
 
-**线程安全：**
-对不同数组安全，对同一数组不安全
+- **空数组 (len=0)**: 无操作，立即返回
+- **全零**: 返回均匀分布（每个元素 1/len）
+- **所有值相同**: 返回均匀分布
+- **非常大的值**: 最大值减法防止 exp() 溢出
+- **和为零**: 返回均匀分布以避免除以零
 
-**数值说明：**
-- 最大值减法防止 exp() 溢出
-- 如果和为零，返回均匀分布
+**数据保证（前置条件）**
 
-### log_softmax_inplace
+- 如果 len > 0，`vals` 必须是有效指针
+- `len >= 0`
+- 数组内存可写
 
-对密集数组原地应用 log-softmax。
+**复杂度分析**
 
-```cpp
-Real values[100];
-Size len = 100;
+- **时间**: O(n) - 单次遍历，带 SIMD 加速
+- **空间**: O(1) 辅助空间 - 仅需要累加器
 
-// 标准 log-softmax
-scl::kernel::softmax::log_softmax_inplace(values, len);
-
-// 带温度缩放
-scl::kernel::softmax::log_softmax_inplace(values, len, 0.5);
-```
-
-**参数：**
-- `vals` [in,out] - 值数组指针，原地修改
-- `len` [in] - 数组长度
-- `temperature` [in] - 可选温度参数
-
-**后置条件：**
-- 所有值 <= 0（对数概率）
-- exp(vals) 和为 1.0
-- 对于 temperature > 0: log_softmax(x / temperature)
-- 对于 temperature <= 0: 最大值处为 0，其他为 -inf
-
-**算法：**
-log_softmax(x) = x - max - log(sum(exp(x - max)))
-
-3 层自适应策略：
-1. 找到最大值
-2. 使用 SIMD 计算 sum(exp(x - max))
-3. 从每个元素中减去 (max + log(sum))
-
-**复杂度：**
-- 时间: O(n)
-- 空间: O(1) 辅助空间
-
-**数值说明：**
-- 比 log(softmax(x)) 数值更稳定
-- 避免计算显式概率
-
-## 稀疏矩阵操作
-
-### softmax_inplace (稀疏)
-
-对稀疏矩阵按行原地应用 softmax。
+**示例**
 
 ```cpp
-#include "scl/core/sparse.hpp"
 #include "scl/kernel/softmax.hpp"
 
-Sparse<Real, true> matrix = /* ... */;
+Real* values = /* 值数组 */;
+Size len = /* 数组长度 */;
 
-// 标准 softmax
+scl::kernel::softmax::softmax_inplace(values, len);
+
+// values[i] 现在在 [0, 1] 中且 sum(values) == 1.0
+```
+
+---
+
+### softmax_inplace (带温度的密集数组)
+
+::: source_code file="scl/kernel/softmax.hpp" symbol="softmax_inplace" collapsed
+:::
+
+**算法说明**
+
+应用带温度缩放的就地 softmax：
+
+1. 缩放所有值：`vals[i] = vals[i] / temperature`
+2. 对缩放后的值应用标准 softmax
+3. 温度 > 0：产生更软的分布（温度越高 = 越均匀）
+4. 温度 <= 0：在最大值处产生 one-hot
+
+**边界条件**
+
+- **温度 > 1**: 更软的分布，更均匀
+- **温度 < 1**: 更尖锐的分布，更峰值
+- **温度 = 1**: 标准 softmax
+- **温度 <= 0**: 在最大值处进行 one-hot 编码
+- **温度 = 0**: 避免除以零，视为 <= 0
+
+**数据保证（前置条件）**
+
+- 如果 len > 0，`vals` 必须是有效指针
+- `len >= 0`
+- 数组内存可写
+
+**复杂度分析**
+
+- **时间**: O(n) - 缩放加 softmax
+- **空间**: O(1) 辅助空间
+
+**示例**
+
+```cpp
+Real* values = /* 值数组 */;
+Size len = /* 数组长度 */;
+Real temperature = 0.5;  // 更尖锐的分布
+
+scl::kernel::softmax::softmax_inplace(values, len, temperature);
+
+// values 现在表示温度缩放的 softmax 分布
+```
+
+---
+
+### log_softmax_inplace (密集数组)
+
+::: source_code file="scl/kernel/softmax.hpp" symbol="log_softmax_inplace" collapsed
+:::
+
+**算法说明**
+
+对密集数组应用就地 log-softmax：
+
+1. 查找最大值：`max_val = max(vals)`
+2. 计算指数和：使用 SIMD 计算 `sum_exp = sum(exp(vals[i] - max))`
+3. 计算对数-和：`log_sum = log(sum_exp)`
+4. 更新值：`vals[i] = vals[i] - max - log_sum`
+
+公式：`log_softmax(x) = x - max - log(sum(exp(x - max)))`
+
+**边界条件**
+
+- **空数组**: 无操作
+- **全零**: 返回均匀对数概率（log(1/len)）
+- **所有值相同**: 返回均匀对数概率
+- **非常大的值**: 最大值减法防止溢出
+- **和为零**: 返回均匀对数概率
+
+**数据保证（前置条件）**
+
+- 如果 len > 0，`vals` 必须是有效指针
+- `len >= 0`
+- 数组内存可写
+
+**复杂度分析**
+
+- **时间**: O(n) - 单次遍历，带 SIMD
+- **空间**: O(1) 辅助空间
+
+**示例**
+
+```cpp
+Real* values = /* 值数组 */;
+Size len = /* 数组长度 */;
+
+scl::kernel::softmax::log_softmax_inplace(values, len);
+
+// values[i] <= 0（对数概率）
+// exp(values) 和为 1.0
+```
+
+---
+
+### softmax_inplace (稀疏矩阵)
+
+::: source_code file="scl/kernel/softmax.hpp" symbol="softmax_inplace" collapsed
+:::
+
+**算法说明**
+
+对稀疏矩阵按行应用就地 softmax：
+
+1. 并行处理每行：
+   - 提取行中的非零值
+   - 仅对非零值应用 3 层自适应 softmax
+   - 就地更新值
+2. 矩阵结构（索引、指针）不变
+3. 空行保持不变（无非零可归一化）
+
+**边界条件**
+
+- **空行**: 不变（无非零）
+- **每行单个非零**: 归一化后变为 1.0
+- **行中全零**: 保持不变
+- **非常稀疏的行**: 高效处理非零较少的行
+
+**数据保证（前置条件）**
+
+- 矩阵是有效的稀疏格式（CSR 或 CSC）
+- 矩阵值必须可变
+- 矩阵结构有效
+
+**复杂度分析**
+
+- **时间**: O(nnz) - 每个非零处理一次
+- **空间**: O(1) 辅助空间 - 每个线程仅累加器
+
+**示例**
+
+```cpp
+Sparse<Real, true> matrix = /* 稀疏矩阵，CSR */;
+
 scl::kernel::softmax::softmax_inplace(matrix);
 
-// 带温度缩放
-scl::kernel::softmax::softmax_inplace(matrix, 0.5);
+// 每行现在和为 1.0（仅考虑非零）
+// 矩阵结构不变
 ```
 
-**参数：**
-- `matrix` [in,out] - 稀疏矩阵（CSR 或 CSC），值原地修改
-- `temperature` [in] - 可选温度参数
+---
 
-**后置条件：**
-- 每行和为 1.0（仅考虑非零元素）
-- 矩阵结构（索引、指针）不变
-- 空行不变
+### log_softmax_inplace (稀疏矩阵)
 
-**算法：**
-对每行并行：
-- 对非零值应用 3 层自适应 softmax
+::: source_code file="scl/kernel/softmax.hpp" symbol="log_softmax_inplace" collapsed
+:::
 
-**复杂度：**
-- 时间: O(nnz)
-- 空间: 每个线程 O(1) 辅助空间
+**算法说明**
 
-**线程安全：**
-安全 - 按行并行，无共享可变状态
+对稀疏矩阵按行应用就地 log-softmax：
 
-### log_softmax_inplace (稀疏)
+1. 并行处理每行：
+   - 提取非零值
+   - 计算 log-softmax：`log_softmax(x) = x - max - log(sum(exp(x - max)))`
+   - 就地更新值
+2. 矩阵结构不变
+3. 所有值变为 <= 0（对数概率）
 
-对稀疏矩阵按行原地应用 log-softmax。
+**边界条件**
+
+- **空行**: 不变
+- **单个非零**: 变为 0.0（log(1.0) = 0）
+- **全零**: 保持不变
+- **稀疏行**: 高效处理非零较少的行
+
+**数据保证（前置条件）**
+
+- 矩阵是有效的稀疏格式
+- 矩阵值必须可变
+
+**复杂度分析**
+
+- **时间**: O(nnz) - 每个非零处理一次
+- **空间**: O(1) 辅助空间 - 每个线程
+
+**示例**
 
 ```cpp
-Sparse<Real, true> matrix = /* ... */;
+Sparse<Real, true> matrix = /* 稀疏矩阵 */;
 
-// 标准 log-softmax
 scl::kernel::softmax::log_softmax_inplace(matrix);
 
-// 带温度缩放
-scl::kernel::softmax::log_softmax_inplace(matrix, 0.5);
+// 所有值 <= 0（对数概率）
+// 每行的 exp(values) 和为 1.0
 ```
 
-**参数：**
-- `matrix` [in,out] - 稀疏矩阵，值原地修改
-- `temperature` [in] - 可选温度参数
+---
 
-**后置条件：**
-- 所有值 <= 0（对数概率）
-- 矩阵结构不变
+## 数值说明
 
-**复杂度：**
-- 时间: O(nnz)
-- 空间: 每个线程 O(1) 辅助空间
+### 稳定性
 
-**线程安全：**
-安全 - 按行并行
-
-## 使用场景
-
-### 概率分布
-
-将原始分数转换为概率分布：
-
-```cpp
-Real scores[10] = {3.0, 1.0, 4.0, 1.5, 2.0, 0.5, 2.5, 1.0, 3.5, 0.0};
-scl::kernel::softmax::softmax_inplace(scores, 10);
-// scores 现在和为 1.0
-```
+- **最大值减法**: 通过减去最大值防止 exp() 溢出
+- **Log-softmax**: 对于大值比 log(softmax(x)) 更数值稳定
+- **均匀回退**: 如果和为零，返回均匀分布
 
 ### 温度缩放
 
-控制分布的尖锐程度：
+- **温度 > 1**: 更软的分布，减少峰值
+- **温度 < 1**: 更尖锐的分布，增加峰值
+- **温度 = 1**: 标准 softmax
+- **温度 <= 0**: One-hot 编码（硬最大值）
 
-```cpp
-// 尖锐分布（低温度）
-scl::kernel::softmax::softmax_inplace(values, len, 0.1);
+---
 
-// 均匀分布（高温度）
-scl::kernel::softmax::softmax_inplace(values, len, 10.0);
-```
+## 相关内容
 
-### 对数概率
-
-在对数空间计算中的数值稳定性：
-
-```cpp
-scl::kernel::softmax::log_softmax_inplace(logits, len);
-// 用于交叉熵损失: -sum(y * log_softmax)
-```
-
-### 稀疏矩阵归一化
-
-归一化稀疏矩阵的每一行：
-
-```cpp
-Sparse<Real, true> expression_matrix = /* ... */;
-scl::kernel::softmax::softmax_inplace(expression_matrix);
-// 每行现在表示一个概率分布
-```
-
-## 性能
-
-### SIMD 优化
-
-所有操作使用 SIMD 优化的 exp 和 sum 操作：
-- 中等数组使用 4 路展开
-- 大数组使用 8 路展开和 8 个累加器
-- 预取以提高缓存效率
-
-### 并行化
-
-稀疏矩阵操作按行并行：
-- 自动工作分配
-- 线程本地累加器
-- 无同步开销
-
-## 参见
-
-- [归一化](/zh/cpp/kernels/normalization) - 其他归一化操作
-- [稀疏工具](/zh/cpp/kernels/sparse-tools) - 稀疏矩阵工具
-
+- [归一化模块](./normalize) - 其他归一化操作
+- [稀疏矩阵](../core/sparse) - 稀疏矩阵操作

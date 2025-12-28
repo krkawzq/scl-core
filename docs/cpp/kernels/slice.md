@@ -1,360 +1,202 @@
-# Matrix Slicing
+# slice.hpp
 
-Slice and filter sparse matrices along primary or secondary dimensions.
+> scl/kernel/slice.hpp · Sparse matrix slicing kernels
 
 ## Overview
 
-Slice operations provide:
+This file provides high-performance kernels for slicing sparse matrices along primary and secondary dimensions. It supports efficient inspection (counting non-zeros), materialization (copying to pre-allocated arrays), and full slicing operations that create new sparse matrices. All operations are parallelized and optimized for cache efficiency.
 
-- **Primary dimension slicing** - Select specific rows (CSR) or columns (CSC)
-- **Secondary dimension filtering** - Filter by columns (CSR) or rows (CSC) using boolean mask
-- **Efficient inspection** - Count non-zeros before allocation
-- **Memory efficient** - Two-phase approach (inspect then materialize)
+**Header**: `#include "scl/kernel/slice.hpp"`
 
-## Primary Dimension Slicing
+---
+
+## Main APIs
 
 ### slice_primary
 
-Create new sparse matrix containing selected primary slices.
+::: source_code file="scl/kernel/slice.hpp" symbol="slice_primary" collapsed
+:::
+
+**Algorithm Description**
+
+Creates new sparse matrix containing selected primary slices (rows for CSR, columns for CSC):
+
+1. Call `inspect_slice_primary` to count total non-zeros in selected slices
+2. Allocate output arrays (data, indices, indptr) with appropriate sizes
+3. Call `materialize_slice_primary` to copy selected slices
+4. Wrap arrays as new Sparse matrix
+5. Result preserves order of `keep_indices` and maintains secondary dimension
+
+**Edge Cases**
+
+- **Empty selection**: Returns empty matrix with zero rows/columns
+- **All indices selected**: Returns copy of original matrix
+- **Invalid indices**: Behavior undefined if indices out of range
+- **Duplicate indices**: Duplicate indices in keep_indices result in duplicate rows/columns
+
+**Data Guarantees (Preconditions)**
+
+- All indices in `keep_indices` are in range [0, primary_dim)
+- Source matrix is valid CSR or CSC format
+- `keep_indices` may be unsorted
+
+**Complexity Analysis**
+
+- **Time**: O(nnz_output / n_threads + n_keep) - parallel copy plus metadata setup
+- **Space**: O(nnz_output) for result matrix
+
+**Example**
 
 ```cpp
 #include "scl/kernel/slice.hpp"
-#include "scl/core/sparse.hpp"
 
-Sparse<Real, true> matrix = /* ... */;
-Array<Index> keep_indices = /* ... */;  // Indices of rows to keep
+Sparse<Real, true> matrix = /* source matrix, CSR */;
+Array<const Index> keep_indices = /* row indices to keep */;
 
-auto result = scl::kernel::slice::slice_primary(matrix, keep_indices);
-// result contains only selected rows
-```
-
-**Parameters:**
-- `matrix` [in] - Source sparse matrix
-- `keep_indices` [in] - Indices of rows (CSR) or cols (CSC) to keep
-
-**Preconditions:**
-- All indices in range [0, primary_dim)
-
-**Postconditions:**
-- Result contains only selected rows/cols
-- Column/row indices unchanged (secondary dim preserved)
-- Order matches keep_indices order
-
-**Returns:**
-New sparse matrix with selected slices
-
-**Algorithm:**
-1. inspect_slice_primary to count output nnz
-2. Allocate output arrays
-3. materialize_slice_primary to copy data
-4. Wrap as new Sparse matrix
-
-**Complexity:**
-- Time: O(nnz_output / n_threads + n_keep)
-- Space: O(nnz_output) for result
-
-**Thread Safety:**
-Safe - uses parallel materialize
-
-**Use cases:**
-- Selecting subset of samples/cells
-- Filtering by metadata
-- Creating training/test splits
-
-### inspect_slice_primary
-
-Count total non-zeros in selected primary dimension slices.
-
-```cpp
-Index nnz_output = scl::kernel::slice::inspect_slice_primary(
+Sparse<Real, true> sliced = scl::kernel::slice::slice_primary(
     matrix,
     keep_indices
 );
-// Returns total number of non-zeros in selected slices
+
+// sliced contains only selected rows, columns preserved
 ```
 
-**Parameters:**
-- `matrix` [in] - Sparse matrix to slice
-- `keep_indices` [in] - Indices of primary dimension elements to keep
-
-**Preconditions:**
-- All indices in keep_indices in range [0, primary_dim)
-
-**Postconditions:**
-- Returns sum of row lengths for selected indices
-
-**Returns:**
-Total number of non-zeros in selected slices
-
-**Algorithm:**
-Parallel reduction over keep_indices using parallel_reduce_nnz
-
-**Complexity:**
-- Time: O(n_keep / n_threads)
-- Space: O(n_threads) for partial sums
-
-**Thread Safety:**
-Safe - read-only parallel reduction
-
-**Use cases:**
-- Pre-allocating output arrays
-- Estimating memory requirements
-
-### materialize_slice_primary
-
-Copy selected primary slices to pre-allocated output arrays.
-
-```cpp
-Array<Real> out_data(nnz_output);
-Array<Index> out_indices(nnz_output);
-Array<Index> out_indptr(keep_indices.len + 1);
-
-scl::kernel::slice::materialize_slice_primary(
-    matrix,
-    keep_indices,
-    out_data,
-    out_indices,
-    out_indptr
-);
-```
-
-**Parameters:**
-- `matrix` [in] - Source sparse matrix
-- `keep_indices` [in] - Indices of rows/cols to keep
-- `out_data` [out] - Output values array
-- `out_indices` [out] - Output column/row indices array
-- `out_indptr` [out] - Output row/col pointer array
-
-**Preconditions:**
-- out_data.len >= inspect_slice_primary result
-- out_indices.len >= inspect_slice_primary result
-- out_indptr.len >= keep_indices.len + 1
-
-**Postconditions:**
-- out_data contains copied values in order
-- out_indices contains copied indices (unchanged)
-- out_indptr[i] = start of i-th selected row
-
-**Algorithm:**
-1. Sequential scan to build out_indptr
-2. Parallel copy of data and indices using fast_copy_with_prefetch
-
-**Complexity:**
-- Time: O(nnz_output / n_threads + n_keep)
-- Space: O(1) beyond output
-
-**Thread Safety:**
-Safe - parallel copy to disjoint output regions
-
-## Secondary Dimension Filtering
+---
 
 ### filter_secondary
 
-Create new sparse matrix filtering by secondary dimension mask.
+::: source_code file="scl/kernel/slice.hpp" symbol="filter_secondary" collapsed
+:::
+
+**Algorithm Description**
+
+Creates new sparse matrix filtering by secondary dimension mask (columns for CSR, rows for CSC):
+
+1. Build index mapping from old to new secondary indices (compact range)
+2. Call `inspect_filter_secondary` to count non-zeros after filtering
+3. Allocate output arrays with appropriate sizes
+4. Call `materialize_filter_secondary` to copy and remap indices
+5. Result has compact secondary dimension [0, new_secondary_dim)
+
+**Edge Cases**
+
+- **All zeros mask**: Returns empty matrix (zero columns/rows)
+- **All ones mask**: Returns copy of original matrix
+- **Sparse mask**: Efficiently handles masks with few 1s
+- **Index remapping**: Old indices remapped to compact range
+
+**Data Guarantees (Preconditions)**
+
+- `mask.len >= secondary_dim`
+- Mask values are 0 or 1
+- Source matrix is valid sparse format
+
+**Complexity Analysis**
+
+- **Time**: O(nnz / n_threads + secondary_dim) - parallel filtering plus mapping
+- **Space**: O(nnz_output + secondary_dim) for result and index mapping
+
+**Example**
 
 ```cpp
-Array<uint8_t> mask(secondary_dim);  // 1 = keep, 0 = remove
-// ... fill mask ...
+Array<const uint8_t> mask = /* boolean mask for columns */;
 
-auto result = scl::kernel::slice::filter_secondary(matrix, mask);
-// result contains only elements where mask[index] == 1
-```
-
-**Parameters:**
-- `matrix` [in] - Source sparse matrix
-- `mask` [in] - Boolean mask for columns (CSR) or rows (CSC)
-
-**Preconditions:**
-- mask.len >= secondary_dim
-- mask values are 0 or 1
-
-**Postconditions:**
-- Result secondary_dim = count of 1s in mask
-- Only elements with mask[index] == 1 retained
-- Indices remapped to compact range [0, new_secondary_dim)
-
-**Returns:**
-New sparse matrix with filtered secondary dimension
-
-**Algorithm:**
-1. Build index mapping (old -> new indices)
-2. inspect_filter_secondary to count output nnz
-3. Allocate output arrays
-4. materialize_filter_secondary to copy and remap
-
-**Complexity:**
-- Time: O(nnz / n_threads + secondary_dim)
-- Space: O(nnz_output + secondary_dim)
-
-**Thread Safety:**
-Safe - uses parallel materialize
-
-**Use cases:**
-- Selecting subset of features/genes
-- Filtering by expression threshold
-- Feature selection
-
-### inspect_filter_secondary
-
-Count non-zeros after filtering by secondary dimension mask.
-
-```cpp
-Index nnz_output = scl::kernel::slice::inspect_filter_secondary(
+Sparse<Real, true> filtered = scl::kernel::slice::filter_secondary(
     matrix,
     mask
 );
-// Returns count of elements where mask[index] == 1
+
+// filtered contains only columns where mask[col] == 1
+// Column indices remapped to [0, new_n_cols)
 ```
 
-**Parameters:**
-- `matrix` [in] - Sparse matrix to filter
-- `mask` [in] - Boolean mask for secondary dimension (1 = keep)
+---
 
-**Preconditions:**
-- mask.len >= secondary_dim
-- mask values are 0 or 1
+## Utility Functions
 
-**Postconditions:**
-- Returns count of elements where mask[index] == 1
+### inspect_slice_primary
 
-**Returns:**
-Total non-zeros after filtering
+Counts total non-zeros in selected primary dimension slices.
 
-**Algorithm:**
-Parallel reduction using count_masked_fast (8-way unrolled)
+::: source_code file="scl/kernel/slice.hpp" symbol="inspect_slice_primary" collapsed
+:::
 
-**Complexity:**
+**Complexity**
+
+- Time: O(n_keep / n_threads)
+- Space: O(n_threads) for partial sums
+
+---
+
+### materialize_slice_primary
+
+Copies selected primary slices to pre-allocated output arrays.
+
+::: source_code file="scl/kernel/slice.hpp" symbol="materialize_slice_primary" collapsed
+:::
+
+**Complexity**
+
+- Time: O(nnz_output / n_threads + n_keep)
+- Space: O(1) beyond output
+
+---
+
+### inspect_filter_secondary
+
+Counts non-zeros after filtering by secondary dimension mask.
+
+::: source_code file="scl/kernel/slice.hpp" symbol="inspect_filter_secondary" collapsed
+:::
+
+**Complexity**
+
 - Time: O(nnz / n_threads)
 - Space: O(n_threads) for partial sums
 
-**Thread Safety:**
-Safe - read-only parallel reduction
+---
 
 ### materialize_filter_secondary
 
-Copy elements passing secondary mask to pre-allocated output.
+Copies elements passing secondary mask to pre-allocated output with index remapping.
 
-```cpp
-Array<Index> new_indices = /* build from mask */;
-Array<Real> out_data(nnz_output);
-Array<Index> out_indices(nnz_output);
-Array<Index> out_indptr(primary_dim + 1);
+::: source_code file="scl/kernel/slice.hpp" symbol="materialize_filter_secondary" collapsed
+:::
 
-scl::kernel::slice::materialize_filter_secondary(
-    matrix,
-    mask,
-    new_indices,
-    out_data,
-    out_indices,
-    out_indptr
-);
-```
+**Complexity**
 
-**Parameters:**
-- `matrix` [in] - Source sparse matrix
-- `mask` [in] - Boolean mask for secondary dimension
-- `new_indices` [in] - Mapping from old to new secondary indices
-- `out_data` [out] - Output values
-- `out_indices` [out] - Output indices (remapped)
-- `out_indptr` [out] - Output row pointers
-
-**Preconditions:**
-- new_indices built via build_index_mapping
-- Output arrays sized per inspect_filter_secondary
-
-**Postconditions:**
-- out_data contains values where mask[old_index] == 1
-- out_indices contains remapped indices via new_indices
-- out_indptr contains cumulative counts
-
-**Complexity:**
 - Time: O(nnz / n_threads + primary_dim)
 - Space: O(1) beyond output
 
-**Thread Safety:**
-Safe - parallel over primary dimension
+---
 
-## Examples
+## Configuration
 
-### Selecting Cells
+Internal configuration constants:
 
-Select specific cells by index:
+- `PARALLEL_THRESHOLD_ROWS = 512`: Minimum rows for parallel processing
+- `PARALLEL_THRESHOLD_NNZ = 10000`: Minimum nnz for parallel processing
+- `MEMCPY_THRESHOLD = 8`: Minimum elements for memcpy vs loop
 
-```cpp
-Sparse<Real, true> expression = /* ... */;  // cells x genes
-Array<Index> selected_cells = {0, 5, 10, 15, /* ... */};
+---
 
-auto subset = scl::kernel::slice::slice_primary(expression, selected_cells);
-// subset contains only selected cells
-```
-
-### Filtering Genes
-
-Filter genes by expression threshold:
-
-```cpp
-Sparse<Real, true> expression = /* ... */;  // cells x genes
-Array<uint8_t> gene_mask(expression.cols());
-
-// Build mask: keep genes with mean expression > threshold
-for (Index g = 0; g < expression.cols(); ++g) {
-    Real mean_expr = /* compute mean */;
-    gene_mask[g] = (mean_expr > threshold) ? 1 : 0;
-}
-
-auto filtered = scl::kernel::slice::filter_secondary(expression, gene_mask);
-// filtered contains only high-expression genes
-```
-
-### Two-Phase Approach
-
-Use inspect then materialize for memory efficiency:
-
-```cpp
-// Phase 1: Count non-zeros
-Index nnz = scl::kernel::slice::inspect_slice_primary(matrix, keep_indices);
-
-// Phase 2: Allocate and copy
-Array<Real> out_data(nnz);
-Array<Index> out_indices(nnz);
-Array<Index> out_indptr(keep_indices.len + 1);
-
-scl::kernel::slice::materialize_slice_primary(
-    matrix, keep_indices, out_data, out_indices, out_indptr
-);
-```
-
-## Performance
+## Performance Notes
 
 ### Parallelization
 
-- Parallel reduction for inspection
-- Parallel copy for materialization
-- No synchronization overhead
-
-### SIMD Optimization
-
-- 8-way unrolled mask counting
-- Prefetch in copy loops
-- Efficient memory access patterns
+- Primary dimension slicing: Parallel reduction for counting, parallel copy for materialization
+- Secondary dimension filtering: Parallel over primary dimension with 8-way unrolled counting
+- Cache-efficient: Uses prefetching and batched processing
 
 ### Memory Efficiency
 
-- Two-phase approach reduces memory usage
-- Pre-allocate output arrays
-- Minimal intermediate allocations
+- Two-phase approach: Inspect first to size output, then materialize
+- Pre-allocated arrays: Allows caller to manage memory
+- Zero-copy potential: Can wrap existing arrays with proper ownership
 
-## Implementation Details
+---
 
-### Mask Counting
+## See Also
 
-Uses 8-way scalar unroll for counting masked elements:
-- Indirect access mask[indices[k]] prevents SIMD gather
-- 8-way scalar unroll provides best ILP for this pattern
-
-### Index Mapping
-
-Builds old-to-new index mapping from boolean mask:
-- new_indices[i] = new compact index if mask[i] == 1
-- new_indices[i] = -1 if mask[i] == 0
-- Returns count of 1s in mask
+- [Sparse Matrix](../core/sparse) - Sparse matrix operations
+- [Memory Module](../core/memory) - Memory management

@@ -1,238 +1,276 @@
-# Softmax
+# softmax.hpp
 
-Softmax normalization operations with SIMD optimization and temperature scaling.
+> scl/kernel/softmax.hpp · Softmax operations
 
 ## Overview
 
-Softmax operations provide:
+This file provides high-performance softmax and log-softmax operations for both dense arrays and sparse matrices. All operations are in-place for efficiency and use adaptive SIMD strategies based on input size. Supports temperature scaling for controlling distribution sharpness.
 
-- **In-place normalization** - Convert values to probability distributions
-- **Temperature scaling** - Control distribution sharpness
-- **Log-softmax** - Numerically stable log probabilities
-- **Sparse matrix support** - Row-wise softmax for sparse matrices
+**Header**: `#include "scl/kernel/softmax.hpp"`
 
-## Dense Array Operations
+---
 
-### softmax_inplace
+## Main APIs
 
-Apply softmax normalization in-place to a dense array.
+### softmax_inplace (dense array)
 
-```cpp
-#include "scl/kernel/softmax.hpp"
+::: source_code file="scl/kernel/softmax.hpp" symbol="softmax_inplace" collapsed
+:::
 
-Real values[100];
-Size len = 100;
+**Algorithm Description**
 
-// Standard softmax
-scl::kernel::softmax::softmax_inplace(values, len);
+Applies softmax normalization in-place to a dense array using 3-tier adaptive strategy:
 
-// With temperature scaling
-scl::kernel::softmax::softmax_inplace(values, len, 0.5);
-```
-
-**Parameters:**
-- `vals` [in,out] - Pointer to values array, modified in-place
-- `len` [in] - Length of array
-- `temperature` [in] - Optional temperature parameter (higher = more uniform)
-
-**Postconditions:**
-- All values in [0, 1] and sum to 1.0
-- For temperature > 0: softmax(x / temperature)
-- For temperature <= 0: one-hot at maximum value
-
-**Algorithm:**
-3-tier adaptive strategy based on array length:
-1. Short (< 16): Scalar loop
-2. Medium (< 128): 4-way SIMD unroll with prefetch
-3. Long (>= 128): 8-way SIMD unroll with 8 accumulators for ILP
+1. **Short arrays (< 16)**: Scalar loop for minimal overhead
+2. **Medium arrays (< 128)**: 4-way SIMD unroll with prefetch
+3. **Long arrays (>= 128)**: 8-way SIMD unroll with 8 accumulators for instruction-level parallelism
 
 Steps:
-1. Find max value for numerical stability
-2. Compute exp(x - max) and sum simultaneously
-3. Normalize by dividing each element by sum
+1. Find maximum value for numerical stability: `max_val = max(vals)`
+2. Compute `exp(x - max)` and sum simultaneously using SIMD
+3. Normalize: `vals[i] = exp(vals[i] - max) / sum`
 
-**Complexity:**
-- Time: O(n)
-- Space: O(1) auxiliary
+**Edge Cases**
 
-**Thread Safety:**
-Safe for different arrays, unsafe for same array
+- **Empty array (len=0)**: No-op, returns immediately
+- **All zeros**: Returns uniform distribution (1/len for each element)
+- **All same value**: Returns uniform distribution
+- **Very large values**: Max subtraction prevents overflow in exp()
+- **Sum zero**: Returns uniform distribution to avoid division by zero
 
-**Numerical Notes:**
-- Max subtraction prevents overflow in exp()
-- Returns uniform distribution if sum is zero
+**Data Guarantees (Preconditions)**
 
-### log_softmax_inplace
+- `vals` must be valid pointer if len > 0
+- `len >= 0`
+- Array memory is writable
 
-Apply log-softmax in-place to a dense array.
+**Complexity Analysis**
 
-```cpp
-Real values[100];
-Size len = 100;
+- **Time**: O(n) - single pass with SIMD acceleration
+- **Space**: O(1) auxiliary - only accumulators needed
 
-// Standard log-softmax
-scl::kernel::softmax::log_softmax_inplace(values, len);
-
-// With temperature scaling
-scl::kernel::softmax::log_softmax_inplace(values, len, 0.5);
-```
-
-**Parameters:**
-- `vals` [in,out] - Pointer to values array, modified in-place
-- `len` [in] - Length of array
-- `temperature` [in] - Optional temperature parameter
-
-**Postconditions:**
-- All values <= 0 (log probabilities)
-- exp(vals) sums to 1.0
-- For temperature > 0: log_softmax(x / temperature)
-- For temperature <= 0: 0 at max, -inf elsewhere
-
-**Algorithm:**
-log_softmax(x) = x - max - log(sum(exp(x - max)))
-
-3-tier adaptive strategy:
-1. Find max value
-2. Compute sum(exp(x - max)) with SIMD
-3. Subtract (max + log(sum)) from each element
-
-**Complexity:**
-- Time: O(n)
-- Space: O(1) auxiliary
-
-**Numerical Notes:**
-- More numerically stable than log(softmax(x))
-- Avoids computing explicit probabilities
-
-## Sparse Matrix Operations
-
-### softmax_inplace (sparse)
-
-Apply softmax row-wise in-place to a sparse matrix.
+**Example**
 
 ```cpp
-#include "scl/core/sparse.hpp"
 #include "scl/kernel/softmax.hpp"
 
-Sparse<Real, true> matrix = /* ... */;
+Real* values = /* array of values */;
+Size len = /* array length */;
 
-// Standard softmax
+scl::kernel::softmax::softmax_inplace(values, len);
+
+// values[i] now in [0, 1] and sum(values) == 1.0
+```
+
+---
+
+### softmax_inplace (dense array with temperature)
+
+::: source_code file="scl/kernel/softmax.hpp" symbol="softmax_inplace" collapsed
+:::
+
+**Algorithm Description**
+
+Applies softmax with temperature scaling in-place:
+
+1. Scale all values: `vals[i] = vals[i] / temperature`
+2. Apply standard softmax to scaled values
+3. Temperature > 0: Produces softer distribution (higher temperature = more uniform)
+4. Temperature <= 0: Produces one-hot at maximum value
+
+**Edge Cases**
+
+- **Temperature > 1**: Softer distribution, more uniform
+- **Temperature < 1**: Sharper distribution, more peaked
+- **Temperature = 1**: Standard softmax
+- **Temperature <= 0**: One-hot encoding at maximum
+- **Temperature = 0**: Division by zero avoided, treated as <= 0
+
+**Data Guarantees (Preconditions)**
+
+- `vals` must be valid pointer if len > 0
+- `len >= 0`
+- Array memory is writable
+
+**Complexity Analysis**
+
+- **Time**: O(n) - scaling plus softmax
+- **Space**: O(1) auxiliary
+
+**Example**
+
+```cpp
+Real* values = /* array of values */;
+Size len = /* array length */;
+Real temperature = 0.5;  // Sharper distribution
+
+scl::kernel::softmax::softmax_inplace(values, len, temperature);
+
+// values now represent temperature-scaled softmax distribution
+```
+
+---
+
+### log_softmax_inplace (dense array)
+
+::: source_code file="scl/kernel/softmax.hpp" symbol="log_softmax_inplace" collapsed
+:::
+
+**Algorithm Description**
+
+Applies log-softmax in-place to a dense array:
+
+1. Find maximum value: `max_val = max(vals)`
+2. Compute sum of exponentials: `sum_exp = sum(exp(vals[i] - max))` using SIMD
+3. Compute log-sum: `log_sum = log(sum_exp)`
+4. Update values: `vals[i] = vals[i] - max - log_sum`
+
+Formula: `log_softmax(x) = x - max - log(sum(exp(x - max)))`
+
+**Edge Cases**
+
+- **Empty array**: No-op
+- **All zeros**: Returns uniform log probabilities (log(1/len))
+- **All same value**: Returns uniform log probabilities
+- **Very large values**: Max subtraction prevents overflow
+- **Sum zero**: Returns uniform log probabilities
+
+**Data Guarantees (Preconditions)**
+
+- `vals` must be valid pointer if len > 0
+- `len >= 0`
+- Array memory is writable
+
+**Complexity Analysis**
+
+- **Time**: O(n) - single pass with SIMD
+- **Space**: O(1) auxiliary
+
+**Example**
+
+```cpp
+Real* values = /* array of values */;
+Size len = /* array length */;
+
+scl::kernel::softmax::log_softmax_inplace(values, len);
+
+// values[i] <= 0 (log probabilities)
+// exp(values) sums to 1.0
+```
+
+---
+
+### softmax_inplace (sparse matrix)
+
+::: source_code file="scl/kernel/softmax.hpp" symbol="softmax_inplace" collapsed
+:::
+
+**Algorithm Description**
+
+Applies softmax row-wise in-place to a sparse matrix:
+
+1. For each row in parallel:
+   - Extract non-zero values in the row
+   - Apply 3-tier adaptive softmax to non-zero values only
+   - Update values in-place
+2. Matrix structure (indices, pointers) unchanged
+3. Empty rows remain unchanged (no non-zeros to normalize)
+
+**Edge Cases**
+
+- **Empty rows**: Unchanged (no non-zeros)
+- **Single non-zero per row**: Becomes 1.0 after normalization
+- **All zeros in row**: Remains unchanged
+- **Very sparse rows**: Efficiently handles rows with few non-zeros
+
+**Data Guarantees (Preconditions)**
+
+- Matrix is valid sparse format (CSR or CSC)
+- Matrix values must be mutable
+- Matrix structure is valid
+
+**Complexity Analysis**
+
+- **Time**: O(nnz) - processes each non-zero once
+- **Space**: O(1) auxiliary per thread - only accumulators
+
+**Example**
+
+```cpp
+Sparse<Real, true> matrix = /* sparse matrix, CSR */;
+
 scl::kernel::softmax::softmax_inplace(matrix);
 
-// With temperature scaling
-scl::kernel::softmax::softmax_inplace(matrix, 0.5);
+// Each row now sums to 1.0 (considering only non-zeros)
+// Matrix structure unchanged
 ```
 
-**Parameters:**
-- `matrix` [in,out] - Sparse matrix (CSR or CSC), values modified in-place
-- `temperature` [in] - Optional temperature parameter
+---
 
-**Postconditions:**
-- Each row sums to 1.0 (considering only non-zero elements)
-- Matrix structure (indices, pointers) unchanged
-- Empty rows are unchanged
+### log_softmax_inplace (sparse matrix)
 
-**Algorithm:**
-For each row in parallel:
-- Apply 3-tier adaptive softmax to non-zero values
+::: source_code file="scl/kernel/softmax.hpp" symbol="log_softmax_inplace" collapsed
+:::
 
-**Complexity:**
-- Time: O(nnz)
-- Space: O(1) auxiliary per thread
+**Algorithm Description**
 
-**Thread Safety:**
-Safe - parallelized over rows, no shared mutable state
+Applies log-softmax row-wise in-place to a sparse matrix:
 
-### log_softmax_inplace (sparse)
+1. For each row in parallel:
+   - Extract non-zero values
+   - Compute log-softmax: `log_softmax(x) = x - max - log(sum(exp(x - max)))`
+   - Update values in-place
+2. Matrix structure unchanged
+3. All values become <= 0 (log probabilities)
 
-Apply log-softmax row-wise in-place to a sparse matrix.
+**Edge Cases**
+
+- **Empty rows**: Unchanged
+- **Single non-zero**: Becomes 0.0 (log(1.0) = 0)
+- **All zeros**: Remains unchanged
+- **Sparse rows**: Efficiently handles few non-zeros
+
+**Data Guarantees (Preconditions)**
+
+- Matrix is valid sparse format
+- Matrix values must be mutable
+
+**Complexity Analysis**
+
+- **Time**: O(nnz) - processes each non-zero once
+- **Space**: O(1) auxiliary per thread
+
+**Example**
 
 ```cpp
-Sparse<Real, true> matrix = /* ... */;
+Sparse<Real, true> matrix = /* sparse matrix */;
 
-// Standard log-softmax
 scl::kernel::softmax::log_softmax_inplace(matrix);
 
-// With temperature scaling
-scl::kernel::softmax::log_softmax_inplace(matrix, 0.5);
+// All values <= 0 (log probabilities)
+// exp(values) per row sums to 1.0
 ```
 
-**Parameters:**
-- `matrix` [in,out] - Sparse matrix, values modified in-place
-- `temperature` [in] - Optional temperature parameter
+---
 
-**Postconditions:**
-- All values <= 0 (log probabilities)
-- Matrix structure unchanged
+## Numerical Notes
 
-**Complexity:**
-- Time: O(nnz)
-- Space: O(1) auxiliary per thread
+### Stability
 
-**Thread Safety:**
-Safe - parallelized over rows
-
-## Use Cases
-
-### Probability Distributions
-
-Convert raw scores to probability distributions:
-
-```cpp
-Real scores[10] = {3.0, 1.0, 4.0, 1.5, 2.0, 0.5, 2.5, 1.0, 3.5, 0.0};
-scl::kernel::softmax::softmax_inplace(scores, 10);
-// scores now sum to 1.0
-```
+- **Max subtraction**: Prevents overflow in exp() by subtracting maximum value
+- **Log-softmax**: More numerically stable than log(softmax(x)) for large values
+- **Uniform fallback**: Returns uniform distribution if sum is zero
 
 ### Temperature Scaling
 
-Control distribution sharpness:
+- **Temperature > 1**: Softer distribution, reduces peakiness
+- **Temperature < 1**: Sharper distribution, increases peakiness
+- **Temperature = 1**: Standard softmax
+- **Temperature <= 0**: One-hot encoding (hard maximum)
 
-```cpp
-// Sharp distribution (low temperature)
-scl::kernel::softmax::softmax_inplace(values, len, 0.1);
-
-// Uniform distribution (high temperature)
-scl::kernel::softmax::softmax_inplace(values, len, 10.0);
-```
-
-### Log Probabilities
-
-For numerical stability in log-space computations:
-
-```cpp
-scl::kernel::softmax::log_softmax_inplace(logits, len);
-// Use in cross-entropy loss: -sum(y * log_softmax)
-```
-
-### Sparse Matrix Normalization
-
-Normalize each row of a sparse matrix:
-
-```cpp
-Sparse<Real, true> expression_matrix = /* ... */;
-scl::kernel::softmax::softmax_inplace(expression_matrix);
-// Each row now represents a probability distribution
-```
-
-## Performance
-
-### SIMD Optimization
-
-All operations use SIMD-optimized exp and sum operations:
-- 4-way unroll for medium arrays
-- 8-way unroll with 8 accumulators for large arrays
-- Prefetch for cache efficiency
-
-### Parallelization
-
-Sparse matrix operations are parallelized over rows:
-- Automatic work distribution
-- Thread-local accumulators
-- No synchronization overhead
+---
 
 ## See Also
 
-- [Normalization](/cpp/kernels/normalization) - Other normalization operations
-- [Sparse Tools](/cpp/kernels/sparse-tools) - Sparse matrix utilities
-
+- [Normalize Module](./normalize) - Other normalization operations
+- [Sparse Matrix](../core/sparse) - Sparse matrix operations

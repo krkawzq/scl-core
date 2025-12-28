@@ -1,37 +1,99 @@
-# Neighbors
+# neighbors.hpp
 
-K-nearest neighbors (KNN) computation with sparse matrix optimization and Cauchy-Schwarz pruning.
+> scl/kernel/neighbors.hpp · K-nearest neighbors computation using Euclidean distance
 
 ## Overview
 
-Neighbors operations provide:
+This file provides efficient K-nearest neighbors (KNN) computation for sparse matrices using Euclidean distance. The implementation uses various optimizations including Cauchy-Schwarz pruning, adaptive sparse dot product strategies, and SIMD-optimized operations.
 
-- **KNN search** - Find K nearest neighbors for each sample
-- **Euclidean distance** - L2 distance computation
-- **Sparse optimization** - Efficient sparse dot product
-- **Pruning** - Cauchy-Schwarz lower bound for early termination
+Key features:
+- Euclidean distance-based KNN
+- Pre-computed squared norms for efficiency
+- Cauchy-Schwarz inequality for pruning
+- Adaptive sparse dot product (linear merge, binary search, galloping)
+- Max-heap for maintaining top-k neighbors
+- Thread-safe parallelization over samples
 
-## Basic Usage
+**Header**: `#include "scl/kernel/neighbors.hpp"`
+
+---
+
+## Main APIs
 
 ### knn
 
-Find K nearest neighbors for each row in a sparse matrix.
+Find K nearest neighbors for each row in a sparse matrix using Euclidean distance.
+
+::: source_code file="scl/kernel/neighbors.hpp" symbol="knn" collapsed
+:::
+
+**Algorithm Description**
+
+For each sample i in parallel:
+
+1. Maintain max-heap of size k for nearest neighbors
+2. For each candidate j != i:
+   a. **Cauchy-Schwarz pruning**: Skip if `|norm_i - norm_j| >= current_max_distance`
+     - This uses the lower bound from Cauchy-Schwarz: `|a-b| <= ||a-b||`
+   b. **Sparse dot product**: Compute dot product using adaptive strategy:
+     - **Linear merge**: For similar-size vectors (ratio < 32)
+     - **Binary search**: For ratio >= 32 (larger vector much longer)
+     - **Galloping**: For ratio >= 256 (extreme size difference)
+   c. **Distance computation**: `distance = sqrt(norm_i + norm_j - 2*dot)`
+     - Negative values from numerical error clamped to 0
+   d. **Heap update**: If distance < current max, remove max and insert new neighbor
+3. Sort final heap to get ascending order by distance
+
+Sparse dot product optimizations:
+- 8-way/4-way skip for non-overlapping index ranges
+- Prefetch in merge loop for cache efficiency
+- Early exit on disjoint ranges (O(1) check)
+
+**Edge Cases**
+
+- **Fewer than k neighbors exist**: Remaining slots filled with index=-1 and distance=infinity
+- **Self-exclusion**: Sample i is excluded from its own neighbor list
+- **All-zero samples**: Distance computed correctly (both norms = 0, distance = 0)
+- **Identical samples**: Distance = 0, will be in neighbor list if allowed
+- **Negative distance from numerical error**: Clamped to 0 before heap insertion
+- **Empty matrix**: Returns immediately with all indices = -1
+
+**Data Guarantees (Preconditions)**
+
+- `norms_sq.len >= matrix.primary_dim()` (pre-computed norms)
+- `norms_sq` contains valid squared norms from `compute_norms()`
+- `out_indices.len >= matrix.primary_dim() * k`
+- `out_distances.len >= matrix.primary_dim() * k`
+- `k > 0`
+- Matrix must be valid CSR/CSC format
+
+**Complexity Analysis**
+
+- **Time**: O(n^2 * avg_nnz) worst case, often much better with pruning
+  - Best case (heavy pruning): O(n * k * log k)
+  - With Cauchy-Schwarz pruning, many candidates skipped early
+- **Space**: O(k) per thread for heap storage
+
+**Example**
 
 ```cpp
 #include "scl/kernel/neighbors.hpp"
 #include "scl/core/sparse.hpp"
 
-Sparse<Real, true> matrix = /* ... */;  // n_samples x n_features
+// Create sparse matrix (n_samples x n_features)
+Sparse<Real, true> matrix(n_samples, n_features);
+// Fill with data...
 
 // Pre-compute squared norms
-Array<Real> norms_sq(matrix.primary_dim());
+Array<Real> norms_sq(n_samples);
 scl::kernel::neighbors::compute_norms(matrix, norms_sq);
 
-// Find K nearest neighbors
-Size k = 15;
-Array<Index> indices(matrix.primary_dim() * k);
-Array<Real> distances(matrix.primary_dim() * k);
+// Pre-allocate output
+Size k = 10;  // Number of neighbors
+Array<Index> indices(n_samples * k);
+Array<Real> distances(n_samples * k);
 
+// Compute KNN
 scl::kernel::neighbors::knn(
     matrix,
     norms_sq,
@@ -39,217 +101,58 @@ scl::kernel::neighbors::knn(
     indices,
     distances
 );
+
+// Results:
+// For sample i:
+// - indices[i*k : i*k+k] contains indices of k nearest neighbors
+// - distances[i*k : i*k+k] contains Euclidean distances
+// - Neighbors are sorted by distance (ascending)
+// - Self (i) is excluded
 ```
 
-**Parameters:**
-- `matrix` [in] - Sparse matrix (n_samples x n_features)
-- `norms_sq` [in] - Pre-computed squared norms from `compute_norms()`
-- `k` [in] - Number of neighbors to find
-- `out_indices` [out] - Neighbor indices, shape (n_samples * k)
-- `out_distances` [out] - Neighbor distances, shape (n_samples * k)
+---
 
-**Preconditions:**
-- `norms_sq.len >= matrix.primary_dim()`
-- `norms_sq` contains valid squared norms from `compute_norms()`
-- `out_indices.len >= matrix.primary_dim() * k`
-- `out_distances.len >= matrix.primary_dim() * k`
-- `k > 0`
-
-**Postconditions:**
-- For each sample i:
-  - `out_indices[i*k : i*k+k]` contains indices of k nearest neighbors
-  - `out_distances[i*k : i*k+k]` contains Euclidean distances to neighbors
-  - Neighbors are sorted by distance (ascending)
-  - Self (i) is excluded from neighbors
-- If fewer than k neighbors exist: remaining slots filled with index=-1 and distance=infinity
-
-**Algorithm:**
-For each sample i in parallel:
-1. Maintain max-heap of size k for nearest neighbors
-2. For each candidate j != i:
-   a. Cauchy-Schwarz pruning: skip if |norm_i - norm_j| >= current_max
-   b. Compute sparse dot product using adaptive strategy:
-      - Linear merge: for similar-size vectors
-      - Binary search: for ratio >= 32
-      - Galloping: for ratio >= 256
-   c. Compute distance: sqrt(norm_i + norm_j - 2*dot)
-   d. Update heap if distance < current max
-3. Sort final heap to get ascending order
-
-**Sparse dot optimizations:**
-- 8-way/4-way skip for non-overlapping index ranges
-- Prefetch in merge loop
-- Early exit on disjoint ranges (O(1) check)
-
-**Complexity:**
-- Time: O(n^2 * avg_nnz) worst case, often much better with pruning
-- Space: O(k) per thread for heap storage
-
-**Thread Safety:**
-Safe - parallelized over samples with thread-local workspace
-
-**Numerical Notes:**
-- Distance computed as sqrt(norm_i + norm_j - 2*dot)
-- Negative values from numerical error clamped to 0
-- Cauchy-Schwarz lower bound enables significant pruning
-
-## Helper Functions
+## Utility Functions
 
 ### compute_norms
 
-Compute squared L2 norms for each row/column of a sparse matrix.
+Compute squared L2 norms for each row/column of a sparse matrix. Must be called before `knn()`.
 
-```cpp
-Array<Real> norms_sq(matrix.primary_dim());
-scl::kernel::neighbors::compute_norms(matrix, norms_sq);
-```
+::: source_code file="scl/kernel/neighbors.hpp" symbol="compute_norms" collapsed
+:::
 
-**Parameters:**
-- `matrix` [in] - Sparse matrix (CSR or CSC)
-- `norms_sq` [out] - Pre-allocated buffer for squared norms
+**Complexity**
 
-**Postconditions:**
-- `norms_sq[i] = sum of squared values in row/column i`
-
-**Algorithm:**
-For each row in parallel:
-- Use SIMD-optimized `scl::vectorize::sum_squared`
-
-**Complexity:**
-- Time: O(nnz)
+- Time: O(nnz) with SIMD-optimized sum_squared
 - Space: O(1) auxiliary
 
-**Thread Safety:**
-Safe - parallelized over rows with no shared mutable state
-
-**Throws:**
-`SCL_CHECK_DIM` - if norms_sq size is insufficient
-
-## Use Cases
-
-### Building KNN Graph
-
-Construct a KNN graph for downstream analysis:
+**Example**
 
 ```cpp
-Sparse<Real, true> data = /* ... */;  // cells x genes
+Sparse<Real, true> matrix(n_samples, n_features);
+Array<Real> norms_sq(n_samples);
 
-// Compute norms
-Array<Real> norms_sq(data.primary_dim());
-scl::kernel::neighbors::compute_norms(data, norms_sq);
+// Compute norms before KNN
+scl::kernel::neighbors::compute_norms(matrix, norms_sq);
 
-// Find neighbors
-Size k = 15;
-Array<Index> knn_indices(data.primary_dim() * k);
-Array<Real> knn_distances(data.primary_dim() * k);
-
-scl::kernel::neighbors::knn(
-    data, norms_sq, k, knn_indices, knn_distances
-);
-
-// Build adjacency matrix or graph structure
-// Use knn_indices and knn_distances to construct graph
+// Now use norms_sq in knn()
+scl::kernel::neighbors::knn(matrix, norms_sq, k, indices, distances);
 ```
 
-### UMAP / t-SNE Preprocessing
+---
 
-Prepare KNN graph for dimensionality reduction:
+## Numerical Notes
 
-```cpp
-// Standard preprocessing
-Sparse<Real, true> normalized_data = /* ... */;
-
-Array<Real> norms_sq(normalized_data.primary_dim());
-scl::kernel::neighbors::compute_norms(normalized_data, norms_sq);
-
-Size k = 15;
-Array<Index> knn_indices(normalized_data.primary_dim() * k);
-Array<Real> knn_distances(normalized_data.primary_dim() * k);
-
-scl::kernel::neighbors::knn(
-    normalized_data, norms_sq, k, knn_indices, knn_distances
-);
-
-// Pass to UMAP/t-SNE with KNN graph
-```
-
-### Clustering Preprocessing
-
-Compute KNN for Leiden/Louvain clustering:
-
-```cpp
-// Normalize and compute KNN
-Sparse<Real, true> data = /* ... */;
-scl::kernel::normalize::normalize_rows_inplace(data, NormMode::L2);
-
-Array<Real> norms_sq(data.primary_dim());
-scl::kernel::neighbors::compute_norms(data, norms_sq);
-
-Array<Index> knn_indices(data.primary_dim() * 15);
-Array<Real> knn_distances(data.primary_dim() * 15);
-
-scl::kernel::neighbors::knn(
-    data, norms_sq, 15, knn_indices, knn_distances
-);
-
-// Convert to graph and cluster
-// Use with scl::kernel::leiden or scl::kernel::louvain
-```
-
-## Performance
-
-### Pruning Optimization
-
-Cauchy-Schwarz lower bound enables early termination:
-- Skip candidates where |norm_i - norm_j| >= current_max_distance
-- Reduces computation by 50-90% in typical cases
-
-### Sparse Dot Product
-
-Adaptive strategy based on vector size ratio:
-- Linear merge: O(nnz1 + nnz2) for similar sizes
-- Binary search: O(nnz1 * log(nnz2)) for ratio >= 32
-- Galloping: O(nnz1 * log(nnz2/nnz1)) for ratio >= 256
-
-### SIMD Optimization
-
-- SIMD-optimized norm computation
-- Prefetch in merge loops
-- 8-way/4-way skip for non-overlapping ranges
-
-### Parallelization
-
-- Parallelized over samples
-- Thread-local heap storage
-- No synchronization overhead
-
-## Algorithm Details
-
-### Distance Computation
-
-Euclidean distance: sqrt(norm_i + norm_j - 2*dot)
-
-Where:
-- norm_i = ||x_i||^2 (pre-computed)
-- norm_j = ||x_j||^2 (pre-computed)
-- dot = x_i · x_j (computed via sparse dot product)
-
-### Cauchy-Schwarz Pruning
-
-Lower bound: |norm_i - norm_j| <= ||x_i - x_j||
-
-If |norm_i - norm_j| >= current_max_distance:
-- Skip candidate j (cannot be closer than current max)
-
-### Heap Management
-
-Max-heap of size k:
-- Maintains k nearest neighbors seen so far
-- O(log k) insertion
-- Final sort: O(k log k)
+- **Distance formula**: `sqrt(norm_i + norm_j - 2*dot)` where `norm_i = ||x_i||^2`
+- **Numerical stability**: Negative values from `norm_i + norm_j - 2*dot` clamped to 0 (should be non-negative by Cauchy-Schwarz)
+- **Cauchy-Schwarz bound**: `|norm_i - norm_j| <= ||x_i - x_j||` used for pruning
+- **Sparse dot product**: Adaptive strategy based on size ratio:
+  - Linear merge: O(nnz1 + nnz2) when sizes similar
+  - Binary search: O(nnz1 * log(nnz2)) when ratio >= 32
+  - Galloping: O(nnz1 * log(nnz2/nnz1)) when ratio >= 256
+- **Heap operations**: Max-heap maintained with O(log k) insert/remove
 
 ## See Also
 
-- [BBKNN](/cpp/kernels/bbknn) - Batch-balanced KNN
-- [Spatial](/cpp/kernels/spatial) - Spatial neighbor search
-
+- [BBKNN](/cpp/kernels/bbknn) - Batch-balanced KNN for batch integration
+- [Normalization](/cpp/kernels/normalization) - Normalize matrices before computing distances
