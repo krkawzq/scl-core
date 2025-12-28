@@ -90,20 +90,20 @@ detect_distro() {
     # Detect package manager
     if check_command apt-get; then
         PKG_MGR="apt"
-        UPDATE_CMD="sudo apt-get update"
-        INSTALL_CMD="sudo apt-get install -y"
+        UPDATE_CMD=" apt-get update"
+        INSTALL_CMD=" apt-get install -y"
     elif check_command dnf; then
         PKG_MGR="dnf"
-        UPDATE_CMD="sudo dnf check-update || true"
-        INSTALL_CMD="sudo dnf install -y"
+        UPDATE_CMD=" dnf check-update || true"
+        INSTALL_CMD=" dnf install -y"
     elif check_command yum; then
         PKG_MGR="yum"
-        UPDATE_CMD="sudo yum check-update || true"
-        INSTALL_CMD="sudo yum install -y"
+        UPDATE_CMD=" yum check-update || true"
+        INSTALL_CMD=" yum install -y"
     elif check_command pacman; then
         PKG_MGR="pacman"
-        UPDATE_CMD="sudo pacman -Sy"
-        INSTALL_CMD="sudo pacman -S --noconfirm"
+        UPDATE_CMD=" pacman -Sy"
+        INSTALL_CMD=" pacman -S --noconfirm"
     else
         print_error "No supported package manager found (apt/dnf/yum/pacman)"
         exit 1
