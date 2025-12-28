@@ -5,7 +5,7 @@
 // BRIEF: C API for random projection dimensionality reduction
 // =============================================================================
 
-#include "scl/binding/c_api/core.h"
+#include "scl/binding/c_api/core/core.h"
 #include <stdint.h>
 
 #ifdef __cplusplus

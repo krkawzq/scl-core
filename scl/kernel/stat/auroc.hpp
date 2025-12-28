@@ -55,7 +55,7 @@ void auroc(
     // Find max row length for buffer allocation
     Size max_len = 0;
     for (Index i = 0; i < primary_dim; ++i) {
-        Size len = static_cast<Size>(matrix.primary_length(i));
+        Size len = static_cast<Size>(matrix.primary_length_unsafe(i));
         if (len > max_len) max_len = len;
     }
 
@@ -66,11 +66,11 @@ void auroc(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        auto values = matrix.primary_values(idx);
-        auto indices = matrix.primary_indices(idx);
+        auto values = matrix.primary_values_unsafe(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
 
         T* SCL_RESTRICT buf1 = buf_pool.get1(thread_rank);
         T* SCL_RESTRICT buf2 = buf_pool.get2(thread_rank);
@@ -141,7 +141,7 @@ void auroc_with_fc(
 
     Size max_len = 0;
     for (Index i = 0; i < primary_dim; ++i) {
-        Size len = static_cast<Size>(matrix.primary_length(i));
+        Size len = static_cast<Size>(matrix.primary_length_unsafe(i));
         if (len > max_len) max_len = len;
     }
 
@@ -151,11 +151,11 @@ void auroc_with_fc(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        auto values = matrix.primary_values(idx);
-        auto indices = matrix.primary_indices(idx);
+        auto values = matrix.primary_values_unsafe(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
 
         T* SCL_RESTRICT buf1 = buf_pool.get1(thread_rank);
         T* SCL_RESTRICT buf2 = buf_pool.get2(thread_rank);

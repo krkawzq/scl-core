@@ -378,12 +378,12 @@ void standardize(
         if (sigma == T(0)) return;
 
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return;
 
         T mu = means[p];
         T inv_sigma = T(1) / sigma;
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
 
         detail::standardize_adaptive(
             values.ptr, static_cast<Size>(len),
@@ -407,10 +407,10 @@ void scale_rows(
         if (scale == T(1)) return;
 
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return;
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         detail::scale_values(values.ptr, static_cast<Size>(len), scale);
     });
 }
@@ -429,10 +429,10 @@ void shift_rows(
         if (offset == T(0)) return;
 
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return;
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         detail::shift_values(values.ptr, static_cast<Size>(len), offset);
     });
 }

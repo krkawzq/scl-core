@@ -457,10 +457,10 @@ void connected_components(
 
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
             const Index u = static_cast<Index>(i);
-            const Index len = adjacency.primary_length(u);
+            const Index len = adjacency.primary_length_unsafe(u);
             if (len == 0) return;
 
-            auto indices = adjacency.primary_indices(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
                 if (v > u) {  // Process each edge once
@@ -497,14 +497,14 @@ void connected_components(
         detail::UnionFind uf(N);
 
         for (Index u = 0; u < n; ++u) {
-            const Index len = adjacency.primary_length(u);
+            const Index len = adjacency.primary_length_unsafe(u);
             if (len == 0) continue;
 
-            auto indices = adjacency.primary_indices(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
 
             // Prefetch next row
             if (SCL_LIKELY(u + 1 < n)) {
-                SCL_PREFETCH_READ(adjacency.primary_indices(u + 1).ptr, 0);
+                SCL_PREFETCH_READ(adjacency.primary_indices_unsafe(u + 1).ptr, 0);
             }
 
             for (Index k = 0; k < len; ++k) {
@@ -556,8 +556,8 @@ bool is_connected(const Sparse<T, IsCSR>& adjacency) {
     while (!queue.empty()) {
         Index u = queue.pop_prefetch();
 
-        const Index len = adjacency.primary_length(u);
-        auto indices = adjacency.primary_indices(u);
+        const Index len = adjacency.primary_length_unsafe(u);
+        auto indices = adjacency.primary_indices_unsafe(u);
 
         // Prefetch neighbor list
         if (SCL_LIKELY(len > 0)) {
@@ -718,8 +718,8 @@ void bfs(
         Index d = distances[u];
         Index next_d = d + 1;
 
-        const Index len = adjacency.primary_length(u);
-        auto indices = adjacency.primary_indices(u);
+        const Index len = adjacency.primary_length_unsafe(u);
+        auto indices = adjacency.primary_indices_unsafe(u);
 
         // Prefetch neighbor data
         if (len > 0) {
@@ -796,8 +796,8 @@ void multi_source_bfs(
         Index u = queue.pop_prefetch();
         Index next_d = distances[u] + 1;
 
-        const Index len = adjacency.primary_length(u);
-        auto indices = adjacency.primary_indices(u);
+        const Index len = adjacency.primary_length_unsafe(u);
+        auto indices = adjacency.primary_indices_unsafe(u);
 
         for (Index k = 0; k < len; ++k) {
             Index v = indices[k];
@@ -854,8 +854,8 @@ void parallel_bfs(
             if (!current_frontier.test(i)) return;
 
             const Index u = static_cast<Index>(i);
-            const Index len = adjacency.primary_length(u);
-            auto indices = adjacency.primary_indices(u);
+            const Index len = adjacency.primary_length_unsafe(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -918,8 +918,8 @@ void dfs(
         Index u = stack_node[top];
         Index& k = stack_idx[top];
 
-        const Index len = adjacency.primary_length(u);
-        auto indices = adjacency.primary_indices(u);
+        const Index len = adjacency.primary_length_unsafe(u);
+        auto indices = adjacency.primary_indices_unsafe(u);
 
         // Find next unvisited neighbor
         bool found = false;
@@ -964,8 +964,8 @@ bool topological_sort(
     scl::algo::zero(in_degree, N);
 
     for (Index u = 0; u < n; ++u) {
-        const Index len = adjacency.primary_length(u);
-        auto indices = adjacency.primary_indices(u);
+        const Index len = adjacency.primary_length_unsafe(u);
+        auto indices = adjacency.primary_indices_unsafe(u);
         for (Index k = 0; k < len; ++k) {
             ++in_degree[indices[k]];
         }
@@ -984,8 +984,8 @@ bool topological_sort(
         Index u = queue.pop();
         order[order_idx++] = u;
 
-        const Index len = adjacency.primary_length(u);
-        auto indices = adjacency.primary_indices(u);
+        const Index len = adjacency.primary_length_unsafe(u);
+        auto indices = adjacency.primary_indices_unsafe(u);
         for (Index k = 0; k < len; ++k) {
             Index v = indices[k];
             if (--in_degree[v] == 0) {
@@ -1033,8 +1033,8 @@ Index graph_diameter(const Sparse<T, IsCSR>& adjacency) {
             Index u = queue.pop();
             Index d = distances[u];
 
-            const Index len = adjacency.primary_length(u);
-            auto indices = adjacency.primary_indices(u);
+            const Index len = adjacency.primary_length_unsafe(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -1107,8 +1107,8 @@ Real average_path_length(
                 ++local_count;
             }
 
-            const Index len = adjacency.primary_length(u);
-            auto indices = adjacency.primary_indices(u);
+            const Index len = adjacency.primary_length_unsafe(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -1152,14 +1152,14 @@ void clustering_coefficient(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         const Index u = static_cast<Index>(i);
-        const Index deg = adjacency.primary_length(u);
+        const Index deg = adjacency.primary_length_unsafe(u);
 
         if (deg < 2) {
             coefficients[i] = Real(0);
             return;
         }
 
-        auto u_neighbors = adjacency.primary_indices(u);
+        auto u_neighbors = adjacency.primary_indices_unsafe(u);
         const Size u_deg = static_cast<Size>(deg);
 
         Size edge_count = 0;
@@ -1167,8 +1167,8 @@ void clustering_coefficient(
         // For each pair of neighbors, check if they're connected
         for (Size j = 0; j < u_deg; ++j) {
             Index v = u_neighbors[j];
-            auto v_neighbors = adjacency.primary_indices(v);
-            Size v_deg = static_cast<Size>(adjacency.primary_length(v));
+            auto v_neighbors = adjacency.primary_indices_unsafe(v);
+            Size v_deg = static_cast<Size>(adjacency.primary_length_unsafe(v));
 
             // Count how many of u's neighbors (after j) are in v's neighbor list
             for (Size k = j + 1; k < u_deg; ++k) {
@@ -1206,22 +1206,22 @@ Real global_clustering_coefficient(const Sparse<T, IsCSR>& adjacency) {
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
         const Index u = static_cast<Index>(i);
-        const Index deg = adjacency.primary_length(u);
+        const Index deg = adjacency.primary_length_unsafe(u);
         if (deg < 2) return;
 
         // Connected triples centered at u
         Size triples = static_cast<Size>(deg) * static_cast<Size>(deg - 1) / 2;
         partial_triples[thread_rank] += triples;
 
-        auto u_neighbors = adjacency.primary_indices(u);
+        auto u_neighbors = adjacency.primary_indices_unsafe(u);
 
         // Count triangles
         for (Index j = 0; j < deg; ++j) {
             Index v = u_neighbors[j];
             if (v <= u) continue;  // Only count each triangle once
 
-            auto v_neighbors = adjacency.primary_indices(v);
-            Size v_deg = static_cast<Size>(adjacency.primary_length(v));
+            auto v_neighbors = adjacency.primary_indices_unsafe(v);
+            Size v_deg = static_cast<Size>(adjacency.primary_length_unsafe(v));
 
             // Count common neighbors > v
             Size common = detail::sorted_intersect_count(
@@ -1271,10 +1271,10 @@ Size count_triangles(const Sparse<T, IsCSR>& adjacency) {
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
         const Index u = static_cast<Index>(i);
-        const Index u_deg = adjacency.primary_length(u);
+        const Index u_deg = adjacency.primary_length_unsafe(u);
         if (u_deg < 2) return;
 
-        auto u_neighbors = adjacency.primary_indices(u);
+        auto u_neighbors = adjacency.primary_indices_unsafe(u);
         Size local_count = 0;
 
         // Only process edges (u, v) where u < v to avoid double counting
@@ -1282,10 +1282,10 @@ Size count_triangles(const Sparse<T, IsCSR>& adjacency) {
             Index v = u_neighbors[j];
             if (v <= u) continue;
 
-            const Index v_deg = adjacency.primary_length(v);
+            const Index v_deg = adjacency.primary_length_unsafe(v);
             if (v_deg == 0) continue;
 
-            auto v_neighbors = adjacency.primary_indices(v);
+            auto v_neighbors = adjacency.primary_indices_unsafe(v);
 
             // Count common neighbors w > v
             // Using optimized intersection count
@@ -1330,11 +1330,11 @@ void degree_sequence(
     // Parallel for large graphs
     if (N >= config::PARALLEL_NODES_THRESHOLD) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            degrees[i] = adjacency.primary_length(static_cast<Index>(i));
+            degrees[i] = adjacency.primary_length_unsafe(static_cast<Index>(i));
         });
     } else {
         for (Index i = 0; i < n; ++i) {
-            degrees[i] = adjacency.primary_length(i);
+            degrees[i] = adjacency.primary_length_unsafe(i);
         }
     }
 }
@@ -1373,7 +1373,7 @@ void degree_statistics(
     }
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
-        Index d = adjacency.primary_length(static_cast<Index>(i));
+        Index d = adjacency.primary_length_unsafe(static_cast<Index>(i));
         stats[thread_rank].sum += d;
         stats[thread_rank].sum_sq += static_cast<int64_t>(d) * d;
         stats[thread_rank].max_d = scl::algo::max2(stats[thread_rank].max_d, d);
@@ -1427,7 +1427,7 @@ void degree_distribution(
         scl::algo::zero(thread_hists, n_threads * hist_size);
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t thread_rank) {
-            Index d = adjacency.primary_length(static_cast<Index>(i));
+            Index d = adjacency.primary_length_unsafe(static_cast<Index>(i));
             if (d <= max_degree) {
                 thread_hists[thread_rank * hist_size + d]++;
             }
@@ -1443,7 +1443,7 @@ void degree_distribution(
         scl::memory::aligned_free(thread_hists, SCL_ALIGNMENT);
     } else {
         for (Index i = 0; i < n; ++i) {
-            Index d = adjacency.primary_length(i);
+            Index d = adjacency.primary_length_unsafe(i);
             if (d <= max_degree) {
                 ++histogram[d];
             }
@@ -1462,7 +1462,7 @@ Real graph_density(const Sparse<T, IsCSR>& adjacency) {
 
     Size total_edges = 0;
     for (Index i = 0; i < n; ++i) {
-        total_edges += static_cast<Size>(adjacency.primary_length(i));
+        total_edges += static_cast<Size>(adjacency.primary_length_unsafe(i));
     }
 
     // For undirected graph, edges counted twice
@@ -1491,7 +1491,7 @@ void kcore_decomposition(
     Index max_degree = 0;
 
     for (Index i = 0; i < n; ++i) {
-        degrees[i] = adjacency.primary_length(i);
+        degrees[i] = adjacency.primary_length_unsafe(i);
         max_degree = scl::algo::max2(max_degree, degrees[i]);
     }
 
@@ -1533,8 +1533,8 @@ void kcore_decomposition(
         core_numbers[u] = degrees[u];
         removed.set(static_cast<Size>(u));
 
-        auto neighbors = adjacency.primary_indices(u);
-        Index len = adjacency.primary_length(u);
+        auto neighbors = adjacency.primary_indices_unsafe(u);
+        Index len = adjacency.primary_length_unsafe(u);
 
         for (Index k = 0; k < len; ++k) {
             Index v = neighbors[k];

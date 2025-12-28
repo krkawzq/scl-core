@@ -142,7 +142,20 @@ endif()
 # 5. Source Collection (Updated for Colocation)
 # -----------------------------------------------------------------------------
 # Recursively find all .cpp files in the scl/ directory
+# This includes:
+#   - scl/core/*.cpp (Core utilities and data structures)
+#   - scl/kernel/*.cpp (High-performance computational kernels)
+#   - scl/binding/c_api/**/*.cpp (C API bindings for Python interface)
+#   - Any other subdirectories under scl/
 file(GLOB_RECURSE SCL_SOURCES "scl/*.cpp")
+
+# Separate C API sources for informational purposes
+file(GLOB_RECURSE SCL_CAPI_SOURCES "scl/binding/c_api/*.cpp")
+list(LENGTH SCL_SOURCES SCL_SOURCES_COUNT)
+list(LENGTH SCL_CAPI_SOURCES SCL_CAPI_SOURCES_COUNT)
+
+message(STATUS "Found ${SCL_SOURCES_COUNT} C++ source files")
+message(STATUS "  - ${SCL_CAPI_SOURCES_COUNT} files in C API bindings (scl/binding/c_api/)")
 
 # -----------------------------------------------------------------------------
 # 6. Multi-Precision Target Generation
@@ -257,6 +270,8 @@ message(STATUS "  C++ Standard:    ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Threading:       ${CHOSEN_BACKEND}")
 message(STATUS "  SIMD:            ${SCL_ONLY_SCALAR} (ONLY_SCALAR Mode)")
 message(STATUS "  HDF5:            ${HDF5_FOUND}")
+message(STATUS "  Source Files:    ${SCL_SOURCES_COUNT} total")
+message(STATUS "    - C API:       ${SCL_CAPI_SOURCES_COUNT} files")
 message(STATUS "  Targets:         scl_core_f32, scl_core_f64")
 message(STATUS "  Output Dir:      ${CMAKE_BINARY_DIR}/lib")
 message(STATUS "  Install Dir:     src/scl/libs")

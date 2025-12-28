@@ -180,12 +180,12 @@ void standard_moments(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         Real sum, sq_sum;
         if (len_sz > 0) {
-            auto values = matrix.primary_values(idx);
+            auto values = matrix.primary_values_unsafe(idx);
             detail::compute_sum_sq_simd(values.ptr, len_sz, sum, sq_sum);
         } else {
             sum = Real(0);
@@ -218,13 +218,13 @@ void clipped_moments(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
         Real clip = clip_vals[p];
 
         Real sum, sq_sum;
         if (len_sz > 0) {
-            auto values = matrix.primary_values(idx);
+            auto values = matrix.primary_values_unsafe(idx);
             detail::compute_clipped_sum_sq_simd(values.ptr, len_sz, clip, sum, sq_sum);
         } else {
             sum = Real(0);
@@ -255,7 +255,7 @@ void detection_rate(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         out_rates[p] = static_cast<Real>(len) * inv_N;
     });
 }

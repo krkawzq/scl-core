@@ -36,8 +36,8 @@ scl_error_t scl_sparse_unsafe_get_raw(
             out->rows = static_cast<scl_index_t>(m.rows_);
             out->cols = static_cast<scl_index_t>(m.cols_);
             out->nnz = static_cast<scl_index_t>(m.nnz_);
-            out->owns_data = m.owns_data_ ? 1 : 0;
-            out->is_view = m.is_view_ ? 1 : 0;
+            // NOTE: owns_data_ and is_view_ removed from Sparse
+            // Lifecycle is now managed by registry via alias reference counting
         });
         
         clear_last_error();
@@ -68,6 +68,8 @@ scl_error_t scl_sparse_unsafe_from_raw(
         
         // Create sparse matrix from raw pointers
         // WARNING: This is dangerous - assumes raw struct was properly allocated
+        // NOTE: Data pointers are not registered - caller must manage lifecycle
+        //       or register them manually with registry before calling this
         if (wrapper->is_csr) {
             CSR matrix;
             matrix.data_ptrs = reinterpret_cast<Pointer*>(raw->data_ptrs);
@@ -76,8 +78,7 @@ scl_error_t scl_sparse_unsafe_from_raw(
             matrix.rows_ = raw->rows;
             matrix.cols_ = raw->cols;
             matrix.nnz_ = raw->nnz;
-            matrix.owns_data_ = (raw->owns_data != 0);
-            matrix.is_view_ = (raw->is_view != 0);
+            // Lifecycle managed by registry - no owns_data_ or is_view_
             wrapper->matrix = std::move(matrix);
         } else {
             CSC matrix;
@@ -87,8 +88,7 @@ scl_error_t scl_sparse_unsafe_from_raw(
             matrix.rows_ = raw->rows;
             matrix.cols_ = raw->cols;
             matrix.nnz_ = raw->nnz;
-            matrix.owns_data_ = (raw->owns_data != 0);
-            matrix.is_view_ = (raw->is_view != 0);
+            // Lifecycle managed by registry - no owns_data_ or is_view_
             wrapper->matrix = std::move(matrix);
         }
         

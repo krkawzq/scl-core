@@ -825,15 +825,15 @@ void project_with_dense_matrix(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        const Index len = matrix.row_length(idx);
+        const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
         scl::algo::zero(out_row, output_dim);
 
         if (len == 0) return;
 
-        auto indices = matrix.row_indices(idx);
-        auto values = matrix.row_values(idx);
+        auto indices = matrix.row_indices_unsafe(idx);
+        auto values = matrix.row_values_unsafe(idx);
 
         for (Index j = 0; j < len; ++j) {
             // Prefetch next projection row
@@ -880,15 +880,15 @@ void project_with_sparse_matrix(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        const Index len = matrix.row_length(idx);
+        const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
         scl::algo::zero(out_row, output_dim);
 
         if (len == 0) return;
 
-        auto mat_indices = matrix.row_indices(idx);
-        auto mat_values = matrix.row_values(idx);
+        auto mat_indices = matrix.row_indices_unsafe(idx);
+        auto mat_values = matrix.row_values_unsafe(idx);
 
         for (Index j = 0; j < len; ++j) {
             Index col = mat_indices[j];
@@ -940,7 +940,7 @@ void project_gaussian_otf(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        const Index len = matrix.row_length(idx);
+        const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
 
@@ -949,8 +949,8 @@ void project_gaussian_otf(
             return;
         }
 
-        auto indices = matrix.row_indices(idx);
-        auto values = matrix.row_values(idx);
+        auto indices = matrix.row_indices_unsafe(idx);
+        auto values = matrix.row_values_unsafe(idx);
 
         uint64_t row_seed = seed ^ (i * 0x9e3779b97f4a7c15ULL);
 
@@ -982,7 +982,7 @@ void project_achlioptas_otf(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        const Index len = matrix.row_length(idx);
+        const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
 
@@ -991,8 +991,8 @@ void project_achlioptas_otf(
             return;
         }
 
-        auto indices = matrix.row_indices(idx);
-        auto values = matrix.row_values(idx);
+        auto indices = matrix.row_indices_unsafe(idx);
+        auto values = matrix.row_values_unsafe(idx);
 
         uint64_t row_seed = seed ^ (i * 0x9e3779b97f4a7c15ULL);
 
@@ -1040,7 +1040,7 @@ void project_sparse_otf(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        const Index len = matrix.row_length(idx);
+        const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
 
@@ -1049,8 +1049,8 @@ void project_sparse_otf(
             return;
         }
 
-        auto indices = matrix.row_indices(idx);
-        auto values = matrix.row_values(idx);
+        auto indices = matrix.row_indices_unsafe(idx);
+        auto values = matrix.row_values_unsafe(idx);
 
         uint64_t row_seed = seed ^ (i * 0x9e3779b97f4a7c15ULL);
 
@@ -1083,7 +1083,7 @@ void project_countsketch(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        const Index len = matrix.row_length(idx);
+        const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
 
@@ -1092,8 +1092,8 @@ void project_countsketch(
             return;
         }
 
-        auto indices = matrix.row_indices(idx);
-        auto values = matrix.row_values(idx);
+        auto indices = matrix.row_indices_unsafe(idx);
+        auto values = matrix.row_values_unsafe(idx);
 
         detail::project_row_countsketch(
             out_row, output_dim,
@@ -1122,7 +1122,7 @@ void project_feature_hash(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        const Index len = matrix.row_length(idx);
+        const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
 
@@ -1131,8 +1131,8 @@ void project_feature_hash(
             return;
         }
 
-        auto indices = matrix.row_indices(idx);
-        auto values = matrix.row_values(idx);
+        auto indices = matrix.row_indices_unsafe(idx);
+        auto values = matrix.row_values_unsafe(idx);
 
         detail::project_row_feature_hash(
             out_row, output_dim,

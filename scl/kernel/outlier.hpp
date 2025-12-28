@@ -200,8 +200,8 @@ void isolation_score(
     std::atomic<Real> global_sum_sq{Real(0.0)};
 
     auto compute_cell_stats = [&](Size i) {
-        const Index row_start = data.row_indices()[i];
-        const Index row_end = data.row_indices()[i + 1];
+        const Index row_start = data.row_indices_unsafe()[i];
+        const Index row_end = data.row_indices_unsafe()[i + 1];
 
         Real sum = Real(0.0);
         Real sum_sq = Real(0.0);
@@ -290,7 +290,7 @@ void local_outlier_factor(
     // Determine k from neighbor graph
     Size k = 0;
     for (Size i = 0; i < n_cells; ++i) {
-        Size nnz = static_cast<Size>(neighbors.row_indices()[i + 1] - neighbors.row_indices()[i]);
+        Size nnz = static_cast<Size>(neighbors.row_indices_unsafe()[i + 1] - neighbors.row_indices_unsafe()[i]);
         if (nnz > k) k = nnz;
     }
     k = scl::algo::max2(k, config::MIN_K_NEIGHBORS);
@@ -299,8 +299,8 @@ void local_outlier_factor(
     Real* k_distances = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
 
     auto compute_k_distance = [&](Size i) {
-        const Index row_start = distances.row_indices()[i];
-        const Index row_end = distances.row_indices()[i + 1];
+        const Index row_start = distances.row_indices_unsafe()[i];
+        const Index row_end = distances.row_indices_unsafe()[i + 1];
         const Size n_neighbors = static_cast<Size>(row_end - row_start);
 
         if (n_neighbors == 0) {
@@ -330,8 +330,8 @@ void local_outlier_factor(
         reach_pool.init(scl::threading::max_threads(), k);
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
-            const Index row_start = neighbors.row_indices()[i];
-            const Index row_end = neighbors.row_indices()[i + 1];
+            const Index row_start = neighbors.row_indices_unsafe()[i];
+            const Index row_end = neighbors.row_indices_unsafe()[i + 1];
             const Size n_neighbors = static_cast<Size>(row_end - row_start);
 
             if (n_neighbors == 0) {
@@ -341,8 +341,8 @@ void local_outlier_factor(
 
             Real* reach_dists = reach_pool.get(thread_id);
             for (Size j = 0; j < n_neighbors; ++j) {
-                Index neighbor_idx = neighbors.col_indices()[row_start + j];
-                Real dist = distances.values()[distances.row_indices()[i] + j];
+                Index neighbor_idx = neighbors.col_indices_unsafe()[row_start + j];
+                Real dist = distances.values()[distances.row_indices_unsafe()[i] + j];
                 reach_dists[j] = detail::reachability_distance(dist, k_distances[neighbor_idx]);
             }
 
@@ -352,8 +352,8 @@ void local_outlier_factor(
         Real* reach_dists = scl::memory::aligned_alloc<Real>(k, SCL_ALIGNMENT);
 
         for (Size i = 0; i < n_cells; ++i) {
-            const Index row_start = neighbors.row_indices()[i];
-            const Index row_end = neighbors.row_indices()[i + 1];
+            const Index row_start = neighbors.row_indices_unsafe()[i];
+            const Index row_end = neighbors.row_indices_unsafe()[i + 1];
             const Size n_neighbors = static_cast<Size>(row_end - row_start);
 
             if (n_neighbors == 0) {
@@ -362,8 +362,8 @@ void local_outlier_factor(
             }
 
             for (Size j = 0; j < n_neighbors; ++j) {
-                Index neighbor_idx = neighbors.col_indices()[row_start + j];
-                Real dist = distances.values()[distances.row_indices()[i] + j];
+                Index neighbor_idx = neighbors.col_indices_unsafe()[row_start + j];
+                Real dist = distances.values()[distances.row_indices_unsafe()[i] + j];
                 reach_dists[j] = detail::reachability_distance(dist, k_distances[neighbor_idx]);
             }
 
@@ -375,8 +375,8 @@ void local_outlier_factor(
 
     // Step 3: Compute LOF for each point (parallel)
     auto compute_lof = [&](Size i) {
-        const Index row_start = neighbors.row_indices()[i];
-        const Index row_end = neighbors.row_indices()[i + 1];
+        const Index row_start = neighbors.row_indices_unsafe()[i];
+        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
         const Size n_neighbors = static_cast<Size>(row_end - row_start);
 
         if (n_neighbors == 0 || lrd[i] < config::EPSILON) {
@@ -386,7 +386,7 @@ void local_outlier_factor(
 
         Real sum_neighbor_lrd = Real(0.0);
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor_idx = neighbors.col_indices()[j];
+            Index neighbor_idx = neighbors.col_indices_unsafe()[j];
             sum_neighbor_lrd += lrd[neighbor_idx];
         }
 
@@ -430,8 +430,8 @@ void ambient_detection(
 
     for (Size i = 0; i < n_cells; ++i) {
         Real sum = Real(0.0);
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
             sum += static_cast<Real>(expression.values()[j]);
@@ -458,11 +458,11 @@ void ambient_detection(
     for (Size i = 0; i < n_cells; ++i) {
         if (total_umi[i] > umi_threshold) continue;
 
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices()[j];
+            Index gene = expression.col_indices_unsafe()[j];
             Real val = static_cast<Real>(expression.values()[j]);
             ambient_profile[gene] += val;
             ambient_total += val;
@@ -478,8 +478,8 @@ void ambient_detection(
 
     // Score each cell by correlation with ambient profile
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         if (total_umi[i] < config::EPSILON) {
             ambient_scores.ptr[i] = Real(1.0);
@@ -491,7 +491,7 @@ void ambient_detection(
         Real cell_norm = Real(0.0);
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices()[j];
+            Index gene = expression.col_indices_unsafe()[j];
             Real val = static_cast<Real>(expression.values()[j]) / total_umi[i];
             dot_product += val * ambient_profile[gene];
             cell_norm += val * val;
@@ -540,8 +540,8 @@ void empty_drops(
 
     for (Size i = 0; i < n_cells; ++i) {
         Real sum = Real(0.0);
-        const Index row_start = raw_counts.row_indices()[i];
-        const Index row_end = raw_counts.row_indices()[i + 1];
+        const Index row_start = raw_counts.row_indices_unsafe()[i];
+        const Index row_end = raw_counts.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
             sum += static_cast<Real>(raw_counts.values()[j]);
@@ -585,11 +585,11 @@ void empty_drops(
     Real ambient_total = Real(0.0);
     for (Size i = 0; i < n_ambient; ++i) {
         Index cell_idx = sorted_indices[i];
-        const Index row_start = raw_counts.row_indices()[cell_idx];
-        const Index row_end = raw_counts.row_indices()[cell_idx + 1];
+        const Index row_start = raw_counts.row_indices_unsafe()[cell_idx];
+        const Index row_end = raw_counts.row_indices_unsafe()[cell_idx + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = raw_counts.col_indices()[j];
+            Index gene = raw_counts.col_indices_unsafe()[j];
             Real val = static_cast<Real>(raw_counts.values()[j]);
             ambient_profile[gene] += val;
             ambient_total += val;
@@ -621,11 +621,11 @@ void empty_drops(
             cell_profile[g] = Real(0.0);
         }
 
-        const Index row_start = raw_counts.row_indices()[i];
-        const Index row_end = raw_counts.row_indices()[i + 1];
+        const Index row_start = raw_counts.row_indices_unsafe()[i];
+        const Index row_end = raw_counts.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = raw_counts.col_indices()[j];
+            Index gene = raw_counts.col_indices_unsafe()[j];
             cell_profile[gene] = static_cast<Real>(raw_counts.values()[j]);
         }
 
@@ -722,11 +722,11 @@ void outlier_genes(
 
     // First pass: compute sums
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices()[j];
+            Index gene = expression.col_indices_unsafe()[j];
             Real val = static_cast<Real>(expression.values()[j]);
             gene_means[gene] += val;
             ++gene_nnz[gene];
@@ -740,12 +740,12 @@ void outlier_genes(
 
     // Second pass: compute variances
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         // Track which genes have non-zero values in this cell
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices()[j];
+            Index gene = expression.col_indices_unsafe()[j];
             Real val = static_cast<Real>(expression.values()[j]);
             Real diff = val - gene_means[gene];
             gene_vars[gene] += diff * diff;
@@ -832,8 +832,8 @@ void doublet_score(
     // Cells that appear as "intermediate" between clusters are potential doublets
 
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start_n = neighbors.row_indices()[i];
-        const Index row_end_n = neighbors.row_indices()[i + 1];
+        const Index row_start_n = neighbors.row_indices_unsafe()[i];
+        const Index row_end_n = neighbors.row_indices_unsafe()[i + 1];
         const Size n_neighbors = static_cast<Size>(row_end_n - row_start_n);
 
         if (n_neighbors < 2) {
@@ -848,11 +848,11 @@ void doublet_score(
         Size features_counted = 0;
 
         // For each feature, compute variance across neighbors
-        const Index cell_row_start = expression.row_indices()[i];
-        const Index cell_row_end = expression.row_indices()[i + 1];
+        const Index cell_row_start = expression.row_indices_unsafe()[i];
+        const Index cell_row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Index f = cell_row_start; f < cell_row_end; ++f) {
-            Index feature = expression.col_indices()[f];
+            Index feature = expression.col_indices_unsafe()[f];
             Real cell_val = static_cast<Real>(expression.values()[f]);
 
             Real sum = Real(0.0);
@@ -860,14 +860,14 @@ void doublet_score(
             Size count = 0;
 
             for (Index j = row_start_n; j < row_end_n; ++j) {
-                Index neighbor = neighbors.col_indices()[j];
+                Index neighbor = neighbors.col_indices_unsafe()[j];
 
                 // Find this feature in neighbor's expression
-                const Index n_row_start = expression.row_indices()[neighbor];
-                const Index n_row_end = expression.row_indices()[neighbor + 1];
+                const Index n_row_start = expression.row_indices_unsafe()[neighbor];
+                const Index n_row_end = expression.row_indices_unsafe()[neighbor + 1];
 
                 for (Index k = n_row_start; k < n_row_end; ++k) {
-                    if (expression.col_indices()[k] == feature) {
+                    if (expression.col_indices_unsafe()[k] == feature) {
                         Real val = static_cast<Real>(expression.values()[k]);
                         sum += val;
                         sum_sq += val * val;
@@ -932,14 +932,14 @@ void mitochondrial_outliers(
 
     // Compute mitochondrial fraction for each cell
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         Real total = Real(0.0);
         Real mito_total = Real(0.0);
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices()[j];
+            Index gene = expression.col_indices_unsafe()[j];
             Real val = static_cast<Real>(expression.values()[j]);
             total += val;
 
@@ -997,15 +997,15 @@ void qc_filter(
     }
 
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
         const Size n_genes_detected = static_cast<Size>(row_end - row_start);
 
         Real total_counts = Real(0.0);
         Real mito_counts = Real(0.0);
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices()[j];
+            Index gene = expression.col_indices_unsafe()[j];
             Real val = static_cast<Real>(expression.values()[j]);
             total_counts += val;
 

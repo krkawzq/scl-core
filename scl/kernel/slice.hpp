@@ -7,6 +7,7 @@
 #include "scl/core/simd.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/core/algo.hpp"
+#include "scl/kernel/sparse.hpp"  // for from_contiguous_arrays
 #include "scl/threading/parallel_for.hpp"
 #include "scl/threading/scheduler.hpp"
 
@@ -176,7 +177,7 @@ Index inspect_slice_primary(
     return detail::parallel_reduce_nnz(n_keep, [&](Size i) -> Index {
         Index idx = keep_indices[i];
         SCL_CHECK_ARG(idx >= 0 && idx < n_primary, "Slice: Index out of bounds");
-        return matrix.primary_length(idx);
+        return matrix.primary_length_unsafe(idx);
     });
 }
 
@@ -195,19 +196,19 @@ void materialize_slice_primary(
     out_indptr[0] = 0;
     for (Size i = 0; i < n_keep; ++i) {
         Index src_idx = keep_indices[i];
-        Index len = matrix.primary_length(src_idx);
+        Index len = matrix.primary_length_unsafe(src_idx);
         out_indptr[i + 1] = out_indptr[i] + len;
     }
     
     if (n_keep < PARALLEL_THRESHOLD_ROWS) {
         for (Size i = 0; i < n_keep; ++i) {
             Index src_idx = keep_indices[i];
-            Index len = matrix.primary_length(src_idx);
+            Index len = matrix.primary_length_unsafe(src_idx);
             if (len == 0) continue;
             
             Index dst_start = out_indptr[i];
-            auto src_values = matrix.primary_values(src_idx);
-            auto src_indices = matrix.primary_indices(src_idx);
+            auto src_values = matrix.primary_values_unsafe(src_idx);
+            auto src_indices = matrix.primary_indices_unsafe(src_idx);
             
             detail::fast_copy_with_prefetch(
                 out_data.ptr + dst_start,
@@ -224,12 +225,12 @@ void materialize_slice_primary(
     } else {
         scl::threading::parallel_for(Size(0), n_keep, [&](size_t i) {
             Index src_idx = keep_indices[i];
-            Index len = matrix.primary_length(src_idx);
+            Index len = matrix.primary_length_unsafe(src_idx);
             if (len == 0) return;
             
             Index dst_start = out_indptr[i];
-            auto src_values = matrix.primary_values(src_idx);
-            auto src_indices = matrix.primary_indices(src_idx);
+            auto src_values = matrix.primary_values_unsafe(src_idx);
+            auto src_indices = matrix.primary_indices_unsafe(src_idx);
             
             detail::fast_copy_with_prefetch(
                 out_data.ptr + dst_start,
@@ -283,13 +284,12 @@ Sparse<T, IsCSR> slice_primary(
     Index new_rows = IsCSR ? static_cast<Index>(n_keep) : matrix.rows();
     Index new_cols = IsCSR ? matrix.cols() : static_cast<Index>(n_keep);
     
-    std::span<const Index> offsets(indptr_ptr, n_keep + 1);
-    
-    return Sparse<T, IsCSR>::wrap_traditional(
-        new_rows, new_cols,
-        data_ptr,
-        indices_ptr,
-        offsets
+    // Use from_contiguous_arrays with take_ownership to properly register
+    // memory with registry for automatic lifecycle management
+    return from_contiguous_arrays<T, IsCSR>(
+        data_ptr, indices_ptr, indptr_ptr,
+        new_rows, new_cols, out_nnz,
+        true  // take_ownership - register with registry
     );
 }
 
@@ -303,10 +303,10 @@ Index inspect_filter_secondary(
     
     return detail::parallel_reduce_nnz(static_cast<Size>(n_primary), [&](Size p) -> Index {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return 0;
         
-        auto indices = matrix.primary_indices(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
         return detail::count_masked_fast(indices.ptr, len, mask_ptr);
     });
 }
@@ -327,14 +327,14 @@ void materialize_filter_secondary(
     out_indptr[0] = 0;
     for (Index p = 0; p < n_primary; ++p) {
         const Index idx = p;
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         
         if (len == 0) {
             out_indptr[p + 1] = out_indptr[p];
             continue;
         }
         
-        auto indices = matrix.primary_indices(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
         Index count = detail::count_masked_fast(indices.ptr, len, mask_ptr);
         out_indptr[p + 1] = out_indptr[p] + count;
     }
@@ -342,11 +342,11 @@ void materialize_filter_secondary(
     if (n_primary < static_cast<Index>(PARALLEL_THRESHOLD_ROWS)) {
         for (Index p = 0; p < n_primary; ++p) {
             const Index idx = p;
-            const Index len = matrix.primary_length(idx);
+            const Index len = matrix.primary_length_unsafe(idx);
             if (len == 0) continue;
             
-            auto values = matrix.primary_values(idx);
-            auto indices = matrix.primary_indices(idx);
+            auto values = matrix.primary_values_unsafe(idx);
+            auto indices = matrix.primary_indices_unsafe(idx);
             Index dst_pos = out_indptr[p];
             
             for (Index k = 0; k < len; ++k) {
@@ -361,11 +361,11 @@ void materialize_filter_secondary(
     } else {
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
             const Index idx = static_cast<Index>(p);
-            const Index len = matrix.primary_length(idx);
+            const Index len = matrix.primary_length_unsafe(idx);
             if (len == 0) return;
             
-            auto values = matrix.primary_values(idx);
-            auto indices = matrix.primary_indices(idx);
+            auto values = matrix.primary_values_unsafe(idx);
+            auto indices = matrix.primary_indices_unsafe(idx);
             Index dst_pos = out_indptr[p];
             
             for (Index k = 0; k < len; ++k) {
@@ -432,13 +432,12 @@ Sparse<T, IsCSR> filter_secondary(
     Index new_rows = IsCSR ? matrix.rows() : static_cast<Index>(new_secondary);
     Index new_cols = IsCSR ? static_cast<Index>(new_secondary) : matrix.cols();
 
-    std::span<const Index> offsets(indptr_ptr, static_cast<size_t>(primary_dim) + 1);
-
-    return Sparse<T, IsCSR>::wrap_traditional(
-        new_rows, new_cols,
-        data_ptr,
-        indices_ptr,
-        offsets
+    // Use from_contiguous_arrays with take_ownership to properly register
+    // memory with registry for automatic lifecycle management
+    return from_contiguous_arrays<T, IsCSR>(
+        data_ptr, indices_ptr, indptr_ptr,
+        new_rows, new_cols, out_nnz,
+        true  // take_ownership - register with registry
     );
 }
 

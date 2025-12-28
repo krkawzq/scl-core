@@ -5,7 +5,7 @@
 // BRIEF: C API for cell state transition analysis
 // =============================================================================
 
-#include "scl/binding/c_api/core.h"
+#include "scl/binding/c_api/core/core.h"
 
 #ifdef __cplusplus
 extern "C" {

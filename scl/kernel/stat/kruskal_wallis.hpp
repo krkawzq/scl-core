@@ -121,7 +121,7 @@ void kruskal_wallis(
     // Find max row length
     Size max_len = 0;
     for (Index i = 0; i < primary_dim; ++i) {
-        Size len = static_cast<Size>(matrix.primary_length(i));
+        Size len = static_cast<Size>(matrix.primary_length_unsafe(i));
         if (len > max_len) max_len = len;
     }
 
@@ -135,11 +135,11 @@ void kruskal_wallis(
 
     scl::threading::parallel_for(Size(0), N_features, [&](size_t p, size_t thread_rank) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        auto values = matrix.primary_values(idx);
-        auto indices = matrix.primary_indices(idx);
+        auto values = matrix.primary_values_unsafe(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
 
         double* workspace = work_pool.get(thread_rank);
         double* val_buf = workspace;

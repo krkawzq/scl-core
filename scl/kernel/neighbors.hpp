@@ -311,7 +311,7 @@ void compute_norms(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         norms_sq[p] = scl::vectorize::sum_squared(Array<const T>(values.data(), values.size()));
     });
 }
@@ -389,8 +389,8 @@ void knn(
         T norm_i = norms_sq[i];
         T sqrt_norm_i = std::sqrt(norm_i);
         const Index idx_i = static_cast<Index>(i);
-        auto vals_i_arr = matrix.primary_values(idx_i);
-        auto inds_i_arr = matrix.primary_indices(idx_i);
+        auto vals_i_arr = matrix.primary_values_unsafe(idx_i);
+        auto inds_i_arr = matrix.primary_indices_unsafe(idx_i);
         const Size len_i_sz = vals_i_arr.size();
 
         for (Size j = 0; j < N; ++j) {
@@ -411,8 +411,8 @@ void knn(
             if (SCL_UNLIKELY(min_dist_sq >= max_dist_sq)) continue;
 
             const Index idx_j = static_cast<Index>(j);
-            auto vals_j_arr = matrix.primary_values(idx_j);
-            auto inds_j_arr = matrix.primary_indices(idx_j);
+            auto vals_j_arr = matrix.primary_values_unsafe(idx_j);
+            auto inds_j_arr = matrix.primary_indices_unsafe(idx_j);
             const Size len_j_sz = vals_j_arr.size();
 
             T dot = detail::sparse_dot_adaptive(

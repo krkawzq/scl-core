@@ -5,7 +5,7 @@
 // BRIEF: C API for spatial statistics
 // =============================================================================
 
-#include "scl/binding/c_api/core.h"
+#include "scl/binding/c_api/core/core.h"
 
 #ifdef __cplusplus
 extern "C" {

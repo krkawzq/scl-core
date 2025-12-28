@@ -546,12 +546,12 @@ void condition_response(
         for (Size c = 0; c < n_cells; ++c) {
             Real val = Real(0.0);
 
-            const Index row_start = expression.row_indices()[c];
-            const Index row_end = expression.row_indices()[c + 1];
+            const Index row_start = expression.row_indices_unsafe()[c];
+            const Index row_end = expression.row_indices_unsafe()[c + 1];
 
             // Binary search for gene in sorted CSR indices
             Index pos = detail::binary_search_gene(
-                expression.col_indices(), row_start, row_end, static_cast<Index>(g));
+                expression.col_indices_unsafe(), row_start, row_end, static_cast<Index>(g));
             if (pos >= 0) {
                 val = static_cast<Real>(expression.values()[pos]);
             }

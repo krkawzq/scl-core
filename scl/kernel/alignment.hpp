@@ -48,15 +48,15 @@ SCL_FORCE_INLINE Real sparse_distance_squared(
 ) {
     Real dist = Real(0.0);
 
-    const Index start1 = data1.row_indices()[row1];
-    const Index end1 = data1.row_indices()[row1 + 1];
-    const Index start2 = data2.row_indices()[row2];
-    const Index end2 = data2.row_indices()[row2 + 1];
+    const Index start1 = data1.row_indices_unsafe()[row1];
+    const Index end1 = data1.row_indices_unsafe()[row1 + 1];
+    const Index start2 = data2.row_indices_unsafe()[row2];
+    const Index end2 = data2.row_indices_unsafe()[row2 + 1];
 
     Index i1 = start1, i2 = start2;
     while (i1 < end1 && i2 < end2) {
-        Index col1 = data1.col_indices()[i1];
-        Index col2 = data2.col_indices()[i2];
+        Index col1 = data1.col_indices_unsafe()[i1];
+        Index col2 = data2.col_indices_unsafe()[i2];
 
         if (col1 == col2) {
             Real diff = static_cast<Real>(data1.values()[i1]) -
@@ -384,12 +384,12 @@ Real integration_score(
         scl::algo::zero(batch_counts, static_cast<Size>(n_batches));
 
         // Count batches in neighborhood
-        const Index row_start = neighbors.row_indices()[i];
-        const Index row_end = neighbors.row_indices()[i + 1];
+        const Index row_start = neighbors.row_indices_unsafe()[i];
+        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
         Size n_neighbors = static_cast<Size>(row_end - row_start);
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = neighbors.col_indices()[j];
+            Index neighbor = neighbors.col_indices_unsafe()[j];
             ++batch_counts[batch_labels.ptr[neighbor]];
         }
 
@@ -452,14 +452,14 @@ void batch_mixing(
         scl::algo::zero(batch_counts, static_cast<Size>(n_batches));
 
         // Count batches in neighborhood
-        const Index row_start = neighbors.row_indices()[i];
-        const Index row_end = neighbors.row_indices()[i + 1];
+        const Index row_start = neighbors.row_indices_unsafe()[i];
+        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
         Size n_neighbors = static_cast<Size>(row_end - row_start);
 
         Index my_batch = batch_labels.ptr[i];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = neighbors.col_indices()[j];
+            Index neighbor = neighbors.col_indices_unsafe()[j];
             ++batch_counts[batch_labels.ptr[neighbor]];
         }
 
@@ -523,17 +523,17 @@ void compute_correction_vectors(
             cell2_dense[f] = Real(0.0);
         }
 
-        const Index start1 = data1.row_indices()[cell1];
-        const Index end1 = data1.row_indices()[cell1 + 1];
+        const Index start1 = data1.row_indices_unsafe()[cell1];
+        const Index end1 = data1.row_indices_unsafe()[cell1 + 1];
         for (Index j = start1; j < end1; ++j) {
-            Index col = data1.col_indices()[j];
+            Index col = data1.col_indices_unsafe()[j];
             cell1_dense[col] = static_cast<Real>(data1.values()[j]);
         }
 
-        const Index start2 = data2.row_indices()[cell2];
-        const Index end2 = data2.row_indices()[cell2 + 1];
+        const Index start2 = data2.row_indices_unsafe()[cell2];
+        const Index end2 = data2.row_indices_unsafe()[cell2 + 1];
         for (Index j = start2; j < end2; ++j) {
-            Index col = data2.col_indices()[j];
+            Index col = data2.col_indices_unsafe()[j];
             cell2_dense[col] = static_cast<Real>(data2.values()[j]);
         }
 
@@ -661,11 +661,11 @@ void cca_projection(
             projection1[i * n_components + c] = Real(0.0);
         }
 
-        const Index start = data1.row_indices()[i];
-        const Index end = data1.row_indices()[i + 1];
+        const Index start = data1.row_indices_unsafe()[i];
+        const Index end = data1.row_indices_unsafe()[i + 1];
 
         for (Index j = start; j < end; ++j) {
-            Index col = data1.col_indices()[j];
+            Index col = data1.col_indices_unsafe()[j];
             Real val = static_cast<Real>(data1.values()[j]);
             for (Size c = 0; c < n_components; ++c) {
                 projection1[i * n_components + c] += val * proj_matrix1[col * n_components + c];
@@ -679,11 +679,11 @@ void cca_projection(
             projection2[i * n_components + c] = Real(0.0);
         }
 
-        const Index start = data2.row_indices()[i];
-        const Index end = data2.row_indices()[i + 1];
+        const Index start = data2.row_indices_unsafe()[i];
+        const Index end = data2.row_indices_unsafe()[i + 1];
 
         for (Index j = start; j < end; ++j) {
-            Index col = data2.col_indices()[j];
+            Index col = data2.col_indices_unsafe()[j];
             Real val = static_cast<Real>(data2.values()[j]);
             for (Size c = 0; c < n_components; ++c) {
                 projection2[i * n_components + c] += val * proj_matrix2[col * n_components + c];
@@ -740,12 +740,12 @@ Real kbet_score(
         Size* batch_counts_local = pool.get(thread_rank);
         scl::algo::zero(batch_counts_local, static_cast<Size>(n_batches));
 
-        const Index row_start = neighbors.row_indices()[i];
-        const Index row_end = neighbors.row_indices()[i + 1];
+        const Index row_start = neighbors.row_indices_unsafe()[i];
+        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
         Size k = static_cast<Size>(row_end - row_start);
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = neighbors.col_indices()[j];
+            Index neighbor = neighbors.col_indices_unsafe()[j];
             ++batch_counts_local[batch_labels.ptr[neighbor]];
         }
 

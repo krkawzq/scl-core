@@ -328,9 +328,9 @@ SCL_HOT void spmv_parallel(
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = mat.primary_indices(idx);
-            auto values = mat.primary_values(idx);
-            const Index len = mat.primary_length(idx);
+            auto indices = mat.primary_indices_unsafe(idx);
+            auto values = mat.primary_values_unsafe(idx);
+            const Index len = mat.primary_length_unsafe(idx);
 
             Real sum = Real(0);
             Index k = 0;
@@ -348,9 +348,9 @@ SCL_HOT void spmv_parallel(
     } else {
         for (Size i = 0; i < n; ++i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = mat.primary_indices(idx);
-            auto values = mat.primary_values(idx);
-            const Index len = mat.primary_length(idx);
+            auto indices = mat.primary_indices_unsafe(idx);
+            auto values = mat.primary_values_unsafe(idx);
+            const Index len = mat.primary_length_unsafe(idx);
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -377,9 +377,9 @@ SCL_HOT void spmm_block(
 
     scl::threading::parallel_for(Size(0), n, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        auto indices = mat.primary_indices(idx);
-        auto values = mat.primary_values(idx);
-        const Index len = mat.primary_length(idx);
+        auto indices = mat.primary_indices_unsafe(idx);
+        auto values = mat.primary_values_unsafe(idx);
+        const Index len = mat.primary_length_unsafe(idx);
 
         Real* Yi = Y + i * n_cols;
 
@@ -490,9 +490,9 @@ void dijkstra_shortest_path(
         Index u = heap.pop_min();
         Real dist_u = distances[u];
 
-        auto indices = adjacency.primary_indices(u);
-        auto values = adjacency.primary_values(u);
-        const Index len = adjacency.primary_length(u);
+        auto indices = adjacency.primary_indices_unsafe(u);
+        auto values = adjacency.primary_values_unsafe(u);
+        const Index len = adjacency.primary_length_unsafe(u);
 
         for (Index k = 0; k < len; ++k) {
             Index v = indices[k];
@@ -556,9 +556,9 @@ void dijkstra_multi_source(
             Index u = heap.pop_min();
             Real dist_u = dist[u];
 
-            auto indices = adjacency.primary_indices(u);
-            auto values = adjacency.primary_values(u);
-            const Index len = adjacency.primary_length(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
+            auto values = adjacency.primary_values_unsafe(u);
+            const Index len = adjacency.primary_length_unsafe(u);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -735,8 +735,8 @@ Index select_root_peripheral(
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        auto values = adjacency.primary_values(static_cast<Index>(i));
-        const Index len = adjacency.primary_length(static_cast<Index>(i));
+        auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+        const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
         if (len == 0) {
             avg_dist[i] = Real(0);
@@ -794,8 +794,8 @@ Index detect_branch_points(
     }
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
-        auto indices = adjacency.primary_indices(static_cast<Index>(i));
-        const Index len = adjacency.primary_length(static_cast<Index>(i));
+        auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+        const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
         if (len < 3) return;
 
@@ -918,9 +918,9 @@ void smooth_pseudotime(
 
     for (Index iter = 0; iter < n_iterations; ++iter) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            auto indices = adjacency.primary_indices(static_cast<Index>(i));
-            auto values = adjacency.primary_values(static_cast<Index>(i));
-            const Index len = adjacency.primary_length(static_cast<Index>(i));
+            auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+            auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
             if (len == 0) {
                 temp[i] = pseudotime[i];
@@ -994,9 +994,9 @@ void pseudotime_correlation(
     for (Index c = 0; c < n_cells; ++c) {
         Real pt_dev = pseudotime[c] - pt_mean;
 
-        auto indices = X.row_indices(c);
-        auto values = X.row_values(c);
-        const Index len = X.row_length(c);
+        auto indices = X.row_indices_unsafe(c);
+        auto values = X.row_values_unsafe(c);
+        const Index len = X.row_length_unsafe(c);
 
         for (Index k = 0; k < len; ++k) {
             Index gene = indices[k];
@@ -1015,9 +1015,9 @@ void pseudotime_correlation(
 
     // Second pass: compute variances
     for (Index c = 0; c < n_cells; ++c) {
-        auto indices = X.row_indices(c);
-        auto values = X.row_values(c);
-        const Index len = X.row_length(c);
+        auto indices = X.row_indices_unsafe(c);
+        auto values = X.row_values_unsafe(c);
+        const Index len = X.row_length_unsafe(c);
 
         for (Index k = 0; k < len; ++k) {
             Index gene = indices[k];
@@ -1071,9 +1071,9 @@ void velocity_weighted_pseudotime(
 
     for (Index iter = 0; iter < n_iterations; ++iter) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            auto indices = adjacency.primary_indices(static_cast<Index>(i));
-            auto values = adjacency.primary_values(static_cast<Index>(i));
-            const Index len = adjacency.primary_length(static_cast<Index>(i));
+            auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+            auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
             if (len == 0) {
                 temp[i] = refined_pseudotime[i];

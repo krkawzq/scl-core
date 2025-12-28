@@ -1016,9 +1016,9 @@ void pathway_activity(
 
     if (IsCSR) {
         auto process_cell = [&](Index c) {
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            const Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            const Index len = X.row_length_unsafe(c);
 
             Real sum = Real(0);
 
@@ -1085,9 +1085,9 @@ void pathway_activity(
             Index gene = pathway_genes[i];
             if (SCL_UNLIKELY(gene < 0 || gene >= n_genes)) continue;
 
-            auto indices = X.col_indices(gene);
-            auto values = X.col_values(gene);
-            const Index len = X.col_length(gene);
+            auto indices = X.col_indices_unsafe(gene);
+            auto values = X.col_values_unsafe(gene);
+            const Index len = X.col_length_unsafe(gene);
 
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
@@ -1172,9 +1172,9 @@ void gsva_score(
         std::memset(ws.cell_expr, 0, n_genes_sz * sizeof(Real));
 
         if (IsCSR) {
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            const Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            const Index len = X.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
@@ -1184,9 +1184,9 @@ void gsva_score(
             }
         } else {
             for (Index g = 0; g < n_genes; ++g) {
-                auto indices = X.col_indices(g);
-                auto values = X.col_values(g);
-                const Index len = X.col_length(g);
+                auto indices = X.col_indices_unsafe(g);
+                auto values = X.col_values_unsafe(g);
+                const Index len = X.col_length_unsafe(g);
 
                 // Binary search for cell
                 const Index* found = scl::algo::lower_bound(indices.ptr, indices.ptr + len, c);
@@ -1472,9 +1472,9 @@ void ssgsea(
         std::memset(ws.cell_expr, 0, n_genes_sz * sizeof(Real));
 
         if (IsCSR) {
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            const Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            const Index len = X.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];

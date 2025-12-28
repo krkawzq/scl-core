@@ -527,8 +527,8 @@ void row_entropy(
                   "Entropy: output buffer too small");
     
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i) {
-        auto values = X.row_values(static_cast<Index>(i));
-        const Index len = X.row_length(static_cast<Index>(i));
+        auto values = X.row_values_unsafe(static_cast<Index>(i));
+        const Index len = X.row_length_unsafe(static_cast<Index>(i));
         
         if (SCL_UNLIKELY(len == 0)) {
             entropies[i] = Real(0);
@@ -1029,9 +1029,9 @@ void select_features_mi(
 
         if (IsCSR) {
             for (Index row = 0; row < n_samples; ++row) {
-                auto indices = X.row_indices(row);
-                auto values = X.row_values(row);
-                const Index len = X.row_length(row);
+                auto indices = X.row_indices_unsafe(row);
+                auto values = X.row_values_unsafe(row);
+                const Index len = X.row_length_unsafe(row);
 
                 for (Index k = 0; k < len; ++k) {
                     if (indices[k] == f) {
@@ -1041,9 +1041,9 @@ void select_features_mi(
                 }
             }
         } else {
-            auto indices = X.col_indices(f);
-            auto values = X.col_values(f);
-            const Index len = X.col_length(f);
+            auto indices = X.col_indices_unsafe(f);
+            auto values = X.col_values_unsafe(f);
+            const Index len = X.col_length_unsafe(f);
 
             for (Index k = 0; k < len; ++k) {
                 Index row = indices[k];
@@ -1129,9 +1129,9 @@ void mrmr_selection(
 
         if (IsCSR) {
             for (Index row = 0; row < n_samples; ++row) {
-                auto indices = X.row_indices(row);
-                auto values = X.row_values(row);
-                const Index len = X.row_length(row);
+                auto indices = X.row_indices_unsafe(row);
+                auto values = X.row_values_unsafe(row);
+                const Index len = X.row_length_unsafe(row);
 
                 for (Index k = 0; k < len; ++k) {
                     if (indices[k] == f) {
@@ -1141,9 +1141,9 @@ void mrmr_selection(
                 }
             }
         } else {
-            auto indices = X.col_indices(f);
-            auto values = X.col_values(f);
-            const Index len = X.col_length(f);
+            auto indices = X.col_indices_unsafe(f);
+            auto values = X.col_values_unsafe(f);
+            const Index len = X.col_length_unsafe(f);
 
             for (Index k = 0; k < len; ++k) {
                 Index row = indices[k];

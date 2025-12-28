@@ -1,415 +1,644 @@
-# registry.hpp
+# Memory Registry
 
-> scl/core/registry.hpp · Unified high-performance memory registry with reference counting
+Unified high-performance memory registry with three-layer reference counting and lock-free concurrent access.
 
-## Overview
-
-This file provides the Registry class, a thread-safe memory registry system that tracks allocated memory and provides automatic cleanup. It supports both simple pointer tracking (refcount=1) and reference-counted buffers (multiple aliases).
-
-Key features:
-- Thread-safe memory tracking
-- Reference counting for buffer aliases
-- Automatic cleanup on unregister
-- Sharded design for reduced lock contention
-- RAII guard for exception safety
-
-**Header**: `#include "scl/core/registry.hpp"`
+**Location**: `scl/core/registry.hpp`
 
 ---
 
-## Main APIs
+## Architecture
 
-### Registry
+The registry implements a three-layer reference counting system:
 
-Thread-safe memory registry with reference counting.
+1. **Layer 1: Buffer** - Real memory block with alias_count
+2. **Layer 2: Alias** - Access pointer with ref_count (can be shared by multiple instances)
+3. **Layer 3: Instance** - Matrix objects that hold aliases
 
-::: source_code file="scl/core/registry.hpp" symbol="Registry" collapsed
-:::
+**Key Features:**
+- Sharded reference counting for lock-free concurrent access
+- Multiple instances can share the same alias (no need for is_view_ flag)
+- Zero-copy slicing via alias sharing
+- Optimized with SCL_FORCE_INLINE and branch prediction hints
+- Uses scl::algo custom operators instead of std:: for zero-overhead
 
-**Algorithm Description**
+---
 
-Registry is a sharded hash table that tracks memory allocations:
-- **Sharded design**: Reduces lock contention via hash-based sharding
-- **Simple pointers**: Tracked with refcount=1, cleaned up immediately on unregister
-- **Reference-counted buffers**: Support multiple aliases (BufferID), cleaned up when refcount reaches 0
-- **Atomic operations**: Thread-safe counters and reference counts
+## BufferID
 
-The registry uses ConcurrentFlatMap internally with striped locks for high-performance concurrent access.
+**SUMMARY:**
+Unique identifier for memory buffers.
 
-**Edge Cases**
-
-- **Double registration**: Overwrites previous registration (may leak if not unregistered first)
-- **Unregister non-existent**: Returns false, no-op
-- **Concurrent access**: All operations are thread-safe
-- **Memory exhausted**: Registry itself may fail if hash table rehashing fails
-
-**Data Guarantees (Preconditions)**
-
-- Pointers must be valid (non-null) when registered
-- Allocation type must match actual allocation method
-- Custom deleter must be valid if AllocType::Custom
-
-**Complexity Analysis**
-
-- **Time**: O(1) average case for register/unregister/is_registered (hash table)
-- **Space**: ~32 bytes per simple pointer, ~48 bytes per reference-counted buffer
-
-**Example**
-
+**SIGNATURE:**
 ```cpp
-#include "scl/core/registry.hpp"
-
-auto& reg = scl::get_registry();
-
-// Register simple pointer
-Real* data = new Real[1000];
-reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ArrayNew);
-
-// Use data...
-
-// Unregister and cleanup
-reg.unregister_ptr(data);  // Calls delete[] automatically
-
-// Register reference-counted buffer
-BufferID id = reg.new_buffer(1000 * sizeof(Real), AllocType::ArrayNew);
-void* ptr1 = reg.get_buffer(id);  // Get alias
-void* ptr2 = reg.get_buffer(id);  // Get another alias
-
-// Unregister aliases
-reg.unregister_buffer(id);  // Decrements refcount
-reg.unregister_buffer(id);  // Refcount = 0, cleanup happens here
+using BufferID = std::uint64_t;
 ```
 
 ---
 
-### register_ptr
+## AllocType
 
-Register a simple pointer for tracking (refcount = 1).
+**SUMMARY:**
+Enumeration of allocation types for proper deallocation.
 
-::: source_code file="scl/core/registry.hpp" symbol="register_ptr" collapsed
-:::
-
-**Algorithm Description**
-
-Registers a pointer with the registry:
-1. Hash pointer address to determine shard
-2. Acquire shard lock
-3. Insert pointer record into hash table
-4. Update statistics (atomic increment)
-
-The pointer will be automatically freed on unregister_ptr() using the appropriate deleter based on AllocType.
-
-**Edge Cases**
-
-- **Already registered**: Overwrites previous registration (may leak)
-- **Null pointer**: Allowed but not useful (cleanup is no-op)
-
-**Data Guarantees (Preconditions)**
-
-- ptr must be allocated with method matching AllocType
-- custom_deleter must be valid if AllocType::Custom
-
-**Complexity Analysis**
-
-- **Time**: O(1) average case
-- **Space**: O(1) - stores metadata in hash table
-
-**Example**
-
+**SIGNATURE:**
 ```cpp
-auto& reg = scl::get_registry();
-
-// Register array allocated with new[]
-Real* arr = new Real[1000];
-reg.register_ptr(arr, 1000 * sizeof(Real), AllocType::ArrayNew);
-
-// Register aligned allocation
-Real* aligned = scl::memory::aligned_alloc<Real>(1000, 64);
-reg.register_ptr(aligned, 1000 * sizeof(Real), AllocType::AlignedAlloc);
-```
-
----
-
-### unregister_ptr
-
-Unregister a pointer and free memory.
-
-::: source_code file="scl/core/registry.hpp" symbol="unregister_ptr" collapsed
-:::
-
-**Algorithm Description**
-
-Unregisters a pointer and frees memory:
-1. Hash pointer address to find shard
-2. Acquire shard lock
-3. Find pointer in hash table
-4. Free memory using appropriate deleter
-5. Remove from hash table
-6. Update statistics
-
-**Edge Cases**
-
-- **Not registered**: Returns false, no-op
-- **Double unregister**: Returns false on second call
-- **Null pointer**: Safe, returns false
-
-**Data Guarantees (Preconditions)**
-
-- ptr must be registered (or nullptr, in which case returns false)
-
-**Complexity Analysis**
-
-- **Time**: O(1) average case
-- **Space**: O(1)
-
-**Example**
-
-```cpp
-auto& reg = scl::get_registry();
-Real* data = new Real[1000];
-reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ArrayNew);
-
-// Use data...
-
-// Unregister and cleanup
-bool success = reg.unregister_ptr(data);  // Returns true, calls delete[]
-// data is now invalid
-```
-
----
-
-### new_buffer
-
-Create a new reference-counted buffer.
-
-::: source_code file="scl/core/registry.hpp" symbol="new_buffer" collapsed
-:::
-
-**Algorithm Description**
-
-Allocates memory and registers as reference-counted buffer:
-1. Allocate memory based on AllocType
-2. Create BufferID (unique identifier)
-3. Register in hash table with refcount = 1
-4. Return BufferID
-
-Multiple aliases can be obtained via get_buffer() using the same BufferID. The buffer is only freed when refcount reaches 0.
-
-**Edge Cases**
-
-- **Allocation failure**: Returns invalid BufferID (0), check with is_valid_buffer_id()
-- **Zero size**: May return invalid BufferID
-
-**Data Guarantees (Preconditions)**
-
-- size > 0 (typically)
-- AllocType must be valid
-
-**Complexity Analysis**
-
-- **Time**: O(1) average case (hash table insertion) + allocation time
-- **Space**: O(size) for allocated memory + O(1) for metadata
-
-**Example**
-
-```cpp
-auto& reg = scl::get_registry();
-
-// Create buffer
-BufferID id = reg.new_buffer(1000 * sizeof(Real), AllocType::ArrayNew);
-if (!reg.is_valid_buffer_id(id)) {
-    // Handle allocation failure
-    return;
-}
-
-// Get aliases
-void* ptr1 = reg.get_buffer(id);
-void* ptr2 = reg.get_buffer(id);  // Same memory, refcount = 3
-```
-
----
-
-### get_buffer
-
-Get pointer alias to a reference-counted buffer (increments refcount).
-
-::: source_code file="scl/core/registry.hpp" symbol="get_buffer" collapsed
-:::
-
-**Algorithm Description**
-
-Returns a pointer to the buffer and increments reference count:
-1. Hash BufferID to find shard
-2. Acquire shard lock
-3. Find buffer in hash table
-4. Increment atomic refcount
-5. Return pointer
-
-**Edge Cases**
-
-- **Invalid BufferID**: Returns nullptr
-- **Already freed**: Returns nullptr (race condition handled safely)
-
-**Data Guarantees (Preconditions)**
-
-- BufferID must be valid (obtained from new_buffer)
-
-**Complexity Analysis**
-
-- **Time**: O(1) average case
-- **Space**: O(1)
-
-**Example**
-
-```cpp
-BufferID id = reg.new_buffer(1000 * sizeof(Real), AllocType::ArrayNew);
-void* ptr = reg.get_buffer(id);  // Refcount = 2 (1 from new_buffer + 1 from get_buffer)
-```
-
----
-
-### unregister_buffer
-
-Unregister a buffer alias (decrements refcount, frees when refcount = 0).
-
-::: source_code file="scl/core/registry.hpp" symbol="unregister_buffer" collapsed
-:::
-
-**Algorithm Description**
-
-Decrements reference count and frees buffer when count reaches 0:
-1. Hash BufferID to find shard
-2. Acquire shard lock
-3. Find buffer in hash table
-4. Decrement atomic refcount
-5. If refcount == 0: free memory and remove from table
-6. Otherwise: just decrement counter
-
-**Edge Cases**
-
-- **Invalid BufferID**: Returns false
-- **Double unregister**: Safe, refcount cannot go below 0
-- **Unregister from multiple threads**: Thread-safe, atomic operations
-
-**Data Guarantees (Preconditions)**
-
-- BufferID must be valid
-
-**Complexity Analysis**
-
-- **Time**: O(1) average case
-- **Space**: O(1)
-
-**Example**
-
-```cpp
-BufferID id = reg.new_buffer(1000 * sizeof(Real), AllocType::ArrayNew);
-void* ptr1 = reg.get_buffer(id);  // Refcount = 2
-void* ptr2 = reg.get_buffer(id);  // Refcount = 3
-
-reg.unregister_buffer(id);  // Refcount = 2
-reg.unregister_buffer(id);  // Refcount = 1
-reg.unregister_buffer(id);  // Refcount = 0, memory freed here
-```
-
----
-
-## Utility Classes
-
-### RegistryGuard
-
-RAII guard for automatic unregistration.
-
-::: source_code file="scl/core/registry.hpp" symbol="RegistryGuard" collapsed
-:::
-
-**Algorithm Description**
-
-RAII wrapper that automatically unregisters a pointer on scope exit:
-- Constructor: Stores pointer (does not register)
-- Destructor: Calls unregister_ptr() if pointer is still held
-- release(): Prevents automatic unregistration
-
-Useful for exception-safe code where unregistration must happen even if exceptions occur.
-
-**Example**
-
-```cpp
-auto& reg = scl::get_registry();
-Real* data = new Real[1000];
-reg.register_ptr(data, 1000 * sizeof(Real), AllocType::ArrayNew);
-
-{
-    RegistryGuard guard(data);
-    // Use data...
-    // Automatic cleanup on scope exit (even if exception thrown)
-}
-```
-
----
-
-### get_registry
-
-Get reference to global Registry instance.
-
-**Returns**: Reference to singleton Registry instance
-
-**Thread Safety**: Safe - singleton initialization is thread-safe
-
-**Example**
-
-```cpp
-auto& reg = scl::get_registry();
-reg.register_ptr(ptr, size, AllocType::ArrayNew);
-```
-
----
-
-## Type Aliases
-
-```cpp
-using BufferID = std::uint64_t;  // Unique identifier for reference-counted buffers
-using HandlerRegistry = Registry;  // Legacy alias
-```
-
-## Enum: AllocType
-
-```cpp
-enum class AllocType {
-    ArrayNew,      // new[] / delete[]
-    ScalarNew,     // new / delete
-    AlignedAlloc,  // aligned_alloc / aligned_free
-    Custom         // Custom deleter
+enum class AllocType : std::uint8_t {
+    ArrayNew = 0,      // new T[]
+    ScalarNew = 1,     // new T
+    AlignedAlloc = 2,  // scl::memory::aligned_alloc
+    Custom = 3         // Custom deleter
 };
 ```
 
-## Design Notes
+---
 
-### Sharded Architecture
+## ShardedRefCount
 
-Registry uses hash-based sharding to reduce lock contention:
-- Multiple shards (typically 16-64)
-- Pointer hash determines shard
-- Each shard has its own lock
-- Reduces contention by factor of num_shards
+**SUMMARY:**
+Lock-free sharded reference counter for high-concurrency scenarios.
 
-### Reference Counting
+**SIGNATURE:**
+```cpp
+class ShardedRefCount {
+public:
+    static constexpr std::size_t MAX_SHARDS = 16;
+    static constexpr std::int32_t BORROW_THRESHOLD = 8;
 
-Reference-counted buffers support multiple aliases:
-- Each get_buffer() increments refcount
-- Each unregister_buffer() decrements refcount
-- Buffer freed when refcount reaches 0
-- Thread-safe using atomic operations
+    explicit ShardedRefCount(std::size_t num_shards = 4, std::int32_t initial = 1) noexcept;
+    
+    SCL_FORCE_INLINE void incref() noexcept;
+    SCL_FORCE_INLINE void incref(std::int32_t amount) noexcept;
+    SCL_FORCE_INLINE bool decref() noexcept;
+    SCL_FORCE_INLINE bool decref(std::int32_t amount) noexcept;
+    
+    SCL_NODISCARD std::int32_t get_count() const noexcept;
+    SCL_NODISCARD SCL_FORCE_INLINE bool is_likely_unique() const noexcept;
+    SCL_NODISCARD SCL_FORCE_INLINE bool is_unique() const noexcept;
+    
+    void consolidate() noexcept;
+};
+```
 
-### Thread Safety
+**ALGORITHM:**
+- Each thread has a dedicated shard (determined by thread_local index)
+- Fast path: incref/decref operates on thread-local shard (no contention)
+- Slow path: borrow from base counter when shard is empty
+- Consolidation: merge all shards into base for precise operations
 
-All public methods are thread-safe:
-- Internal synchronization via striped locks
-- Atomic reference counts
-- Concurrent reads supported
-- Write operations are mutually exclusive per shard
+**OPTIMIZATION:**
+- SCL_FORCE_INLINE for hot-path functions
+- SCL_LIKELY/UNLIKELY branch hints for common paths
+- Cache-line aligned shards (64 bytes) prevent false sharing
+- Relaxed memory ordering for increments
+- Acquire-release ordering only when necessary
 
-## See Also
+---
 
-- [Memory Management](./memory) - Allocation functions that return pointers for registration
-- [Sparse Matrix](./sparse) - Uses Registry for metadata array tracking
+## AliasRecord
+
+**SUMMARY:**
+Layer 2 record: access pointer with reference count.
+
+**SIGNATURE:**
+```cpp
+struct AliasRecord {
+    BufferID buffer_id;                    // Parent buffer
+    std::atomic<std::uint32_t> ref_count;  // Instances holding this alias
+    
+    AliasRecord() noexcept;
+    AliasRecord(BufferID bid, std::uint32_t initial_ref = 1) noexcept;
+};
+```
+
+---
+
+## Registry
+
+**SUMMARY:**
+Unified memory management with three-layer reference counting.
+
+### Core Methods
+
+#### register_ptr
+
+**SUMMARY:**
+Register a simple pointer without sharing (Layer 1 alternative).
+
+**SIGNATURE:**
+```cpp
+void register_ptr(
+    void* ptr,
+    std::size_t byte_size,
+    AllocType type,
+    Deleter custom_deleter = nullptr
+);
+```
+
+**PARAMETERS:**
+- ptr            [in] Pointer to register
+- byte_size      [in] Size in bytes
+- type           [in] Allocation type for proper deallocation
+- custom_deleter [in] Custom deleter (if type == Custom)
+
+**PRECONDITIONS:**
+- ptr must not be null
+- byte_size > 0
+
+**POSTCONDITIONS:**
+- Pointer is tracked by registry
+- Will be freed on unregister or registry destruction
+
+**THREAD SAFETY:**
+Safe - sharded hash map with fine-grained locking
+
+**OPTIMIZATION:**
+- SCL_UNLIKELY hint for null/zero checks
+- SCL_LIKELY hint for successful insertion
+
+---
+
+#### unregister_ptr
+
+**SUMMARY:**
+Unregister and free a simple pointer.
+
+**SIGNATURE:**
+```cpp
+bool unregister_ptr(void* ptr);
+```
+
+**PARAMETERS:**
+- ptr [in] Pointer to unregister
+
+**PRECONDITIONS:**
+None
+
+**POSTCONDITIONS:**
+- If found: pointer is freed and removed
+- If not found: returns false
+
+**RETURN VALUE:**
+true if pointer was found and freed
+
+**THREAD SAFETY:**
+Safe
+
+**OPTIMIZATION:**
+- SCL_UNLIKELY for edge cases
+- SCL_LIKELY for common deleter case
+
+---
+
+#### create_buffer
+
+**SUMMARY:**
+Create a buffer (Layer 1) without initial aliases.
+
+**SIGNATURE:**
+```cpp
+SCL_NODISCARD BufferID create_buffer(
+    void* real_ptr,
+    std::size_t byte_size,
+    AllocType type,
+    Deleter custom_deleter = nullptr
+);
+```
+
+**PARAMETERS:**
+- real_ptr       [in] Memory block pointer
+- byte_size      [in] Size in bytes
+- type           [in] Allocation type
+- custom_deleter [in] Custom deleter (if needed)
+
+**PRECONDITIONS:**
+- real_ptr must not be null
+- byte_size > 0
+
+**POSTCONDITIONS:**
+- Returns unique BufferID
+- Buffer registered with alias_count = 0
+- Caller must create aliases or buffer will leak
+
+**RETURN VALUE:**
+Non-zero BufferID on success, 0 on failure
+
+**THREAD SAFETY:**
+Safe
+
+---
+
+#### create_alias
+
+**SUMMARY:**
+Create a new alias pointing to a buffer (Layer 2).
+
+**SIGNATURE:**
+```cpp
+SCL_FORCE_INLINE bool create_alias(
+    void* alias_ptr,
+    BufferID buffer_id,
+    std::uint32_t initial_ref = 1
+);
+```
+
+**PARAMETERS:**
+- alias_ptr   [in] Access pointer
+- buffer_id   [in] Parent buffer
+- initial_ref [in] Initial reference count (default 1)
+
+**PRECONDITIONS:**
+- alias_ptr must not be null
+- buffer_id must be valid
+- initial_ref > 0
+
+**POSTCONDITIONS:**
+- Alias registered with ref_count = initial_ref
+- Buffer's alias_count incremented
+- Returns true on success
+
+**THREAD SAFETY:**
+Safe - lock-free alias insertion
+
+**OPTIMIZATION:**
+- SCL_FORCE_INLINE for hot path
+- SCL_UNLIKELY/LIKELY hints for edge cases
+
+---
+
+#### alias_incref
+
+**SUMMARY:**
+Increment alias reference count (lock-free fast path).
+
+**SIGNATURE:**
+```cpp
+SCL_FORCE_INLINE bool alias_incref(
+    void* alias_ptr,
+    std::uint32_t increment = 1
+);
+```
+
+**PARAMETERS:**
+- alias_ptr [in] Alias pointer
+- increment [in] Amount to increment
+
+**PRECONDITIONS:**
+- alias_ptr must be registered
+
+**POSTCONDITIONS:**
+- Alias ref_count increased by increment
+- Returns true if alias exists
+
+**THREAD SAFETY:**
+Safe - lock-free atomic increment
+
+**OPTIMIZATION:**
+- SCL_FORCE_INLINE
+- SCL_UNLIKELY for error cases
+- Relaxed memory ordering for fast increment
+
+---
+
+#### alias_decref
+
+**SUMMARY:**
+Decrement alias reference count, free if reaches zero.
+
+**SIGNATURE:**
+```cpp
+SCL_FORCE_INLINE bool alias_decref(void* alias_ptr);
+```
+
+**PARAMETERS:**
+- alias_ptr [in] Alias pointer
+
+**PRECONDITIONS:**
+None (safe for null or unregistered pointers)
+
+**POSTCONDITIONS:**
+- ref_count decremented
+- If ref_count reaches 0: alias removed, buffer's alias_count decremented
+- If buffer's alias_count reaches 0: buffer freed
+- Returns true if alias was removed
+
+**THREAD SAFETY:**
+Safe - atomic decrement with lock-free erase
+
+**OPTIMIZATION:**
+- SCL_FORCE_INLINE
+- SCL_UNLIKELY for removal case
+- SCL_LIKELY for buffer cleanup
+- Acquire-release ordering for correctness
+
+---
+
+#### alias_incref_batch
+
+**SUMMARY:**
+Batch increment alias reference counts for better cache locality.
+
+**SIGNATURE:**
+```cpp
+void alias_incref_batch(
+    std::span<void* const> alias_ptrs,
+    std::uint32_t increment = 1
+);
+```
+
+**PARAMETERS:**
+- alias_ptrs [in] Array of alias pointers
+- increment  [in] Amount to increment each
+
+**PRECONDITIONS:**
+None (skips null pointers)
+
+**POSTCONDITIONS:**
+- All valid aliases have ref_count increased
+
+**ALGORITHM:**
+1. Group aliases by shard for cache locality
+2. Process each shard sequentially
+3. Increment each alias in shard
+
+**THREAD SAFETY:**
+Safe
+
+**OPTIMIZATION:**
+- Shard-grouped processing for cache efficiency
+- Skips null pointers automatically
+
+---
+
+#### alias_decref_batch
+
+**SUMMARY:**
+Batch decrement alias reference counts (more efficient than individual decrements).
+
+**SIGNATURE:**
+```cpp
+void alias_decref_batch(std::span<void* const> alias_ptrs);
+```
+
+**PARAMETERS:**
+- alias_ptrs [in] Array of alias pointers
+
+**PRECONDITIONS:**
+None (safe for null or unregistered pointers)
+
+**POSTCONDITIONS:**
+- All ref_counts decremented
+- Removed aliases have buffer's alias_count decremented
+- Buffers with alias_count=0 are freed
+
+**ALGORITHM:**
+1. Group aliases by shard
+2. Decrement ref_counts and mark for removal
+3. Batch erase removed aliases
+4. Batch decrement buffer alias_counts
+
+**THREAD SAFETY:**
+Safe
+
+**OPTIMIZATION:**
+- Batched operations reduce lock overhead
+- Collected buffer decrements applied together
+
+---
+
+### Allocation Helpers
+
+#### new_array
+
+**SUMMARY:**
+Allocate and register array via new[].
+
+**SIGNATURE:**
+```cpp
+template <typename T>
+SCL_NODISCARD T* new_array(std::size_t count);
+```
+
+**PARAMETERS:**
+- count [in] Number of elements
+
+**PRECONDITIONS:**
+- count > 0
+
+**POSTCONDITIONS:**
+- Returns allocated array or nullptr on failure
+- Array registered with type = ArrayNew
+
+**THREAD SAFETY:**
+Safe
+
+---
+
+#### new_aligned
+
+**SUMMARY:**
+Allocate and register aligned array.
+
+**SIGNATURE:**
+```cpp
+template <typename T>
+SCL_NODISCARD T* new_aligned(
+    std::size_t count,
+    std::size_t alignment = 64
+);
+```
+
+**PARAMETERS:**
+- count     [in] Number of elements
+- alignment [in] Alignment in bytes (default 64)
+
+**PRECONDITIONS:**
+- count > 0
+- alignment is power of 2
+
+**POSTCONDITIONS:**
+- Returns aligned array or nullptr on failure
+- Registered with type = AlignedAlloc
+
+**THREAD SAFETY:**
+Safe
+
+---
+
+### Query Methods
+
+#### contains_ptr
+
+**SUMMARY:**
+Check if pointer is registered as simple pointer.
+
+**SIGNATURE:**
+```cpp
+SCL_NODISCARD bool contains_ptr(const void* ptr) const;
+```
+
+**THREAD SAFETY:**
+Safe - read-only
+
+---
+
+#### contains_alias
+
+**SUMMARY:**
+Check if pointer is registered as alias.
+
+**SIGNATURE:**
+```cpp
+SCL_NODISCARD bool contains_alias(const void* ptr) const;
+```
+
+**THREAD SAFETY:**
+Safe
+
+---
+
+#### alias_refcount
+
+**SUMMARY:**
+Get alias reference count.
+
+**SIGNATURE:**
+```cpp
+SCL_NODISCARD std::uint32_t alias_refcount(void* alias_ptr) const;
+```
+
+**RETURN VALUE:**
+Current ref_count or 0 if not found
+
+**THREAD SAFETY:**
+Safe
+
+---
+
+#### get_buffer_id
+
+**SUMMARY:**
+Get buffer ID for an alias.
+
+**SIGNATURE:**
+```cpp
+SCL_NODISCARD BufferID get_buffer_id(const void* alias_ptr) const;
+```
+
+**RETURN VALUE:**
+BufferID or 0 if not found
+
+**THREAD SAFETY:**
+Safe
+
+---
+
+### Statistics
+
+#### ptr_count
+
+**SUMMARY:**
+Number of registered simple pointers.
+
+**SIGNATURE:**
+```cpp
+SCL_NODISCARD std::size_t ptr_count() const noexcept;
+```
+
+---
+
+#### buffer_count
+
+**SUMMARY:**
+Number of registered buffers.
+
+**SIGNATURE:**
+```cpp
+SCL_NODISCARD std::size_t buffer_count() const noexcept;
+```
+
+---
+
+#### alias_count
+
+**SUMMARY:**
+Number of registered aliases.
+
+**SIGNATURE:**
+```cpp
+SCL_NODISCARD std::size_t alias_count() const noexcept;
+```
+
+---
+
+#### total_bytes
+
+**SUMMARY:**
+Total memory under management.
+
+**SIGNATURE:**
+```cpp
+SCL_NODISCARD std::size_t total_bytes() const noexcept;
+```
+
+---
+
+## Global Functions
+
+#### get_registry
+
+**SUMMARY:**
+Get singleton registry instance.
+
+**SIGNATURE:**
+```cpp
+Registry& get_registry();
+```
+
+**THREAD SAFETY:**
+Safe - thread-local initialization
+
+---
+
+## RegistryGuard
+
+**SUMMARY:**
+RAII guard for automatic cleanup.
+
+**SIGNATURE:**
+```cpp
+class RegistryGuard {
+public:
+    explicit RegistryGuard(void* ptr, bool is_alias = false) noexcept;
+    ~RegistryGuard();
+    void release() noexcept;
+};
+```
+
+**USAGE:**
+Automatically unregisters pointer on scope exit unless released.
+
+---
+
+## Optimization Summary
+
+**Lock-Free Operations:**
+- alias_incref: lock-free atomic increment
+- alias_decref: lock-free atomic decrement
+- Thread-local shard selection eliminates contention
+
+**Branch Prediction:**
+- SCL_LIKELY for common paths (successful operations)
+- SCL_UNLIKELY for error cases (null pointers, allocation failures)
+
+**Memory Ordering:**
+- Relaxed for increments (no synchronization needed)
+- Acquire-release for decrements (synchronize cleanup)
+- Full fence only for consolidation
+
+**Inlining:**
+- SCL_FORCE_INLINE for hot-path functions
+- Reduces function call overhead to zero
+
+**Custom Operators:**
+- Uses scl::algo::zero instead of std::memset
+- Eliminates std:: overhead in critical paths

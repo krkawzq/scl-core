@@ -248,7 +248,8 @@ scl_error_t scl_clone_transition_matrix(
     try {
         Array<const Index> ids_arr(reinterpret_cast<const Index*>(clone_ids), n_cells);
         Array<const Index> clusters_arr(reinterpret_cast<const Index*>(cluster_labels), n_cells);
-        clone_transition_matrix(ids_arr, clusters_arr, transition_matrix, n_clusters);
+        Array<Real> transition_arr(reinterpret_cast<Real*>(transition_matrix), n_clusters * n_clusters);
+        clone_transition_matrix(ids_arr, clusters_arr, transition_arr.ptr, n_clusters);
         return SCL_OK;
     } catch (...) {
         return handle_exception();

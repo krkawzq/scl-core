@@ -431,8 +431,8 @@ void zonation_score(
 
     for (Size i = 0; i < n_cells; ++i) {
         total_expr[i] = Real(0.0);
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
             total_expr[i] += static_cast<Real>(expression.values()[j]);
@@ -670,11 +670,11 @@ void tissue_module(
     }
 
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            gene_mean[expression.col_indices()[j]] +=
+            gene_mean[expression.col_indices_unsafe()[j]] +=
                 static_cast<Real>(expression.values()[j]);
         }
     }
@@ -684,13 +684,13 @@ void tissue_module(
     }
 
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
             Real diff = static_cast<Real>(expression.values()[j]) -
-                       gene_mean[expression.col_indices()[j]];
-            gene_var[expression.col_indices()[j]] += diff * diff;
+                       gene_mean[expression.col_indices_unsafe()[j]];
+            gene_var[expression.col_indices_unsafe()[j]] += diff * diff;
         }
     }
 
@@ -709,11 +709,11 @@ void tissue_module(
             features[i * n_features + n_dims + f] = Real(0.0);
         }
 
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices()[j];
+            Index gene = expression.col_indices_unsafe()[j];
 
             for (Size f = 0; f < n_expr_features; ++f) {
                 if (top_genes[f] == gene) {

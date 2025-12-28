@@ -276,7 +276,7 @@ void neighborhood_composition(
 
     scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
         const Index idx = static_cast<Index>(i);
-        const Index len = spatial_neighbors.primary_length(idx);
+        const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         Real* comp_ptr = composition_output.ptr + i * n_types_sz;
@@ -287,7 +287,7 @@ void neighborhood_composition(
             return;
         }
 
-        auto neighbor_indices = spatial_neighbors.primary_indices(idx);
+        auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(idx);
 
         detail::compute_cell_composition(
             neighbor_indices.ptr, len_sz,
@@ -347,7 +347,7 @@ void neighborhood_enrichment(
         
         if (SCL_UNLIKELY(type_a < 0 || type_a >= n_cell_types)) return;
 
-        const Index len = spatial_neighbors.primary_length(idx);
+        const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
         
         if (SCL_UNLIKELY(len_sz == 0)) return;
@@ -355,7 +355,7 @@ void neighborhood_enrichment(
         Real* local_contacts = thread_contacts + thread_rank * n_pairs;
         Real* local_type_counts = thread_type_counts + thread_rank * n_types_sz;
 
-        auto neighbor_indices = spatial_neighbors.primary_indices(idx);
+        auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(idx);
 
         local_type_counts[type_a] += Real(1.0);
 
@@ -436,12 +436,12 @@ void neighborhood_enrichment(
             
             if (SCL_UNLIKELY(type_a < 0 || type_a >= n_cell_types)) continue;
 
-            const Index len = spatial_neighbors.primary_length(idx);
+            const Index len = spatial_neighbors.primary_length_unsafe(idx);
             const Size len_sz = static_cast<Size>(len);
             
             if (SCL_UNLIKELY(len_sz == 0)) continue;
 
-            auto neighbor_indices = spatial_neighbors.primary_indices(idx);
+            auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(idx);
             perm_type_counts[type_a] += Real(1.0);
 
             for (Size k = 0; k < len_sz; ++k) {
@@ -536,13 +536,13 @@ void cell_cell_contact(
         
         if (SCL_UNLIKELY(type_a < 0 || type_a >= n_cell_types)) return;
 
-        const Index len = spatial_neighbors.primary_length(idx);
+        const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
         
         if (SCL_UNLIKELY(len_sz == 0)) return;
 
         Real* local_contacts = thread_contacts + thread_rank * n_pairs;
-        auto neighbor_indices = spatial_neighbors.primary_indices(idx);
+        auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(idx);
 
         // 4-way unrolled counting
         Size k = 0;
@@ -628,12 +628,12 @@ void colocalization_score(
         if (cell_type_labels[i] != type_a) continue;
 
         const Index idx = static_cast<Index>(i);
-        const Index len = spatial_neighbors.primary_length(idx);
+        const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (len_sz == 0) continue;
 
-        auto neighbor_indices = spatial_neighbors.primary_indices(idx);
+        auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(idx);
         total_neighbors_a += static_cast<Real>(len_sz);
 
         for (Size k = 0; k < len_sz; ++k) {
@@ -675,12 +675,12 @@ void colocalization_score(
             if (perm_labels[i] != type_a) continue;
 
             const Index idx = static_cast<Index>(i);
-            const Index len = spatial_neighbors.primary_length(idx);
+            const Index len = spatial_neighbors.primary_length_unsafe(idx);
             const Size len_sz = static_cast<Size>(len);
 
             if (len_sz == 0) continue;
 
-            auto neighbor_indices = spatial_neighbors.primary_indices(idx);
+            auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(idx);
             for (Size k = 0; k < len_sz; ++k) {
                 if (perm_labels[neighbor_indices[k]] == type_b) {
                     perm_count += Real(1.0);
@@ -741,14 +741,14 @@ void colocalization_matrix(
         
         if (SCL_UNLIKELY(type_a < 0 || type_a >= n_cell_types)) return;
 
-        const Index len = spatial_neighbors.primary_length(idx);
+        const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
         
         if (SCL_UNLIKELY(len_sz == 0)) return;
 
         Real* local_counts = thread_counts + thread_rank * n_pairs;
         Real* local_neighbors = thread_neighbors + thread_rank * n_types_sz;
-        auto neighbor_indices = spatial_neighbors.primary_indices(idx);
+        auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(idx);
 
         local_neighbors[type_a] += static_cast<Real>(len_sz);
 
@@ -834,7 +834,7 @@ void niche_similarity(
 
     scl::threading::parallel_for(Size(0), n_query, [&](size_t q, size_t thread_rank) {
         Index cell_idx = query_cells[q];
-        const Index len = spatial_neighbors.primary_length(cell_idx);
+        const Index len = spatial_neighbors.primary_length_unsafe(cell_idx);
         const Size len_sz = static_cast<Size>(len);
 
         Real* comp_ptr = compositions + q * n_types_sz;
@@ -845,7 +845,7 @@ void niche_similarity(
             return;
         }
 
-        auto neighbor_indices = spatial_neighbors.primary_indices(cell_idx);
+        auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(cell_idx);
         detail::compute_cell_composition(
             neighbor_indices.ptr, len_sz,
             cell_type_labels.ptr, n_cell_types,
@@ -917,7 +917,7 @@ void niche_diversity(
 
     scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
         const Index idx = static_cast<Index>(i);
-        const Index len = spatial_neighbors.primary_length(idx);
+        const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) {
@@ -927,7 +927,7 @@ void niche_diversity(
 
         Real* comp = comp_pool.get(thread_rank);
         Index* counts = count_pool.get(thread_rank);
-        auto neighbor_indices = spatial_neighbors.primary_indices(idx);
+        auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(idx);
 
         detail::compute_cell_composition(
             neighbor_indices.ptr, len_sz,
@@ -975,7 +975,7 @@ void niche_boundary_score(
     scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
         const Index idx = static_cast<Index>(i);
         const Index my_type = cell_type_labels[i];
-        const Index len = spatial_neighbors.primary_length(idx);
+        const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0 || my_type < 0 || my_type >= n_cell_types)) {
@@ -986,7 +986,7 @@ void niche_boundary_score(
         Index* counts = count_pool.get(thread_rank);
         scl::algo::zero(counts, n_types_sz);
 
-        auto neighbor_indices = spatial_neighbors.primary_indices(idx);
+        auto neighbor_indices = spatial_neighbors.primary_indices_unsafe(idx);
         detail::count_neighbor_types_unrolled(
             neighbor_indices.ptr, len_sz,
             cell_type_labels.ptr, counts, n_cell_types

@@ -253,7 +253,7 @@ void compute_stats(
     SCL_CHECK_DIM(out_inv_stds.len >= static_cast<Size>(primary_dim), "Inv_stds size mismatch");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        auto vals = matrix.primary_values(static_cast<Index>(p));
+        auto vals = matrix.primary_values_unsafe(static_cast<Index>(p));
 
         T sum, sq_sum;
         detail::compute_sum_sq_simd(vals.data(), vals.size(), sum, sq_sum);
@@ -309,8 +309,8 @@ void pearson(
                 continue;
             }
 
-            auto vals_i = matrix.primary_values(static_cast<Index>(i));
-            auto inds_i = matrix.primary_indices(static_cast<Index>(i));
+            auto vals_i = matrix.primary_values_unsafe(static_cast<Index>(i));
+            auto inds_i = matrix.primary_indices_unsafe(static_cast<Index>(i));
             Size len_i = vals_i.size();
             T mean_i = means[i];
 
@@ -324,8 +324,8 @@ void pearson(
                     continue;
                 }
 
-                auto vals_j = matrix.primary_values(static_cast<Index>(j));
-                auto inds_j = matrix.primary_indices(static_cast<Index>(j));
+                auto vals_j = matrix.primary_values_unsafe(static_cast<Index>(j));
+                auto inds_j = matrix.primary_indices_unsafe(static_cast<Index>(j));
                 Size len_j = vals_j.size();
                 T mean_j = means[j];
 

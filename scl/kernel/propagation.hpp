@@ -193,8 +193,8 @@ void compute_row_sums(
 
     if (N >= config::PARALLEL_THRESHOLD) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            auto values = adj.primary_values(static_cast<Index>(i));
-            const Index len = adj.primary_length(static_cast<Index>(i));
+            auto values = adj.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adj.primary_length_unsafe(static_cast<Index>(i));
 
             if (SCL_UNLIKELY(len == 0)) {
                 row_sums[i] = Real(0);
@@ -247,8 +247,8 @@ void compute_row_sums(
     } else {
         // Sequential path for small graphs
         for (Index i = 0; i < n; ++i) {
-            auto values = adj.primary_values(i);
-            const Index len = adj.primary_length(i);
+            auto values = adj.primary_values_unsafe(i);
+            const Index len = adj.primary_length_unsafe(i);
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -425,9 +425,9 @@ void label_propagation(
 
                     Real* class_votes = vote_pool.get(thread_rank);
 
-                    auto indices = adjacency.primary_indices(i);
-                    auto values = adjacency.primary_values(i);
-                    const Index len = adjacency.primary_length(i);
+                    auto indices = adjacency.primary_indices_unsafe(i);
+                    auto values = adjacency.primary_values_unsafe(i);
+                    const Index len = adjacency.primary_length_unsafe(i);
 
                     if (SCL_UNLIKELY(len == 0)) return;
 
@@ -459,9 +459,9 @@ void label_propagation(
             for (Index idx = 0; idx < n; ++idx) {
                 Index i = order[idx];
 
-                auto indices = adjacency.primary_indices(i);
-                auto values = adjacency.primary_values(i);
-                const Index len = adjacency.primary_length(i);
+                auto indices = adjacency.primary_indices_unsafe(i);
+                auto values = adjacency.primary_values_unsafe(i);
+                const Index len = adjacency.primary_length_unsafe(i);
 
                 if (SCL_UNLIKELY(len == 0)) continue;
 
@@ -599,9 +599,9 @@ void label_spreading(
                 }
 
                 // Add alpha * sum_j(S[i,j] * Y[j])
-                auto indices = adjacency.primary_indices(static_cast<Index>(i));
-                auto values = adjacency.primary_values(static_cast<Index>(i));
-                const Index len = adjacency.primary_length(static_cast<Index>(i));
+                auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+                auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+                const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
                 const Real d_i = d_inv_sqrt[i];
 
                 for (Index k = 0; k < len; ++k) {
@@ -646,9 +646,9 @@ void label_spreading(
                     detail::fast_zero(yi_new, n_classes_sz);
                 }
 
-                auto indices = adjacency.primary_indices(i);
-                auto values = adjacency.primary_values(i);
-                const Index len = adjacency.primary_length(i);
+                auto indices = adjacency.primary_indices_unsafe(i);
+                auto values = adjacency.primary_values_unsafe(i);
+                const Index len = adjacency.primary_length_unsafe(i);
                 const Real d_i = d_inv_sqrt[i];
 
                 for (Index k = 0; k < len; ++k) {
@@ -711,9 +711,9 @@ void inductive_transfer(
     }
 
     auto process_query = [&](Index q, Real* class_scores) {
-        auto indices = ref_to_query.row_indices(q);
-        auto values = ref_to_query.row_values(q);
-        const Index len = ref_to_query.row_length(q);
+        auto indices = ref_to_query.row_indices_unsafe(q);
+        auto values = ref_to_query.row_values_unsafe(q);
+        const Index len = ref_to_query.row_length_unsafe(q);
 
         if (SCL_UNLIKELY(len == 0)) {
             query_labels[q] = config::UNLABELED;
@@ -813,9 +813,9 @@ void confidence_propagation(
         std::atomic<bool> changed{false};
 
         auto process_node = [&](Index i, Real* class_votes) {
-            auto indices = adjacency.primary_indices(i);
-            auto values = adjacency.primary_values(i);
-            const Index len = adjacency.primary_length(i);
+            auto indices = adjacency.primary_indices_unsafe(i);
+            auto values = adjacency.primary_values_unsafe(i);
+            const Index len = adjacency.primary_length_unsafe(i);
 
             if (SCL_UNLIKELY(len == 0)) return;
 
@@ -913,9 +913,9 @@ void harmonic_function(
         auto process_node = [&](Index i) {
             if (is_known[i]) return Real(0);
 
-            auto indices = adjacency.primary_indices(i);
-            auto weights = adjacency.primary_values(i);
-            const Index len = adjacency.primary_length(i);
+            auto indices = adjacency.primary_indices_unsafe(i);
+            auto weights = adjacency.primary_values_unsafe(i);
+            const Index len = adjacency.primary_length_unsafe(i);
 
             if (SCL_UNLIKELY(len == 0 || row_sums[i] <= Real(1e-15))) return Real(0);
 

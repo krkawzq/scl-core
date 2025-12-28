@@ -218,9 +218,9 @@ void group_mean_expression(
             Index g = group_labels[c];
             if (SCL_UNLIKELY(g < 0 || g >= n_groups)) continue;
 
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            const Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            const Index len = X.row_length_unsafe(c);
 
             // Unrolled accumulation
             Index k = 0;
@@ -249,9 +249,9 @@ void group_mean_expression(
         const bool use_parallel = (static_cast<Size>(n_genes) >= config::PARALLEL_THRESHOLD);
 
         auto process_gene = [&](Index gene) {
-            auto indices = X.col_indices(gene);
-            auto values = X.col_values(gene);
-            const Index len = X.col_length(gene);
+            auto indices = X.col_indices_unsafe(gene);
+            auto values = X.col_values_unsafe(gene);
+            const Index len = X.col_length_unsafe(gene);
 
             Real* gene_means = mean_expr.ptr + static_cast<Size>(gene) * n_groups;
 
@@ -345,9 +345,9 @@ void percent_expressed(
             Index g = group_labels[c];
             if (SCL_UNLIKELY(g < 0 || g >= n_groups)) continue;
 
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            const Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            const Index len = X.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
@@ -360,9 +360,9 @@ void percent_expressed(
         const bool use_parallel = (static_cast<Size>(n_genes) >= config::PARALLEL_THRESHOLD);
 
         auto process_gene = [&](Index gene) {
-            auto indices = X.col_indices(gene);
-            auto values = X.col_values(gene);
-            const Index len = X.col_length(gene);
+            auto indices = X.col_indices_unsafe(gene);
+            auto values = X.col_values_unsafe(gene);
+            const Index len = X.col_length_unsafe(gene);
 
             Real* gene_pct = pct_expr.ptr + static_cast<Size>(gene) * n_groups;
 
@@ -533,9 +533,9 @@ void one_vs_rest_stats(
 
             bool is_target = (g == target_group);
 
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            const Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            const Index len = X.row_length_unsafe(c);
 
             if (is_target) {
                 for (Index k = 0; k < len; ++k) {
@@ -564,9 +564,9 @@ void one_vs_rest_stats(
         const bool use_parallel = (n_genes_sz >= config::PARALLEL_THRESHOLD);
 
         auto process_gene = [&](Index gene) {
-            auto indices = X.col_indices(gene);
-            auto values = X.col_values(gene);
-            const Index len = X.col_length(gene);
+            auto indices = X.col_indices_unsafe(gene);
+            auto values = X.col_values_unsafe(gene);
+            const Index len = X.col_length_unsafe(gene);
 
             Real local_sum_in = Real(0), local_sum_out = Real(0);
             Real local_sq_in = Real(0), local_sq_out = Real(0);

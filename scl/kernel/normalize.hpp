@@ -134,7 +134,7 @@ void compute_row_sums(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) {
@@ -142,7 +142,7 @@ void compute_row_sums(
             return;
         }
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         output[p] = scl::vectorize::sum(Array<const T>(values.ptr, len_sz));
     });
 }
@@ -161,10 +161,10 @@ void scale_primary(
         if (scale == Real(1)) return;
 
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return;
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         detail::scale_simd(values.ptr, static_cast<Size>(len), static_cast<T>(scale));
     });
 }
@@ -181,7 +181,7 @@ void primary_sums_masked(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) {
@@ -189,8 +189,8 @@ void primary_sums_masked(
             return;
         }
 
-        auto values = matrix.primary_values(idx);
-        auto indices = matrix.primary_indices(idx);
+        auto values = matrix.primary_values_unsafe(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
 
         output[p] = detail::sum_masked_simd(
             values.ptr,
@@ -222,13 +222,13 @@ void detect_highly_expressed(
         Real threshold = total * max_fraction;
 
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) return;
 
-        auto values = matrix.primary_values(idx);
-        auto indices = matrix.primary_indices(idx);
+        auto values = matrix.primary_values_unsafe(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
 
         Size k = 0;
         for (; k + 4 <= len_sz; k += 4) {

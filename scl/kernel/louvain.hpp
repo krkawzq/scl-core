@@ -145,8 +145,8 @@ SCL_FORCE_INLINE Real compute_total_weight(const Sparse<T, IsCSR>& adj) {
         constexpr int64_t SCALE = 1000000;
 
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            auto values = adj.primary_values(static_cast<Index>(i));
-            const Size len = static_cast<Size>(adj.primary_length(static_cast<Index>(i)));
+            auto values = adj.primary_values_unsafe(static_cast<Index>(i));
+            const Size len = static_cast<Size>(adj.primary_length_unsafe(static_cast<Index>(i)));
 
             Real row_sum = scl::vectorize::sum(Array<const Real>(
                 reinterpret_cast<const Real*>(values.ptr), len));
@@ -161,8 +161,8 @@ SCL_FORCE_INLINE Real compute_total_weight(const Sparse<T, IsCSR>& adj) {
     // Sequential path with SIMD
     Real total = Real(0);
     for (Index i = 0; i < n; ++i) {
-        auto values = adj.primary_values(i);
-        const Size len = static_cast<Size>(adj.primary_length(i));
+        auto values = adj.primary_values_unsafe(i);
+        const Size len = static_cast<Size>(adj.primary_length_unsafe(i));
         total += scl::vectorize::sum(Array<const Real>(
             reinterpret_cast<const Real*>(values.ptr), len));
     }
@@ -184,15 +184,15 @@ void compute_node_degrees(
 
     if (N >= config::PARALLEL_THRESHOLD) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            auto values = adj.primary_values(static_cast<Index>(i));
-            const Size len = static_cast<Size>(adj.primary_length(static_cast<Index>(i)));
+            auto values = adj.primary_values_unsafe(static_cast<Index>(i));
+            const Size len = static_cast<Size>(adj.primary_length_unsafe(static_cast<Index>(i)));
             degrees[i] = scl::vectorize::sum(Array<const Real>(
                 reinterpret_cast<const Real*>(values.ptr), len));
         });
     } else {
         for (Index i = 0; i < n; ++i) {
-            auto values = adj.primary_values(i);
-            const Size len = static_cast<Size>(adj.primary_length(i));
+            auto values = adj.primary_values_unsafe(i);
+            const Size len = static_cast<Size>(adj.primary_length_unsafe(i));
             degrees[i] = scl::vectorize::sum(Array<const Real>(
                 reinterpret_cast<const Real*>(values.ptr), len));
         }
@@ -229,9 +229,9 @@ SCL_FORCE_INLINE Real compute_k_i_in(
     Index target_comm,
     const Index* node_to_comm
 ) {
-    auto indices = adj.primary_indices(node);
-    auto values = adj.primary_values(node);
-    const Index len = adj.primary_length(node);
+    auto indices = adj.primary_indices_unsafe(node);
+    auto values = adj.primary_values_unsafe(node);
+    const Index len = adj.primary_length_unsafe(node);
 
     Real k_in = Real(0);
     for (Index k = 0; k < len; ++k) {
@@ -289,9 +289,9 @@ bool local_moving_phase(
             if (k_i <= Real(0)) continue;
 
             // Get neighbors and find unique communities
-            auto indices = adj.primary_indices(i);
-            auto values = adj.primary_values(i);
-            const Index len = adj.primary_length(i);
+            auto indices = adj.primary_indices_unsafe(i);
+            auto values = adj.primary_values_unsafe(i);
+            const Index len = adj.primary_length_unsafe(i);
 
             // Clear hash table for this node
             hash_table.clear();
@@ -410,9 +410,9 @@ Index aggregate_graph(
         for (Index i = 0; i < n; ++i) {
             if (node_to_comm[i] != c) continue;
 
-            auto indices = adj.primary_indices(i);
-            auto values = adj.primary_values(i);
-            const Index len = adj.primary_length(i);
+            auto indices = adj.primary_indices_unsafe(i);
+            auto values = adj.primary_values_unsafe(i);
+            const Index len = adj.primary_length_unsafe(i);
 
             for (Index k = 0; k < len; ++k) {
                 Index j = indices[k];
@@ -667,9 +667,9 @@ Real compute_modularity(
 
     // Sum of edge weights within communities
     for (Index i = 0; i < n; ++i) {
-        auto indices = adjacency.primary_indices(i);
-        auto values = adjacency.primary_values(i);
-        const Index len = adjacency.primary_length(i);
+        auto indices = adjacency.primary_indices_unsafe(i);
+        auto values = adjacency.primary_values_unsafe(i);
+        const Index len = adjacency.primary_length_unsafe(i);
 
         for (Index k = 0; k < len; ++k) {
             if (labels[indices[k]] == labels[i]) {

@@ -363,9 +363,9 @@ SCL_HOT void extract_gene_expression(
 
     if (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            Index len = X.row_length_unsafe(c);
 
             // Binary search for gene
             const Index* found = scl::algo::lower_bound(
@@ -377,9 +377,9 @@ SCL_HOT void extract_gene_expression(
             }
         }
     } else {
-        auto indices = X.col_indices(gene);
-        auto values = X.col_values(gene);
-        Index len = X.col_length(gene);
+        auto indices = X.col_indices_unsafe(gene);
+        auto values = X.col_values_unsafe(gene);
+        Index len = X.col_length_unsafe(gene);
 
         for (Index k = 0; k < len; ++k) {
             Index c = indices[k];
@@ -890,9 +890,9 @@ void regulon_activity(
         if (IsCSR) {
             std::memset(cell_expr, 0, n_genes_sz * sizeof(Real));
 
-            auto indices = expression.row_indices(c);
-            auto values = expression.row_values(c);
-            Index len = expression.row_length(c);
+            auto indices = expression.row_indices_unsafe(c);
+            auto values = expression.row_values_unsafe(c);
+            Index len = expression.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
                 Index g = indices[k];
@@ -919,9 +919,9 @@ void regulon_activity(
                     expr = cell_expr[g];
                 } else {
                     expr = Real(0);
-                    auto indices = expression.col_indices(g);
-                    auto values = expression.col_values(g);
-                    Index len = expression.col_length(g);
+                    auto indices = expression.col_indices_unsafe(g);
+                    auto values = expression.col_values_unsafe(g);
+                    Index len = expression.col_length_unsafe(g);
 
                     // Binary search
                     const Index* found = scl::algo::lower_bound(
@@ -1019,9 +1019,9 @@ void regulon_auc_score(
         std::memset(cell_expr, 0, n_genes_sz * sizeof(Real));
 
         if (IsCSR) {
-            auto indices = expression.row_indices(c);
-            auto values = expression.row_values(c);
-            Index len = expression.row_length(c);
+            auto indices = expression.row_indices_unsafe(c);
+            auto values = expression.row_values_unsafe(c);
+            Index len = expression.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
                 Index g = indices[k];
@@ -1031,9 +1031,9 @@ void regulon_auc_score(
             }
         } else {
             for (Index g = 0; g < n_genes; ++g) {
-                auto indices = expression.col_indices(g);
-                auto values = expression.col_values(g);
-                Index len = expression.col_length(g);
+                auto indices = expression.col_indices_unsafe(g);
+                auto values = expression.col_values_unsafe(g);
+                Index len = expression.col_length_unsafe(g);
 
                 const Index* found = scl::algo::lower_bound(indices.ptr, indices.ptr + len, c);
                 if (found != indices.ptr + len && *found == c) {
@@ -1457,9 +1457,9 @@ void tf_activity_from_regulons(
         if (IsCSR) {
             std::memset(cell_expr, 0, n_genes_sz * sizeof(Real));
 
-            auto indices = expression.row_indices(c);
-            auto values = expression.row_values(c);
-            Index len = expression.row_length(c);
+            auto indices = expression.row_indices_unsafe(c);
+            auto values = expression.row_values_unsafe(c);
+            Index len = expression.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
                 Index g = indices[k];
@@ -1488,9 +1488,9 @@ void tf_activity_from_regulons(
                     expr = cell_expr[target];
                 } else {
                     expr = Real(0);
-                    auto indices = expression.col_indices(target);
-                    auto values = expression.col_values(target);
-                    Index len = expression.col_length(target);
+                    auto indices = expression.col_indices_unsafe(target);
+                    auto values = expression.col_values_unsafe(target);
+                    Index len = expression.col_length_unsafe(target);
 
                     const Index* found = scl::algo::lower_bound(indices.ptr, indices.ptr + len, c);
                     if (found != indices.ptr + len && *found == c) {

@@ -313,8 +313,8 @@ void kde_from_distances(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         if (SCL_UNLIKELY(len == 0)) {
             density[i] = self_k;
@@ -417,8 +417,8 @@ void local_bandwidth(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         if (SCL_UNLIKELY(len == 0)) {
             bandwidths[i] = config::DEFAULT_BANDWIDTH;
@@ -481,9 +481,9 @@ void adaptive_kde(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto indices = distances.primary_indices(i);
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto indices = distances.primary_indices_unsafe(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         Real h_i = scl::algo::max2(bandwidths[i], config::MIN_BANDWIDTH);
 
@@ -545,8 +545,8 @@ void compute_kernel_matrix(
         Size val_idx = 0;
 
         for (Index i = 0; i < n; ++i) {
-            auto values = distances.primary_values(i);
-            const Index len = distances.primary_length(i);
+            auto values = distances.primary_values_unsafe(i);
+            const Index len = distances.primary_length_unsafe(i);
 
             // Convert distances to squared distances first
             for (Index k = 0; k < len; ++k) {
@@ -568,8 +568,8 @@ void compute_kernel_matrix(
         Size val_idx = 0;
 
         for (Index i = 0; i < n; ++i) {
-            auto values = distances.primary_values(i);
-            const Index len = distances.primary_length(i);
+            auto values = distances.primary_values_unsafe(i);
+            const Index len = distances.primary_length_unsafe(i);
 
             Index k = 0;
             for (; k + 4 <= len; k += 4) {
@@ -611,8 +611,8 @@ void kernel_row_sums(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         Real sum = Real(0);
         Index k = 0;
@@ -669,9 +669,9 @@ void nadaraya_watson(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto indices = distances.primary_indices(i);
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto indices = distances.primary_indices_unsafe(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         Real weighted_sum = Real(0);
         Real weight_sum = Real(0);
@@ -732,9 +732,9 @@ void kernel_smooth_graph(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto indices = kernel_weights.primary_indices(i);
-        auto weights = kernel_weights.primary_values(i);
-        const Index len = kernel_weights.primary_length(i);
+        auto indices = kernel_weights.primary_indices_unsafe(i);
+        auto weights = kernel_weights.primary_values_unsafe(i);
+        const Index len = kernel_weights.primary_length_unsafe(i);
 
         Real weighted_sum = Real(0);
         Real weight_sum = Real(0);
@@ -798,9 +798,9 @@ void local_linear_regression(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto indices = distances.primary_indices(i);
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto indices = distances.primary_indices_unsafe(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         Real x_i = X[i];
 
@@ -882,9 +882,9 @@ void nystrom_approximation(
         // Apply kernel matrix
         if (use_parallel) {
             scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-                auto indices = landmark_distances.primary_indices(static_cast<Index>(i));
-                auto values = landmark_distances.primary_values(static_cast<Index>(i));
-                const Index len = landmark_distances.primary_length(static_cast<Index>(i));
+                auto indices = landmark_distances.primary_indices_unsafe(static_cast<Index>(i));
+                auto values = landmark_distances.primary_values_unsafe(static_cast<Index>(i));
+                const Index len = landmark_distances.primary_length_unsafe(static_cast<Index>(i));
 
                 Real* qi_new = Q_new + i * n_comp;
 
@@ -901,9 +901,9 @@ void nystrom_approximation(
             });
         } else {
             for (Index i = 0; i < n; ++i) {
-                auto indices = landmark_distances.primary_indices(i);
-                auto values = landmark_distances.primary_values(i);
-                const Index len = landmark_distances.primary_length(i);
+                auto indices = landmark_distances.primary_indices_unsafe(i);
+                auto values = landmark_distances.primary_values_unsafe(i);
+                const Index len = landmark_distances.primary_length_unsafe(i);
 
                 Real* qi_new = Q_new + static_cast<Size>(i) * n_comp;
 
@@ -1013,9 +1013,9 @@ void mean_shift_step(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto indices = distances.primary_indices(i);
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto indices = distances.primary_indices_unsafe(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         Real* new_pos = new_positions.ptr + static_cast<Size>(i) * stride;
         const Real* curr_pos = current_positions.ptr + static_cast<Size>(i) * stride;
@@ -1109,8 +1109,8 @@ void kernel_entropy(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         // First pass: compute normalization sum
         Real sum = self_k;
@@ -1179,8 +1179,8 @@ void find_bandwidth_for_perplexity(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     auto process_node = [&](Index i) {
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         if (SCL_UNLIKELY(len == 0)) {
             bandwidths[i] = config::DEFAULT_BANDWIDTH;
@@ -1279,9 +1279,9 @@ Real kernel_mmd_from_groups(
     Real k_AB = Real(0);
 
     for (Index i = 0; i < n; ++i) {
-        auto indices = distances.primary_indices(i);
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto indices = distances.primary_indices_unsafe(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
         bool in_A = group_labels[i];
 
         for (Index k = 0; k < len; ++k) {
@@ -1381,9 +1381,9 @@ void adaptive_rbf(
     Size val_idx = 0;
 
     for (Index i = 0; i < n; ++i) {
-        auto indices = distances.primary_indices(i);
-        auto values = distances.primary_values(i);
-        const Index len = distances.primary_length(i);
+        auto indices = distances.primary_indices_unsafe(i);
+        auto values = distances.primary_values_unsafe(i);
+        const Index len = distances.primary_length_unsafe(i);
 
         Real h_i = scl::algo::max2(bandwidths[i], config::MIN_BANDWIDTH);
         Real h_i_sq = h_i * h_i;

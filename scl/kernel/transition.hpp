@@ -261,9 +261,9 @@ template <typename T, bool IsCSR>
 void sparse_matvec(const Sparse<T, IsCSR>& mat, const Real* x, Real* y, Index n) {
     if (static_cast<Size>(n) >= config::PARALLEL_THRESHOLD) {
         scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-            auto indices = mat.primary_indices(static_cast<Index>(i));
-            auto values = mat.primary_values(static_cast<Index>(i));
-            Index len = mat.primary_length(static_cast<Index>(i));
+            auto indices = mat.primary_indices_unsafe(static_cast<Index>(i));
+            auto values = mat.primary_values_unsafe(static_cast<Index>(i));
+            Index len = mat.primary_length_unsafe(static_cast<Index>(i));
             
             Real sum = 0;
             Index k = 0;
@@ -281,9 +281,9 @@ void sparse_matvec(const Sparse<T, IsCSR>& mat, const Real* x, Real* y, Index n)
         });
     } else {
         for (Index i = 0; i < n; ++i) {
-            auto indices = mat.primary_indices(i);
-            auto values = mat.primary_values(i);
-            Index len = mat.primary_length(i);
+            auto indices = mat.primary_indices_unsafe(i);
+            auto values = mat.primary_values_unsafe(i);
+            Index len = mat.primary_length_unsafe(i);
             
             Real sum = 0;
             for (Index k = 0; k < len; ++k) {
@@ -301,9 +301,9 @@ void sparse_matvec_transpose(const Sparse<T, IsCSR>& mat, const Real* x, Real* y
     
     // Sequential for correctness (atomic would be too slow)
     for (Index i = 0; i < n; ++i) {
-        auto indices = mat.primary_indices(i);
-        auto values = mat.primary_values(i);
-        Index len = mat.primary_length(i);
+        auto indices = mat.primary_indices_unsafe(i);
+        auto values = mat.primary_values_unsafe(i);
+        Index len = mat.primary_length_unsafe(i);
         const Real xi = x[i];
         
         for (Index k = 0; k < len; ++k) {
@@ -320,8 +320,8 @@ bool is_stochastic(const Sparse<T, IsCSR>& mat, Index n, Real tol = Real(1e-6)) 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
         if (!valid.load(std::memory_order_relaxed)) return;
         
-        auto values = mat.primary_values(static_cast<Index>(i));
-        Index len = mat.primary_length(static_cast<Index>(i));
+        auto values = mat.primary_values_unsafe(static_cast<Index>(i));
+        Index len = mat.primary_length_unsafe(static_cast<Index>(i));
         
         Real row_sum = 0;
         for (Index k = 0; k < len; ++k) {
@@ -352,9 +352,9 @@ void transition_matrix_from_velocity(
     std::memset(row_stochastic_out, 0, sizeof(Real) * total);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto indices = velocity_graph.primary_indices(static_cast<Index>(i));
-        auto values = velocity_graph.primary_values(static_cast<Index>(i));
-        Index len = velocity_graph.primary_length(static_cast<Index>(i));
+        auto indices = velocity_graph.primary_indices_unsafe(static_cast<Index>(i));
+        auto values = velocity_graph.primary_values_unsafe(static_cast<Index>(i));
+        Index len = velocity_graph.primary_length_unsafe(static_cast<Index>(i));
         Real row_sum = 0;
 
         for (Index k = 0; k < len; ++k) {
@@ -389,13 +389,13 @@ void row_normalize_to_stochastic(
 ) {
     // Compute row pointers for output indexing
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto values = input.primary_values(static_cast<Index>(i));
-        Index len = input.primary_length(static_cast<Index>(i));
+        auto values = input.primary_values_unsafe(static_cast<Index>(i));
+        Index len = input.primary_length_unsafe(static_cast<Index>(i));
         
         // Find offset
         Size offset = 0;
         for (Index r = 0; r < static_cast<Index>(i); ++r) {
-            offset += input.primary_length(r);
+            offset += input.primary_length_unsafe(r);
         }
         
         Real row_sum = 0;
@@ -424,9 +424,9 @@ void symmetrize_transition(
 
     // T_sym = (T + T^T) / 2 - needs atomic or sequential
     for (Index i = 0; i < n; ++i) {
-        auto indices = transition_mat.primary_indices(i);
-        auto values = transition_mat.primary_values(i);
-        Index len = transition_mat.primary_length(i);
+        auto indices = transition_mat.primary_indices_unsafe(i);
+        auto values = transition_mat.primary_values_unsafe(i);
+        Index len = transition_mat.primary_length_unsafe(i);
         for (Index k = 0; k < len; ++k) {
             Index j = indices[k];
             Real v = static_cast<Real>(values[k]) * Real(0.5);
@@ -515,9 +515,9 @@ void identify_terminal_states(
     SCL_CHECK_DIM(is_terminal.len >= static_cast<Size>(n), "is_terminal buffer too small");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto indices = transition_mat.primary_indices(static_cast<Index>(i));
-        auto values = transition_mat.primary_values(static_cast<Index>(i));
-        Index len = transition_mat.primary_length(static_cast<Index>(i));
+        auto indices = transition_mat.primary_indices_unsafe(static_cast<Index>(i));
+        auto values = transition_mat.primary_values_unsafe(static_cast<Index>(i));
+        Index len = transition_mat.primary_length_unsafe(static_cast<Index>(i));
         Real self_prob = 0;
         Real total = 0;
 
@@ -583,9 +583,9 @@ void absorption_probability(
         scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
             if (is_terminal[i]) return;
 
-            auto indices = transition_mat.primary_indices(static_cast<Index>(i));
-            auto values = transition_mat.primary_values(static_cast<Index>(i));
-            Index len = transition_mat.primary_length(static_cast<Index>(i));
+            auto indices = transition_mat.primary_indices_unsafe(static_cast<Index>(i));
+            auto values = transition_mat.primary_values_unsafe(static_cast<Index>(i));
+            Index len = transition_mat.primary_length_unsafe(static_cast<Index>(i));
             Real* prob_i = absorption_probs + i * n_terminal;
 
             Real local_max_diff = 0;
@@ -655,9 +655,9 @@ void hitting_time(
         for (Index i = 0; i < n; ++i) {
             if (is_target[i]) continue;
 
-            auto indices = transition_mat.primary_indices(i);
-            auto values = transition_mat.primary_values(i);
-            Index len = transition_mat.primary_length(i);
+            auto indices = transition_mat.primary_indices_unsafe(i);
+            auto values = transition_mat.primary_values_unsafe(i);
+            Index len = transition_mat.primary_length_unsafe(i);
             Real expected = Real(1);
             bool reachable = true;
             
@@ -716,9 +716,9 @@ void time_to_absorption(
         for (Index i = 0; i < n; ++i) {
             if (is_absorbing[i]) continue;
 
-            auto indices = transition_mat.primary_indices(i);
-            auto values = transition_mat.primary_values(i);
-            Index len = transition_mat.primary_length(i);
+            auto indices = transition_mat.primary_indices_unsafe(i);
+            auto values = transition_mat.primary_values_unsafe(i);
+            Index len = transition_mat.primary_length_unsafe(i);
             Real new_time = Real(1);
 
             for (Index k = 0; k < len; ++k) {
@@ -992,9 +992,9 @@ void coarse_grain_transition(
 
         Real* local = thread_buffers + tid * total;
         
-        auto indices = transition_mat.primary_indices(static_cast<Index>(i));
-        auto values = transition_mat.primary_values(static_cast<Index>(i));
-        Index len = transition_mat.primary_length(static_cast<Index>(i));
+        auto indices = transition_mat.primary_indices_unsafe(static_cast<Index>(i));
+        auto values = transition_mat.primary_values_unsafe(static_cast<Index>(i));
+        Index len = transition_mat.primary_length_unsafe(static_cast<Index>(i));
 
         for (Index k = 0; k < len; ++k) {
             Index j = indices[k];
@@ -1066,9 +1066,9 @@ void lineage_drivers(
         if (IsCSR_G) {
             // CSC access pattern for genes
             for (Index c = 0; c < n_cells; ++c) {
-                auto indices = expression.row_indices(c);
-                auto values = expression.row_values(c);
-                Index len = expression.row_length(c);
+                auto indices = expression.row_indices_unsafe(c);
+                auto values = expression.row_values_unsafe(c);
+                Index len = expression.row_length_unsafe(c);
                 for (Index k = 0; k < len; ++k) {
                     if (indices[k] == static_cast<Index>(g)) {
                         Real e = static_cast<Real>(values[k]);
@@ -1082,9 +1082,9 @@ void lineage_drivers(
                 }
             }
         } else {
-            auto indices = expression.col_indices(static_cast<Index>(g));
-            auto values = expression.col_values(static_cast<Index>(g));
-            Index len = expression.col_length(static_cast<Index>(g));
+            auto indices = expression.col_indices_unsafe(static_cast<Index>(g));
+            auto values = expression.col_values_unsafe(static_cast<Index>(g));
+            Index len = expression.col_length_unsafe(static_cast<Index>(g));
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
                 if (c < n_cells) {
@@ -1161,9 +1161,9 @@ void forward_committor(
         for (Index i = 0; i < n; ++i) {
             if (is_source[i] || is_target[i]) continue;
 
-            auto indices = transition_mat.primary_indices(i);
-            auto values = transition_mat.primary_values(i);
-            Index len = transition_mat.primary_length(i);
+            auto indices = transition_mat.primary_indices_unsafe(i);
+            auto values = transition_mat.primary_values_unsafe(i);
+            Index len = transition_mat.primary_length_unsafe(i);
             Real new_val = 0;
 
             for (Index k = 0; k < len; ++k) {
@@ -1245,9 +1245,9 @@ void directional_score(
     SCL_CHECK_DIM(scores.len >= static_cast<Size>(n), "buffer too small");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto indices = transition_mat.primary_indices(static_cast<Index>(i));
-        auto values = transition_mat.primary_values(static_cast<Index>(i));
-        Index len = transition_mat.primary_length(static_cast<Index>(i));
+        auto indices = transition_mat.primary_indices_unsafe(static_cast<Index>(i));
+        auto values = transition_mat.primary_values_unsafe(static_cast<Index>(i));
+        Index len = transition_mat.primary_length_unsafe(static_cast<Index>(i));
         Real forward = 0;
         Real backward = 0;
         Real pt_i = pseudotime[i];

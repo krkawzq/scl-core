@@ -5,7 +5,7 @@
 // BRIEF: C API for multi-modal data alignment and batch integration
 // =============================================================================
 
-#include "scl/binding/c_api/core.h"
+#include "scl/binding/c_api/core/core.h"
 
 #ifdef __cplusplus
 extern "C" {

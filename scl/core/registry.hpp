@@ -3,6 +3,7 @@
 #include "scl/core/macros.hpp"
 #include "scl/core/memory.hpp"
 #include "scl/core/error.hpp"
+#include "scl/core/algo.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -23,7 +24,17 @@
 
 // =============================================================================
 // FILE: scl/core/registry.hpp
-// BRIEF: Unified high-performance memory registry with reference counting
+// BRIEF: Unified high-performance memory registry with three-layer reference counting
+//
+// ARCHITECTURE:
+//   Layer 1: Buffer  - Real memory block with alias_count
+//   Layer 2: Alias   - Access pointer with ref_count (can be shared by multiple instances)
+//   Layer 3: Instance - Matrix objects that hold aliases
+//
+// KEY FEATURES:
+//   - Sharded reference counting for lock-free concurrent access
+//   - Multiple instances can share the same alias (no need for is_view_ flag)
+//   - Zero-copy slicing via alias sharing
 // =============================================================================
 
 namespace scl {
@@ -46,6 +57,199 @@ enum class AllocType : std::uint8_t {
     ScalarNew = 1,
     AlignedAlloc = 2,
     Custom = 3
+};
+
+// =============================================================================
+// Thread Shard Index
+// =============================================================================
+
+namespace detail {
+
+// Thread-local shard index for lock-free access
+class ThreadShardIndex {
+    struct alignas(64) Counter {
+        std::atomic<std::size_t> value;
+        Counter() : value(0) {}
+    };
+    
+    static inline Counter next_index_;
+    
+public:
+    static std::size_t get() noexcept {
+        thread_local std::size_t cached = next_index_.value.fetch_add(1, 
+            std::memory_order_relaxed);
+        return cached;
+    }
+};
+
+inline std::size_t get_thread_shard_index() noexcept {
+    return ThreadShardIndex::get();
+}
+
+} // namespace detail
+
+// =============================================================================
+// Sharded Reference Count - Lock-Free Concurrent Reference Counting
+// =============================================================================
+
+class ShardedRefCount {
+public:
+    static constexpr std::size_t MAX_SHARDS = 16;
+    static constexpr std::int32_t BORROW_THRESHOLD = 8;
+    
+private:
+    // Cache-line aligned shard to prevent false sharing
+    struct alignas(64) Shard {
+        std::atomic<std::int32_t> count{0};
+    };
+    
+    std::atomic<std::int32_t> base_;
+    Shard shards_[MAX_SHARDS];
+    std::size_t num_shards_;
+    
+public:
+    explicit ShardedRefCount(std::size_t num_shards = 4, std::int32_t initial = 1) noexcept
+        : base_(initial)
+        , num_shards_(num_shards > MAX_SHARDS ? MAX_SHARDS : (num_shards < 1 ? 1 : num_shards))
+    {}
+    
+    ShardedRefCount(const ShardedRefCount&) = delete;
+    ShardedRefCount& operator=(const ShardedRefCount&) = delete;
+    
+    ShardedRefCount(ShardedRefCount&& other) noexcept
+        : base_(other.base_.load(std::memory_order_relaxed))
+        , num_shards_(other.num_shards_)
+    {
+        for (std::size_t i = 0; i < num_shards_; ++i) {
+            shards_[i].count.store(
+                other.shards_[i].count.load(std::memory_order_relaxed),
+                std::memory_order_relaxed);
+        }
+        other.base_.store(0, std::memory_order_relaxed);
+        for (std::size_t i = 0; i < other.num_shards_; ++i) {
+            other.shards_[i].count.store(0, std::memory_order_relaxed);
+        }
+    }
+    
+    // Fast path: increment current thread's shard (lock-free, no contention)
+    SCL_FORCE_INLINE void incref() noexcept {
+        std::size_t shard_idx = detail::get_thread_shard_index() % num_shards_;
+        shards_[shard_idx].count.fetch_add(1, std::memory_order_relaxed);
+    }
+    
+    // Increment by specified amount
+    SCL_FORCE_INLINE void incref(std::int32_t amount) noexcept {
+        if (SCL_UNLIKELY(amount <= 0)) return;
+        std::size_t shard_idx = detail::get_thread_shard_index() % num_shards_;
+        shards_[shard_idx].count.fetch_add(amount, std::memory_order_relaxed);
+    }
+    
+    // Fast path: decrement current thread's shard
+    // Returns true if total count reached zero (caller should free)
+    SCL_FORCE_INLINE bool decref() noexcept {
+        std::size_t shard_idx = detail::get_thread_shard_index() % num_shards_;
+        auto& shard = shards_[shard_idx];
+        
+        // Try to decrement local shard
+        std::int32_t old_local = shard.count.load(std::memory_order_relaxed);
+        
+        if (SCL_LIKELY(old_local > 0)) {
+            // Fast path: local shard has count
+            shard.count.fetch_sub(1, std::memory_order_acq_rel);
+            return false;
+        }
+        
+        // Slow path: need to borrow from base
+        return decref_slow_path(shard_idx);
+    }
+    
+    // Decrement by specified amount
+    // Returns true if total count reached zero
+    SCL_FORCE_INLINE bool decref(std::int32_t amount) noexcept {
+        if (SCL_UNLIKELY(amount <= 0)) return false;
+        
+        std::size_t shard_idx = detail::get_thread_shard_index() % num_shards_;
+        auto& shard = shards_[shard_idx];
+        
+        std::int32_t old_local = shard.count.load(std::memory_order_relaxed);
+        
+        if (SCL_LIKELY(old_local >= amount)) {
+            shard.count.fetch_sub(amount, std::memory_order_acq_rel);
+            return false;
+        }
+        
+        // Need to handle across base and shards
+        return decref_slow_path_amount(amount);
+    }
+    
+    // Get exact total count (may be slow, requires aggregation)
+    SCL_NODISCARD std::int32_t get_count() const noexcept {
+        std::atomic_thread_fence(std::memory_order_acquire);
+        
+        std::int32_t total = base_.load(std::memory_order_relaxed);
+        for (std::size_t i = 0; i < num_shards_; ++i) {
+            total += shards_[i].count.load(std::memory_order_relaxed);
+        }
+        
+        return total;
+    }
+    
+    // Fast heuristic: is this likely the only reference?
+    // May return false negative (safe for optimization decisions)
+    SCL_NODISCARD SCL_FORCE_INLINE bool is_likely_unique() const noexcept {
+        std::int32_t base = base_.load(std::memory_order_relaxed);
+        if (SCL_UNLIKELY(base > 1)) return false;
+        if (SCL_UNLIKELY(base < 0)) return false;  // Negative means borrowed, likely not unique
+        
+        std::size_t shard_idx = detail::get_thread_shard_index() % num_shards_;
+        std::int32_t local = shards_[shard_idx].count.load(std::memory_order_relaxed);
+        
+        return SCL_LIKELY(base + local == 1);
+    }
+    
+    // Precise check: exactly one reference?
+    SCL_NODISCARD SCL_FORCE_INLINE bool is_unique() const noexcept {
+        return SCL_LIKELY(get_count() == 1);
+    }
+    
+    // Consolidate shards into base (for cleanup or precise operations)
+    void consolidate() noexcept {
+        std::int32_t total = 0;
+        for (std::size_t i = 0; i < num_shards_; ++i) {
+            total += shards_[i].count.exchange(0, std::memory_order_acq_rel);
+        }
+        base_.fetch_add(total, std::memory_order_release);
+    }
+    
+private:
+    SCL_FORCE_INLINE bool decref_slow_path(std::size_t shard_idx) noexcept {
+        // Try to borrow from base
+        std::int32_t old_base = base_.load(std::memory_order_acquire);
+        
+        while (SCL_LIKELY(old_base > 0)) {
+            std::int32_t borrow = (old_base > BORROW_THRESHOLD) ? BORROW_THRESHOLD : old_base;
+            if (SCL_LIKELY(base_.compare_exchange_weak(old_base, old_base - borrow,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_relaxed))) {
+                // Successfully borrowed, add remainder to local shard
+                if (SCL_LIKELY(borrow > 1)) {
+                    shards_[shard_idx].count.fetch_add(borrow - 1, std::memory_order_relaxed);
+                }
+                return false;
+            }
+        }
+        
+        // Base is zero or negative, check total
+        return SCL_UNLIKELY(get_count() <= 0);
+    }
+    
+    bool decref_slow_path_amount(std::int32_t amount) noexcept {
+        // Consolidate first for accurate operation
+        consolidate();
+        
+        std::int32_t old_base = base_.fetch_sub(amount, std::memory_order_acq_rel);
+        return SCL_UNLIKELY(old_base <= amount);
+    }
 };
 
 // =============================================================================
@@ -403,7 +607,52 @@ SCL_FORCE_INLINE std::size_t get_default_shard_count() {
 } // namespace detail
 
 // =============================================================================
-// Registry: Unified Memory Management
+// Alias Record - Layer 2: Access Pointer with Reference Count
+// =============================================================================
+
+struct AliasRecord {
+    BufferID buffer_id;                    // Parent buffer
+    std::atomic<std::uint32_t> ref_count;  // Number of instances holding this alias
+    
+    AliasRecord() noexcept : buffer_id(0), ref_count(0) {}
+    
+    AliasRecord(BufferID bid, std::uint32_t initial_ref = 1) noexcept
+        : buffer_id(bid), ref_count(initial_ref) {}
+    
+    AliasRecord(const AliasRecord& other) noexcept
+        : buffer_id(other.buffer_id)
+        , ref_count(other.ref_count.load(std::memory_order_relaxed)) {}
+    
+    AliasRecord& operator=(const AliasRecord& other) noexcept {
+        if (this != &other) {
+            buffer_id = other.buffer_id;
+            ref_count.store(other.ref_count.load(std::memory_order_relaxed),
+                           std::memory_order_relaxed);
+        }
+        return *this;
+    }
+    
+    AliasRecord(AliasRecord&& other) noexcept
+        : buffer_id(other.buffer_id)
+        , ref_count(other.ref_count.load(std::memory_order_relaxed)) {
+        other.buffer_id = 0;
+        other.ref_count.store(0, std::memory_order_relaxed);
+    }
+    
+    AliasRecord& operator=(AliasRecord&& other) noexcept {
+        if (this != &other) {
+            buffer_id = other.buffer_id;
+            ref_count.store(other.ref_count.load(std::memory_order_relaxed),
+                           std::memory_order_relaxed);
+            other.buffer_id = 0;
+            other.ref_count.store(0, std::memory_order_relaxed);
+        }
+        return *this;
+    }
+};
+
+// =============================================================================
+// Registry: Unified Memory Management with Three-Layer Reference Counting
 // =============================================================================
 
 class Registry {
@@ -425,28 +674,28 @@ public:
 
     struct RefCountedBuffer {
         BufferInfo info;
-        std::atomic<std::uint32_t> refcount{0};
+        std::atomic<std::uint32_t> alias_count{0};  // Number of aliases pointing to this buffer
         
         RefCountedBuffer() = default;
         
-        RefCountedBuffer(BufferInfo info_, std::uint32_t initial_refcount)
-            : info(std::move(info_)), refcount(initial_refcount) {}
+        RefCountedBuffer(BufferInfo info_, std::uint32_t initial_alias_count)
+            : info(std::move(info_)), alias_count(initial_alias_count) {}
         
         RefCountedBuffer(const RefCountedBuffer&) = delete;
         RefCountedBuffer& operator=(const RefCountedBuffer&) = delete;
         
         RefCountedBuffer(RefCountedBuffer&& other) noexcept
             : info(std::move(other.info))
-            , refcount(other.refcount.load(std::memory_order_relaxed)) {
-            other.refcount.store(0, std::memory_order_relaxed);
+            , alias_count(other.alias_count.load(std::memory_order_relaxed)) {
+            other.alias_count.store(0, std::memory_order_relaxed);
         }
         
         RefCountedBuffer& operator=(RefCountedBuffer&& other) noexcept {
             if (this != &other) {
                 info = std::move(other.info);
-                refcount.store(other.refcount.load(std::memory_order_relaxed), 
-                              std::memory_order_relaxed);
-                other.refcount.store(0, std::memory_order_relaxed);
+                alias_count.store(other.alias_count.load(std::memory_order_relaxed), 
+                                 std::memory_order_relaxed);
+                other.alias_count.store(0, std::memory_order_relaxed);
             }
             return *this;
         }
@@ -459,8 +708,9 @@ private:
         detail::ConcurrentFlatMap<void*, PtrRecord> records;
     };
     
+    // NEW: Alias shard now stores AliasRecord with ref_count
     struct alignas(kCacheLineSize) AliasShard {
-        detail::ConcurrentFlatMap<void*, BufferID> aliases;
+        detail::ConcurrentFlatMap<void*, AliasRecord> aliases;
     };
     
     struct alignas(kCacheLineSize) BufferShard {
@@ -476,6 +726,7 @@ private:
     std::atomic<std::size_t> total_ptr_bytes_{0};
     std::atomic<std::size_t> total_buffers_{0};
     std::atomic<std::size_t> total_buffer_bytes_{0};
+    std::atomic<std::size_t> total_aliases_{0};
     
     SCL_FORCE_INLINE std::size_t shard_index(const void* ptr) const noexcept {
         return std::hash<const void*>{}(ptr) % num_shards_;
@@ -485,16 +736,17 @@ private:
         return id % num_shards_;
     }
     
+    // Pre-defined deleters (avoids lambda creation on each call)
+    static void deleter_array_new(void* p) { delete[] static_cast<char*>(p); }
+    static void deleter_scalar_new(void* p) { delete static_cast<char*>(p); }
+    static void deleter_aligned(void* p) { scl::memory::aligned_free(static_cast<char*>(p)); }
+    
     static Deleter get_deleter(AllocType type, Deleter custom) noexcept {
         switch (type) {
-            case AllocType::ArrayNew:
-                return [](void* p) { delete[] static_cast<char*>(p); };
-            case AllocType::ScalarNew:
-                return [](void* p) { delete static_cast<char*>(p); };
-            case AllocType::AlignedAlloc:
-                return [](void* p) { scl::memory::aligned_free(static_cast<char*>(p)); };
-            case AllocType::Custom:
-                return custom;
+            case AllocType::ArrayNew:   return deleter_array_new;
+            case AllocType::ScalarNew:  return deleter_scalar_new;
+            case AllocType::AlignedAlloc: return deleter_aligned;
+            case AllocType::Custom:     return custom;
         }
         return nullptr;
     }
@@ -506,13 +758,17 @@ public:
         , buf_shards_(num_shards)
         , num_shards_(num_shards) {}
     
+    // =========================================================================
+    // Simple Pointer Management (Layer 1 Alternative - No Sharing)
+    // =========================================================================
+    
     void register_ptr(void* ptr, std::size_t byte_size, AllocType type, 
                       Deleter custom_deleter = nullptr) {
-        if (!ptr || byte_size == 0) return;
+        if (SCL_UNLIKELY(!ptr || byte_size == 0)) return;
         PtrRecord rec{byte_size, type, custom_deleter};
         auto& shard = ptr_shards_[shard_index(ptr)];
         
-        if (shard.records.insert(ptr, rec)) {
+        if (SCL_LIKELY(shard.records.insert(ptr, rec))) {
             total_ptrs_.fetch_add(1, std::memory_order_relaxed);
             total_ptr_bytes_.fetch_add(byte_size, std::memory_order_relaxed);
         }
@@ -524,16 +780,16 @@ public:
     }
     
     bool unregister_ptr(void* ptr) {
-        if (!ptr) return false;
+        if (SCL_UNLIKELY(!ptr)) return false;
         auto& shard = ptr_shards_[shard_index(ptr)];
         PtrRecord rec;
         
-        if (!shard.records.erase_and_get(ptr, rec)) {
+        if (SCL_UNLIKELY(!shard.records.erase_and_get(ptr, rec))) {
             return false;
         }
         
         auto deleter = get_deleter(rec.type, rec.custom_deleter);
-        if (deleter) {
+        if (SCL_LIKELY(deleter)) {
             deleter(ptr);
         }
         
@@ -647,14 +903,17 @@ public:
         return ptr;
     }
     
-    SCL_NODISCARD BufferID register_buffer(void* real_ptr, std::size_t byte_size,
-                                           std::uint32_t initial_refcount,
-                                           AllocType type, Deleter custom_deleter = nullptr) {
-        if (!real_ptr || byte_size == 0 || initial_refcount == 0) return 0;
+    // =========================================================================
+    // Buffer Management (Layer 1)
+    // =========================================================================
+    
+    SCL_NODISCARD BufferID create_buffer(void* real_ptr, std::size_t byte_size,
+                                         AllocType type, Deleter custom_deleter = nullptr) {
+        if (!real_ptr || byte_size == 0) return 0;
         BufferID id = next_buffer_id_.fetch_add(1, std::memory_order_relaxed);
         
         BufferInfo info{real_ptr, byte_size, type, custom_deleter};
-        auto buffer = std::make_unique<RefCountedBuffer>(std::move(info), initial_refcount);
+        auto buffer = std::make_unique<RefCountedBuffer>(std::move(info), 0);
         auto& shard = buf_shards_[shard_index(id)];
         shard.buffers.insert(id, std::move(buffer));
         
@@ -664,26 +923,230 @@ public:
         return id;
     }
     
-    bool register_alias(void* alias_ptr, BufferID buffer_id) {
-        if (!alias_ptr || buffer_id == 0) return false;
+    // Legacy: register_buffer with initial refcount (backward compatible)
+    SCL_NODISCARD BufferID register_buffer(void* real_ptr, std::size_t byte_size,
+                                           std::uint32_t initial_alias_count,
+                                           AllocType type, Deleter custom_deleter = nullptr) {
+        if (!real_ptr || byte_size == 0 || initial_alias_count == 0) return 0;
+        BufferID id = next_buffer_id_.fetch_add(1, std::memory_order_relaxed);
+        
+        BufferInfo info{real_ptr, byte_size, type, custom_deleter};
+        auto buffer = std::make_unique<RefCountedBuffer>(std::move(info), initial_alias_count);
+        auto& shard = buf_shards_[shard_index(id)];
+        shard.buffers.insert(id, std::move(buffer));
+        
+        total_buffers_.fetch_add(1, std::memory_order_relaxed);
+        total_buffer_bytes_.fetch_add(byte_size, std::memory_order_relaxed);
+        
+        return id;
+    }
+    
+    // =========================================================================
+    // Alias Management (Layer 2) - NEW API
+    // =========================================================================
+    
+    /// @brief Create a new alias pointing to a buffer
+    /// @param alias_ptr The access pointer
+    /// @param buffer_id The parent buffer
+    /// @param initial_ref Initial reference count (default 1)
+    /// @return true if alias was created
+    SCL_FORCE_INLINE bool create_alias(void* alias_ptr, BufferID buffer_id, std::uint32_t initial_ref = 1) {
+        if (SCL_UNLIKELY(!alias_ptr || buffer_id == 0)) return false;
+        
+        AliasRecord rec(buffer_id, initial_ref);
         auto& shard = alias_shards_[shard_index(alias_ptr)];
-        return shard.aliases.insert(alias_ptr, buffer_id);
+        
+        if (SCL_LIKELY(shard.aliases.insert(alias_ptr, rec))) {
+            // Increment buffer's alias count
+            auto& buf_shard = buf_shards_[shard_index(buffer_id)];
+            buf_shard.buffers.access(buffer_id,
+                [](std::unique_ptr<RefCountedBuffer>& buf) {
+                    if (SCL_LIKELY(buf)) {
+                        buf->alias_count.fetch_add(1, std::memory_order_relaxed);
+                    }
+                });
+            
+            total_aliases_.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    }
+    
+    /// @brief Increment alias reference count (lock-free fast path)
+    /// @param alias_ptr The alias pointer
+    /// @param increment Amount to increment (default 1)
+    /// @return true if alias exists
+    SCL_FORCE_INLINE bool alias_incref(void* alias_ptr, std::uint32_t increment = 1) {
+        if (SCL_UNLIKELY(!alias_ptr || increment == 0)) return false;
+        
+        auto& shard = alias_shards_[shard_index(alias_ptr)];
+        return shard.aliases.access(alias_ptr,
+            [increment](AliasRecord& rec) {
+                rec.ref_count.fetch_add(increment, std::memory_order_relaxed);
+            });
+    }
+    
+    /// @brief Decrement alias reference count
+    /// @param alias_ptr The alias pointer
+    /// @return true if alias was removed (ref_count reached 0)
+    SCL_FORCE_INLINE bool alias_decref(void* alias_ptr) {
+        if (SCL_UNLIKELY(!alias_ptr)) return false;
+        
+        auto& alias_shard = alias_shards_[shard_index(alias_ptr)];
+        
+        BufferID buffer_id = 0;
+        bool was_removed = false;
+        
+        // Atomically decrement and conditionally erase to avoid ABA race
+        alias_shard.aliases.access_and_maybe_erase(alias_ptr,
+            [&](AliasRecord& rec) -> bool {
+                std::uint32_t old_ref = rec.ref_count.fetch_sub(1, std::memory_order_acq_rel);
+                if (SCL_UNLIKELY(old_ref == 1)) {
+                    buffer_id = rec.buffer_id;
+                    was_removed = true;
+                    return true;  // Erase atomically
+                }
+                return false;
+            });
+        
+        if (SCL_UNLIKELY(was_removed)) {
+            total_aliases_.fetch_sub(1, std::memory_order_relaxed);
+            
+            // Decrement buffer's alias_count
+            if (SCL_LIKELY(buffer_id != 0)) {
+                decrement_buffer_alias_count(buffer_id);
+            }
+        }
+        
+        return was_removed;
+    }
+    
+    /// @brief Batch increment alias reference counts
+    /// Groups by shard for better cache locality
+    void alias_incref_batch(std::span<void* const> alias_ptrs, std::uint32_t increment = 1) {
+        if (alias_ptrs.empty() || increment == 0) return;
+        
+        // Group by shard for better cache locality
+        std::vector<std::vector<void*>> shard_ptrs(num_shards_);
+        for (void* ptr : alias_ptrs) {
+            if (ptr) {
+                shard_ptrs[shard_index(ptr)].push_back(ptr);
+            }
+        }
+        
+        // Process each shard
+        for (std::size_t i = 0; i < num_shards_; ++i) {
+            if (shard_ptrs[i].empty()) continue;
+            
+            auto& shard = alias_shards_[i];
+            for (void* ptr : shard_ptrs[i]) {
+                shard.aliases.access(ptr,
+                    [increment](AliasRecord& rec) {
+                        rec.ref_count.fetch_add(increment, std::memory_order_relaxed);
+                    });
+            }
+        }
+    }
+    
+    /// @brief Batch decrement alias reference counts
+    /// More efficient than calling alias_decref individually
+    void alias_decref_batch(std::span<void* const> alias_ptrs) {
+        if (alias_ptrs.empty()) return;
+        
+        // Group by shard for efficiency
+        std::vector<std::vector<void*>> shard_ptrs(num_shards_);
+        for (void* ptr : alias_ptrs) {
+            if (ptr) {
+                shard_ptrs[shard_index(ptr)].push_back(ptr);
+            }
+        }
+        
+        // Collect buffer IDs that need decrement
+        std::unordered_map<BufferID, std::uint32_t> buffer_decrements;
+        std::vector<void*> aliases_to_remove;
+        aliases_to_remove.reserve(alias_ptrs.size());
+        
+        for (std::size_t i = 0; i < num_shards_; ++i) {
+            if (shard_ptrs[i].empty()) continue;
+            
+            auto& shard = alias_shards_[i];
+            for (void* ptr : shard_ptrs[i]) {
+                shard.aliases.access(ptr,
+                    [&](AliasRecord& rec) {
+                        std::uint32_t old_ref = rec.ref_count.fetch_sub(1, std::memory_order_acq_rel);
+                        if (old_ref == 1) {
+                            // Last reference, mark for removal
+                            aliases_to_remove.push_back(ptr);
+                            buffer_decrements[rec.buffer_id]++;
+                        }
+                    });
+            }
+        }
+        
+        // Remove aliases that reached zero
+        for (void* ptr : aliases_to_remove) {
+            auto& shard = alias_shards_[shard_index(ptr)];
+            shard.aliases.erase(ptr);
+        }
+        
+        if (!aliases_to_remove.empty()) {
+            total_aliases_.fetch_sub(aliases_to_remove.size(), std::memory_order_relaxed);
+        }
+        
+        // Decrement buffer alias counts
+        for (const auto& [buffer_id, count] : buffer_decrements) {
+            decrement_buffer_alias_count(buffer_id, count);
+        }
+    }
+    
+    /// @brief Get alias reference count
+    SCL_NODISCARD std::uint32_t alias_refcount(void* alias_ptr) const {
+        if (!alias_ptr) return 0;
+        
+        std::uint32_t result = 0;
+        alias_shards_[shard_index(alias_ptr)].aliases.access(alias_ptr,
+            [&](const AliasRecord& rec) {
+                result = rec.ref_count.load(std::memory_order_relaxed);
+            });
+        return result;
+    }
+    
+    /// @brief Check if alias is unique (only one reference)
+    SCL_NODISCARD bool alias_is_unique(void* alias_ptr) const {
+        return alias_refcount(alias_ptr) == 1;
+    }
+    
+    // =========================================================================
+    // Legacy Alias API (Backward Compatible)
+    // =========================================================================
+    
+    bool register_alias(void* alias_ptr, BufferID buffer_id) {
+        return create_alias(alias_ptr, buffer_id, 1);
     }
     
     bool register_buffer_with_aliases(void* real_ptr, std::size_t byte_size,
-                                       std::span<void* const> alias_ptrs,
-                                       AllocType type, Deleter custom_deleter = nullptr) {
+                                      std::span<void* const> alias_ptrs,
+                                      AllocType type, Deleter custom_deleter = nullptr) {
         if (!real_ptr || byte_size == 0 || alias_ptrs.empty()) return false;
         
-        std::uint32_t refcount = 0;
+        std::uint32_t alias_count = 0;
         for (void* p : alias_ptrs) {
-            if (p) ++refcount;
+            if (p) ++alias_count;
         }
-        if (refcount == 0) return false;
+        if (alias_count == 0) return false;
         
-        BufferID id = register_buffer(real_ptr, byte_size, refcount, type, custom_deleter);
-        if (id == 0) return false;
+        // Create buffer with initial alias_count
+        BufferID id = next_buffer_id_.fetch_add(1, std::memory_order_relaxed);
         
+        BufferInfo info{real_ptr, byte_size, type, custom_deleter};
+        auto buffer = std::make_unique<RefCountedBuffer>(std::move(info), alias_count);
+        auto& buf_shard = buf_shards_[shard_index(id)];
+        buf_shard.buffers.insert(id, std::move(buffer));
+        
+        total_buffers_.fetch_add(1, std::memory_order_relaxed);
+        total_buffer_bytes_.fetch_add(byte_size, std::memory_order_relaxed);
+        
+        // Register aliases with ref_count = 1
         std::vector<std::vector<void*>> shard_aliases(num_shards_);
         for (void* ptr : alias_ptrs) {
             if (ptr) {
@@ -696,22 +1159,42 @@ public:
             
             auto& shard = alias_shards_[i];
             for (void* ptr : shard_aliases[i]) {
-                shard.aliases.insert(ptr, id);
+                AliasRecord rec(id, 1);
+                shard.aliases.insert(ptr, rec);
             }
         }
         
+        total_aliases_.fetch_add(alias_count, std::memory_order_relaxed);
         return true;
     }
     
+    // Legacy: unregister_alias (decrements ref_count, removes if zero)
     bool unregister_alias(void* alias_ptr) {
-        if (!alias_ptr) return false;
-        
-        auto& alias_shard = alias_shards_[shard_index(alias_ptr)];
-        BufferID buffer_id;
-        
-        if (!alias_shard.aliases.erase_and_get(alias_ptr, buffer_id)) {
-            return false;
-        }
+        return alias_decref(alias_ptr);
+    }
+    
+    // Legacy: unregister_aliases batch
+    void unregister_aliases(std::span<void* const> alias_ptrs) {
+        alias_decref_batch(alias_ptrs);
+    }
+    
+    // Legacy: decrement_buffer_refcounts (now operates on alias ref_counts)
+    void decrement_buffer_refcounts(std::span<void* const> alias_ptrs) {
+        alias_decref_batch(alias_ptrs);
+    }
+    
+    // Legacy: unregister_aliases_as_owner
+    void unregister_aliases_as_owner(std::span<void* const> alias_ptrs) {
+        alias_decref_batch(alias_ptrs);
+    }
+    
+    // =========================================================================
+    // Buffer Helpers
+    // =========================================================================
+    
+private:
+    void decrement_buffer_alias_count(BufferID buffer_id, std::uint32_t count = 1) {
+        if (buffer_id == 0 || count == 0) return;
         
         auto& buf_shard = buf_shards_[shard_index(buffer_id)];
         
@@ -720,18 +1203,21 @@ public:
         std::uint64_t freed_bytes = 0;
         bool should_free = false;
         
-        buf_shard.buffers.access_and_maybe_erase(buffer_id, 
+        buf_shard.buffers.access_and_maybe_erase(buffer_id,
             [&](std::unique_ptr<RefCountedBuffer>& buffer_ptr) -> bool {
                 if (!buffer_ptr) return false;
                 
-                std::uint32_t old_refcount = buffer_ptr->refcount.fetch_sub(1, std::memory_order_acq_rel);
+                std::uint32_t old_count = buffer_ptr->alias_count.fetch_sub(
+                    count, std::memory_order_acq_rel);
                 
-                if (old_refcount == 1) {
+                if (old_count == count) {
+                    // Last alias, free the buffer
                     ptr_to_delete = buffer_ptr->info.real_ptr;
-                    deleter_to_use = get_deleter(buffer_ptr->info.type, buffer_ptr->info.custom_deleter);
+                    deleter_to_use = get_deleter(buffer_ptr->info.type, 
+                                                  buffer_ptr->info.custom_deleter);
                     freed_bytes = buffer_ptr->info.byte_size;
                     should_free = true;
-                    return true;
+                    return true;  // Remove buffer record
                 }
                 return false;
             });
@@ -743,81 +1229,34 @@ public:
             total_buffers_.fetch_sub(1, std::memory_order_relaxed);
             total_buffer_bytes_.fetch_sub(freed_bytes, std::memory_order_relaxed);
         }
-        
-        return true;
     }
     
-    void unregister_aliases(std::span<void* const> alias_ptrs) {
-        if (alias_ptrs.empty()) return;
-
-        // Step 1: Look up buffer IDs WITHOUT removing aliases yet
-        // Group aliases by buffer_id for efficient processing
-        std::unordered_map<BufferID, std::vector<void*>> buffer_to_aliases;
-        buffer_to_aliases.reserve(alias_ptrs.size());
-
-        for (void* ptr : alias_ptrs) {
-            if (!ptr) continue;
-            BufferID id = get_buffer_id(ptr);  // Lookup only, don't erase
-            if (id != 0) {
-                buffer_to_aliases[id].push_back(ptr);
-            }
-        }
-
-        if (buffer_to_aliases.empty()) return;
-
-        // Step 2: Decrement refcounts and identify buffers to free
-        std::vector<std::pair<void*, Deleter>> to_delete;
-        std::vector<BufferID> buffers_to_cleanup;
-        to_delete.reserve(buffer_to_aliases.size());
-        buffers_to_cleanup.reserve(buffer_to_aliases.size());
-
-        std::size_t freed_buffers = 0;
-        std::size_t freed_bytes = 0;
-
-        for (const auto& [buffer_id, aliases] : buffer_to_aliases) {
-            std::uint32_t decrement = static_cast<std::uint32_t>(aliases.size());
-            auto& buf_shard = buf_shards_[shard_index(buffer_id)];
-
-            buf_shard.buffers.access_and_maybe_erase(buffer_id,
-                [&](std::unique_ptr<RefCountedBuffer>& buffer_ptr) -> bool {
-                    if (!buffer_ptr) return false;
-
-                    std::uint32_t old_refcount = buffer_ptr->refcount.fetch_sub(
-                        decrement, std::memory_order_acq_rel);
-
-                    if (old_refcount == decrement) {
-                        // Last reference - prepare to delete and mark for alias cleanup
-                        to_delete.emplace_back(
-                            buffer_ptr->info.real_ptr,
-                            get_deleter(buffer_ptr->info.type, buffer_ptr->info.custom_deleter));
-                        freed_bytes += buffer_ptr->info.byte_size;
-                        ++freed_buffers;
-                        buffers_to_cleanup.push_back(buffer_id);
-                        return true;  // Remove buffer record
-                    }
-                    return false;
-                });
-        }
-
-        // Step 3: Remove alias mappings ONLY for buffers that were freed
-        for (BufferID freed_id : buffers_to_cleanup) {
-            const auto& aliases = buffer_to_aliases[freed_id];
-            for (void* ptr : aliases) {
-                auto& alias_shard = alias_shards_[shard_index(ptr)];
-                alias_shard.aliases.erase(ptr);
-            }
-        }
-
-        if (freed_buffers > 0) {
-            total_buffers_.fetch_sub(freed_buffers, std::memory_order_relaxed);
-            total_buffer_bytes_.fetch_sub(freed_bytes, std::memory_order_relaxed);
-        }
-
-        // Step 4: Actually free the memory
-        for (auto& [ptr, deleter] : to_delete) {
-            if (deleter) deleter(ptr);
+public:
+    /// @brief Increment buffer reference count directly
+    bool increment_buffer_refcount(BufferID buffer_id, std::uint32_t increment = 1) {
+        if (buffer_id == 0 || increment == 0) return false;
+        
+        bool found = false;
+        auto& buf_shard = buf_shards_[shard_index(buffer_id)];
+        buf_shard.buffers.access(buffer_id,
+            [&](std::unique_ptr<RefCountedBuffer>& buffer_ptr) {
+                if (buffer_ptr) {
+                    buffer_ptr->alias_count.fetch_add(increment, std::memory_order_acq_rel);
+                    found = true;
+                }
+            });
+        return found;
+    }
+    
+    void increment_buffer_refcounts(const std::unordered_map<BufferID, std::uint32_t>& increments) {
+        for (const auto& [buffer_id, increment] : increments) {
+            increment_buffer_refcount(buffer_id, increment);
         }
     }
+    
+    // =========================================================================
+    // Query Functions
+    // =========================================================================
     
     SCL_NODISCARD bool contains_ptr(const void* ptr) const {
         if (!ptr) return false;
@@ -847,7 +1286,10 @@ public:
         if (!alias_ptr) return 0;
         
         BufferID id = 0;
-        alias_shards_[shard_index(alias_ptr)].aliases.find(const_cast<void*>(alias_ptr), id);
+        alias_shards_[shard_index(alias_ptr)].aliases.access(alias_ptr,
+            [&](const AliasRecord& rec) {
+                id = rec.buffer_id;
+            });
         return id;
     }
     
@@ -858,121 +1300,15 @@ public:
         buf_shards_[shard_index(buffer_id)].buffers.access(buffer_id,
             [&](const std::unique_ptr<RefCountedBuffer>& buffer_ptr) {
                 if (buffer_ptr) {
-                    result = buffer_ptr->refcount.load(std::memory_order_relaxed);
+                    result = buffer_ptr->alias_count.load(std::memory_order_relaxed);
                 }
             });
         return result;
     }
     
-    /// @brief Increment reference count for a buffer
-    /// @param buffer_id Buffer ID to increment
-    /// @param increment Amount to increment (default 1)
-    /// @return true if buffer exists and increment succeeded, false otherwise
-    bool increment_buffer_refcount(BufferID buffer_id, std::uint32_t increment = 1) {
-        if (buffer_id == 0 || increment == 0) return false;
-        
-        bool found = false;
-        auto& buf_shard = buf_shards_[shard_index(buffer_id)];
-        buf_shard.buffers.access(buffer_id,
-            [&](std::unique_ptr<RefCountedBuffer>& buffer_ptr) {
-                if (buffer_ptr) {
-                    buffer_ptr->refcount.fetch_add(increment, std::memory_order_acq_rel);
-                    found = true;
-                }
-            });
-        return found;
-    }
-    
-    /// @brief Increment reference counts for multiple buffers
-    /// @param increments Map of buffer_id -> increment amount
-    void increment_buffer_refcounts(const std::unordered_map<BufferID, std::uint32_t>& increments) {
-        for (const auto& [buffer_id, increment] : increments) {
-            increment_buffer_refcount(buffer_id, increment);
-        }
-    }
-
-    /// @brief Decrement buffer reference counts without removing alias mappings
-    /// @note Used by views that share pointers with original matrices
-    /// @note Alias mappings are only removed when buffer is actually freed
-    /// @param alias_ptrs Pointers to look up and decrement
-    void decrement_buffer_refcounts(std::span<void* const> alias_ptrs) {
-        if (alias_ptrs.empty()) return;
-
-        // Step 1: Look up buffer IDs WITHOUT removing aliases yet
-        std::unordered_map<BufferID, std::vector<void*>> buffer_to_aliases;
-        buffer_to_aliases.reserve(alias_ptrs.size());
-
-        for (void* ptr : alias_ptrs) {
-            if (!ptr) continue;
-            BufferID id = get_buffer_id(ptr);  // Only lookup, don't erase
-            if (id != 0) {
-                buffer_to_aliases[id].push_back(ptr);
-            }
-        }
-
-        if (buffer_to_aliases.empty()) return;
-
-        // Step 2: Decrement reference counts and identify buffers to free
-        std::vector<std::pair<void*, Deleter>> to_delete;
-        std::vector<BufferID> buffers_to_cleanup;
-        to_delete.reserve(buffer_to_aliases.size());
-        buffers_to_cleanup.reserve(buffer_to_aliases.size());
-
-        std::size_t freed_buffers = 0;
-        std::size_t freed_bytes = 0;
-
-        for (const auto& [buffer_id, aliases] : buffer_to_aliases) {
-            std::uint32_t decrement = static_cast<std::uint32_t>(aliases.size());
-            auto& buf_shard = buf_shards_[shard_index(buffer_id)];
-
-            buf_shard.buffers.access_and_maybe_erase(buffer_id,
-                [&](std::unique_ptr<RefCountedBuffer>& buffer_ptr) -> bool {
-                    if (!buffer_ptr) return false;
-
-                    std::uint32_t old_refcount = buffer_ptr->refcount.fetch_sub(
-                        decrement, std::memory_order_acq_rel);
-
-                    if (old_refcount == decrement) {
-                        // Last reference - prepare to delete
-                        to_delete.emplace_back(
-                            buffer_ptr->info.real_ptr,
-                            get_deleter(buffer_ptr->info.type, buffer_ptr->info.custom_deleter));
-                        freed_bytes += buffer_ptr->info.byte_size;
-                        ++freed_buffers;
-                        buffers_to_cleanup.push_back(buffer_id);
-                        return true;  // Remove buffer record
-                    }
-                    return false;
-                });
-        }
-
-        // Step 3: Remove alias mappings ONLY for buffers that were freed
-        for (BufferID freed_id : buffers_to_cleanup) {
-            const auto& aliases = buffer_to_aliases[freed_id];
-            for (void* ptr : aliases) {
-                auto& alias_shard = alias_shards_[shard_index(ptr)];
-                alias_shard.aliases.erase(ptr);
-            }
-        }
-
-        if (freed_buffers > 0) {
-            total_buffers_.fetch_sub(freed_buffers, std::memory_order_relaxed);
-            total_buffer_bytes_.fetch_sub(freed_bytes, std::memory_order_relaxed);
-        }
-
-        // Step 4: Actually free the memory
-        for (auto& [ptr, deleter] : to_delete) {
-            if (deleter) deleter(ptr);
-        }
-    }
-
-    /// @brief Remove alias mappings and decrement buffer refcounts for owner matrices
-    /// @note Used when the original owner matrix (not a view) is destroyed
-    /// @param alias_ptrs Pointers to remove from alias table and decrement
-    void unregister_aliases_as_owner(std::span<void* const> alias_ptrs) {
-        // This is the same as unregister_aliases - keeping for semantic clarity
-        unregister_aliases(alias_ptrs);
-    }
+    // =========================================================================
+    // Statistics
+    // =========================================================================
     
     SCL_NODISCARD std::size_t ptr_count() const noexcept {
         return total_ptrs_.load(std::memory_order_relaxed);
@@ -988,6 +1324,10 @@ public:
     
     SCL_NODISCARD std::size_t buffer_bytes() const noexcept {
         return total_buffer_bytes_.load(std::memory_order_relaxed);
+    }
+    
+    SCL_NODISCARD std::size_t alias_count() const noexcept {
+        return total_aliases_.load(std::memory_order_relaxed);
     }
     
     SCL_NODISCARD std::size_t total_count() const noexcept {
@@ -1010,7 +1350,12 @@ public:
         return result;
     }
     
+    // =========================================================================
+    // Cleanup
+    // =========================================================================
+    
     void clear_all_and_free() {
+        // Free simple pointers
         for (auto& shard : ptr_shards_) {
             shard.records.for_each_mut([this](void* ptr, PtrRecord& rec) {
                 auto deleter = get_deleter(rec.type, rec.custom_deleter);
@@ -1019,10 +1364,12 @@ public:
             shard.records.clear();
         }
         
+        // Clear aliases
         for (auto& shard : alias_shards_) {
             shard.aliases.clear();
         }
         
+        // Free buffers
         for (auto& shard : buf_shards_) {
             shard.buffers.for_each_mut([this](BufferID, std::unique_ptr<RefCountedBuffer>& buffer_ptr) {
                 if (buffer_ptr) {
@@ -1037,18 +1384,20 @@ public:
         total_ptr_bytes_.store(0, std::memory_order_relaxed);
         total_buffers_.store(0, std::memory_order_relaxed);
         total_buffer_bytes_.store(0, std::memory_order_relaxed);
+        total_aliases_.store(0, std::memory_order_relaxed);
     }
     
     ~Registry() {
 #ifndef NDEBUG
         std::size_t leaked_ptrs = ptr_count();
         std::size_t leaked_buffers = buffer_count();
+        std::size_t leaked_aliases = alias_count();
         std::size_t leaked_bytes = total_bytes();
         
         if (leaked_ptrs > 0 || leaked_buffers > 0) {
             std::fprintf(stderr,
-                "WARNING: Registry leaked %zu pointers + %zu buffers (%zu bytes total)\n",
-                leaked_ptrs, leaked_buffers, leaked_bytes);
+                "WARNING: Registry leaked %zu pointers + %zu buffers + %zu aliases (%zu bytes total)\n",
+                leaked_ptrs, leaked_buffers, leaked_aliases, leaked_bytes);
         }
 #endif
         clear_all_and_free();
@@ -1106,11 +1455,32 @@ inline bool register_shared_buffer(void* real_ptr, std::size_t byte_size,
 }
 
 inline bool unregister_alias(void* alias_ptr) {
-    return get_registry().unregister_alias(alias_ptr);
+    return get_registry().alias_decref(alias_ptr);
 }
 
 inline void unregister_aliases(std::span<void* const> alias_ptrs) {
-    get_registry().unregister_aliases(alias_ptrs);
+    get_registry().alias_decref_batch(alias_ptrs);
+}
+
+// NEW: Alias reference counting functions
+inline bool alias_incref(void* alias_ptr, std::uint32_t increment = 1) {
+    return get_registry().alias_incref(alias_ptr, increment);
+}
+
+inline bool alias_decref(void* alias_ptr) {
+    return get_registry().alias_decref(alias_ptr);
+}
+
+inline void alias_incref_batch(std::span<void* const> alias_ptrs, std::uint32_t increment = 1) {
+    get_registry().alias_incref_batch(alias_ptrs, increment);
+}
+
+inline void alias_decref_batch(std::span<void* const> alias_ptrs) {
+    get_registry().alias_decref_batch(alias_ptrs);
+}
+
+inline std::uint32_t alias_refcount(void* alias_ptr) {
+    return get_registry().alias_refcount(alias_ptr);
 }
 
 // =============================================================================
@@ -1129,7 +1499,7 @@ public:
     ~RegistryGuard() {
         if (!released_ && ptr_) {
             if (is_alias_) {
-                get_registry().unregister_alias(ptr_);
+                get_registry().alias_decref(ptr_);
             } else {
                 get_registry().unregister_ptr(ptr_);
             }
@@ -1150,7 +1520,7 @@ public:
         if (this != &other) {
             if (!released_ && ptr_) {
                 if (is_alias_) {
-                    get_registry().unregister_alias(ptr_);
+                    get_registry().alias_decref(ptr_);
                 } else {
                     get_registry().unregister_ptr(ptr_);
                 }

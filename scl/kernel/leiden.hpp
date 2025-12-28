@@ -251,8 +251,8 @@ SCL_HOT Real compute_total_weight_simd(const Sparse<T, IsCSR>& adj) {
     
     Real total = Real(0);
     for (Index i = 0; i < n; ++i) {
-        auto values = adj.primary_values(i);
-        const Size len = static_cast<Size>(adj.primary_length(i));
+        auto values = adj.primary_values_unsafe(i);
+        const Size len = static_cast<Size>(adj.primary_length_unsafe(i));
         
         if (len >= config::SIMD_THRESHOLD) {
             auto v_sum = s::Zero(d);
@@ -287,8 +287,8 @@ SCL_HOT void compute_node_degrees_simd(const Sparse<T, IsCSR>& adj, Real* degree
     const size_t lanes = s::Lanes(d);
     if (static_cast<Size>(n) >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i) {
-            auto values = adj.primary_values(static_cast<Index>(i));
-            const Size len = static_cast<Size>(adj.primary_length(static_cast<Index>(i)));
+            auto values = adj.primary_values_unsafe(static_cast<Index>(i));
+            const Size len = static_cast<Size>(adj.primary_length_unsafe(static_cast<Index>(i)));
             
             Real deg = Real(0);
             
@@ -315,8 +315,8 @@ SCL_HOT void compute_node_degrees_simd(const Sparse<T, IsCSR>& adj, Real* degree
         });
     } else {
         for (Index i = 0; i < n; ++i) {
-            auto values = adj.primary_values(i);
-            const Size len = static_cast<Size>(adj.primary_length(i));
+            auto values = adj.primary_values_unsafe(i);
+            const Size len = static_cast<Size>(adj.primary_length_unsafe(i));
             
             Real deg = Real(0);
             for (Size k = 0; k < len; ++k) {
@@ -381,9 +381,9 @@ SCL_HOT bool local_moving_phase(
         const Real k_i = degrees[i];
         if (k_i <= Real(0)) continue;
 
-        auto indices = adj.primary_indices(i);
-        auto values = adj.primary_values(i);
-        const Index len = adj.primary_length(i);
+        auto indices = adj.primary_indices_unsafe(i);
+        auto values = adj.primary_values_unsafe(i);
+        const Index len = adj.primary_length_unsafe(i);
         if (len == 0) continue;
 
         // Build neighbor community weights using hash table
@@ -487,9 +487,9 @@ SCL_HOT bool parallel_local_moving(
             const Real k_i = degrees[node];
             if (k_i <= Real(0)) return;
 
-            auto indices = adj.primary_indices(node);
-            auto values = adj.primary_values(node);
-            const Index len = adj.primary_length(node);
+            auto indices = adj.primary_indices_unsafe(node);
+            auto values = adj.primary_values_unsafe(node);
+            const Index len = adj.primary_length_unsafe(node);
             if (len == 0) return;
 
             // Thread-local hash table
@@ -629,9 +629,9 @@ void refinement_phase(
             const Real k_i = degrees[i];
             if (k_i <= Real(0)) continue;
 
-            auto indices = adj.primary_indices(i);
-            auto values = adj.primary_values(i);
-            const Index len = adj.primary_length(i);
+            auto indices = adj.primary_indices_unsafe(i);
+            auto values = adj.primary_values_unsafe(i);
+            const Index len = adj.primary_length_unsafe(i);
 
             // Find candidate refined communities
             neighbor_weights.clear();
@@ -752,9 +752,9 @@ AggregatedGraph<T> aggregate_graph(
         edge_weights.clear();
         for (Index i = 0; i < n; ++i) {
             if (node_to_comm[i] != c) continue;
-            auto indices = adj.primary_indices(i);
-            auto values = adj.primary_values(i);
-            const Index len = adj.primary_length(i);
+            auto indices = adj.primary_indices_unsafe(i);
+            auto values = adj.primary_values_unsafe(i);
+            const Index len = adj.primary_length_unsafe(i);
             for (Index k = 0; k < len; ++k) {
                 Index target_comm = node_to_comm[indices[k]];
                 edge_weights.insert_or_add(target_comm, static_cast<Real>(values[k]));
@@ -780,9 +780,9 @@ AggregatedGraph<T> aggregate_graph(
         edge_weights.clear();
         for (Index i = 0; i < n; ++i) {
             if (node_to_comm[i] != c) continue;
-            auto indices = adj.primary_indices(i);
-            auto values = adj.primary_values(i);
-            const Index len = adj.primary_length(i);
+            auto indices = adj.primary_indices_unsafe(i);
+            auto values = adj.primary_values_unsafe(i);
+            const Index len = adj.primary_length_unsafe(i);
             for (Index k = 0; k < len; ++k) {
                 Index target_comm = node_to_comm[indices[k]];
                 edge_weights.insert_or_add(target_comm, static_cast<Real>(values[k]));
@@ -1037,9 +1037,9 @@ Real compute_modularity(
         scl::algo::zero(partial_Q, n_threads);
 
         scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
-            auto indices = adjacency.primary_indices(static_cast<Index>(i));
-            auto values = adjacency.primary_values(static_cast<Index>(i));
-            const Index len = adjacency.primary_length(static_cast<Index>(i));
+            auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+            auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
             Real local_sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -1057,9 +1057,9 @@ Real compute_modularity(
         scl::memory::aligned_free(partial_Q, SCL_ALIGNMENT);
     } else {
         for (Index i = 0; i < n; ++i) {
-            auto indices = adjacency.primary_indices(i);
-            auto values = adjacency.primary_values(i);
-            const Index len = adjacency.primary_length(i);
+            auto indices = adjacency.primary_indices_unsafe(i);
+            auto values = adjacency.primary_values_unsafe(i);
+            const Index len = adjacency.primary_length_unsafe(i);
             for (Index k = 0; k < len; ++k) {
                 if (labels[indices[k]] == labels[i]) {
                     Q += static_cast<Real>(values[k]);

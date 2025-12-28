@@ -153,21 +153,21 @@ void kmeans_pp_init(
     for (Size c = 1; c < k; ++c) {
         Index last_center = centers[c - 1];
 
-        const Index center_start = data.row_indices()[last_center];
-        const Index center_end = data.row_indices()[last_center + 1];
+        const Index center_start = data.row_indices_unsafe()[last_center];
+        const Index center_end = data.row_indices_unsafe()[last_center + 1];
 
         // Parallel distance update
         auto update_distance = [&](Size i) {
             Real dist = Real(0.0);
 
-            const Index row_start = data.row_indices()[i];
-            const Index row_end = data.row_indices()[i + 1];
+            const Index row_start = data.row_indices_unsafe()[i];
+            const Index row_end = data.row_indices_unsafe()[i + 1];
 
             // Sparse distance computation with merge
             Index ci = center_start, ri = row_start;
             while (ci < center_end && ri < row_end) {
-                Index c_col = data.col_indices()[ci];
-                Index r_col = data.col_indices()[ri];
+                Index c_col = data.col_indices_unsafe()[ci];
+                Index r_col = data.col_indices_unsafe()[ri];
 
                 if (c_col == r_col) {
                     Real diff = static_cast<Real>(data.values()[ci]) -
@@ -268,11 +268,11 @@ void geometric_sketching(
 
     // Find bounds
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = data.row_indices()[i];
-        const Index row_end = data.row_indices()[i + 1];
+        const Index row_start = data.row_indices_unsafe()[i];
+        const Index row_end = data.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index feature = data.col_indices()[j];
+            Index feature = data.col_indices_unsafe()[j];
             Real val = static_cast<Real>(data.values()[j]);
             min_vals[feature] = scl::algo::min2(min_vals[feature], val);
             max_vals[feature] = scl::algo::max2(max_vals[feature], val);
@@ -302,11 +302,11 @@ void geometric_sketching(
             point_buffer[d] = Real(0.0);
         }
 
-        const Index row_start = data.row_indices()[i];
-        const Index row_end = data.row_indices()[i + 1];
+        const Index row_start = data.row_indices_unsafe()[i];
+        const Index row_end = data.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index feature = data.col_indices()[j];
+            Index feature = data.col_indices_unsafe()[j];
             point_buffer[feature] = static_cast<Real>(data.values()[j]);
         }
 
@@ -392,8 +392,8 @@ void density_preserving(
     Real* density = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
 
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = neighbors.row_indices()[i];
-        const Index row_end = neighbors.row_indices()[i + 1];
+        const Index row_start = neighbors.row_indices_unsafe()[i];
+        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
         density[i] = static_cast<Real>(row_end - row_start + 1);  // +1 for self
     }
 
@@ -524,11 +524,11 @@ void representative_cells(
 
     for (Size i = 0; i < n_cells; ++i) {
         Index c = cluster_labels.ptr[i];
-        const Index row_start = data.row_indices()[i];
-        const Index row_end = data.row_indices()[i + 1];
+        const Index row_start = data.row_indices_unsafe()[i];
+        const Index row_end = data.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index feature = data.col_indices()[j];
+            Index feature = data.col_indices_unsafe()[j];
             centroids[c][feature] += static_cast<Real>(data.values()[j]);
         }
     }
@@ -552,12 +552,12 @@ void representative_cells(
             Index cell = cluster_indices[c][idx];
             Real dist = Real(0.0);
 
-            const Index row_start = data.row_indices()[cell];
-            const Index row_end = data.row_indices()[cell + 1];
+            const Index row_start = data.row_indices_unsafe()[cell];
+            const Index row_end = data.row_indices_unsafe()[cell + 1];
 
             // Sparse distance to centroid
             for (Index j = row_start; j < row_end; ++j) {
-                Index feature = data.col_indices()[j];
+                Index feature = data.col_indices_unsafe()[j];
                 Real diff = static_cast<Real>(data.values()[j]) - centroids[c][feature];
                 dist += diff * diff;
             }
@@ -567,7 +567,7 @@ void representative_cells(
                 if (centroids[c][d] != Real(0.0)) {
                     bool found = false;
                     for (Index j = row_start; j < row_end; ++j) {
-                        if (data.col_indices()[j] == static_cast<Index>(d)) {
+                        if (data.col_indices_unsafe()[j] == static_cast<Index>(d)) {
                             found = true;
                             break;
                         }

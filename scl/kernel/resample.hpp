@@ -230,12 +230,12 @@ void downsample(
         detail::FastRNG rng(seed + p * 0x9e3779b97f4a7c15ULL);
         
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
         
         if (SCL_UNLIKELY(len_sz == 0)) return;
         
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         
         Real current_sum = detail::sum_simd_4way(values.ptr, len_sz);
         
@@ -277,12 +277,12 @@ void downsample_variable(
         detail::FastRNG rng(seed + p * 0x9e3779b97f4a7c15ULL);
         
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
         
         if (SCL_UNLIKELY(len_sz == 0)) return;
         
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         
         Real current_sum = detail::sum_simd_4way(values.ptr, len_sz);
         Real target = target_counts[p];
@@ -323,12 +323,12 @@ void binomial_resample(
         detail::FastRNG rng(seed + row * 0x9e3779b97f4a7c15ULL);
         
         const Index idx = static_cast<Index>(row);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
         
         if (SCL_UNLIKELY(len_sz == 0)) return;
         
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         
         for (Size k = 0; k < len_sz; ++k) {
             if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len_sz)) {
@@ -354,12 +354,12 @@ void poisson_resample(
         detail::FastRNG rng(seed + row * 0x9e3779b97f4a7c15ULL);
         
         const Index idx = static_cast<Index>(row);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
         
         if (SCL_UNLIKELY(len_sz == 0)) return;
         
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         
         for (Size k = 0; k < len_sz; ++k) {
             if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len_sz)) {

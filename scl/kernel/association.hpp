@@ -88,9 +88,9 @@ SCL_FORCE_INLINE Real pearson_correlation(
 
     // Gather values for feature1 from data1 using binary search
     for (Size c = 0; c < n_cells; ++c) {
-        const Index row_start = data1.row_indices()[c];
-        const Index row_end = data1.row_indices()[c + 1];
-        Index pos = binary_search_feature(data1.col_indices(), row_start, row_end, feature1);
+        const Index row_start = data1.row_indices_unsafe()[c];
+        const Index row_end = data1.row_indices_unsafe()[c + 1];
+        Index pos = binary_search_feature(data1.col_indices_unsafe(), row_start, row_end, feature1);
         if (pos >= 0) {
             vals1[c] = static_cast<Real>(data1.values()[pos]);
         }
@@ -98,9 +98,9 @@ SCL_FORCE_INLINE Real pearson_correlation(
 
     // Gather values for feature2 from data2 using binary search
     for (Size c = 0; c < n_cells; ++c) {
-        const Index row_start = data2.row_indices()[c];
-        const Index row_end = data2.row_indices()[c + 1];
-        Index pos = binary_search_feature(data2.col_indices(), row_start, row_end, feature2);
+        const Index row_start = data2.row_indices_unsafe()[c];
+        const Index row_end = data2.row_indices_unsafe()[c + 1];
+        Index pos = binary_search_feature(data2.col_indices_unsafe(), row_start, row_end, feature2);
         if (pos >= 0) {
             vals2[c] = static_cast<Real>(data2.values()[pos]);
         }
@@ -167,9 +167,9 @@ SCL_FORCE_INLINE Real spearman_correlation(
 
     // Gather values for feature1 using binary search
     for (Size c = 0; c < n_cells; ++c) {
-        const Index row_start = data1.row_indices()[c];
-        const Index row_end = data1.row_indices()[c + 1];
-        Index pos = binary_search_feature(data1.col_indices(), row_start, row_end, feature1);
+        const Index row_start = data1.row_indices_unsafe()[c];
+        const Index row_end = data1.row_indices_unsafe()[c + 1];
+        Index pos = binary_search_feature(data1.col_indices_unsafe(), row_start, row_end, feature1);
         if (pos >= 0) {
             vals1[c] = static_cast<Real>(data1.values()[pos]);
         }
@@ -177,9 +177,9 @@ SCL_FORCE_INLINE Real spearman_correlation(
 
     // Gather values for feature2 using binary search
     for (Size c = 0; c < n_cells; ++c) {
-        const Index row_start = data2.row_indices()[c];
-        const Index row_end = data2.row_indices()[c + 1];
-        Index pos = binary_search_feature(data2.col_indices(), row_start, row_end, feature2);
+        const Index row_start = data2.row_indices_unsafe()[c];
+        const Index row_end = data2.row_indices_unsafe()[c + 1];
+        Index pos = binary_search_feature(data2.col_indices_unsafe(), row_start, row_end, feature2);
         if (pos >= 0) {
             vals2[c] = static_cast<Real>(data2.values()[pos]);
         }
@@ -425,15 +425,15 @@ void multimodal_neighbors(
 
             // Distance in modality 1
             Real dist1 = Real(0.0);
-            const Index start1_i = modality1.row_indices()[i];
-            const Index end1_i = modality1.row_indices()[i + 1];
-            const Index start1_j = modality1.row_indices()[j];
-            const Index end1_j = modality1.row_indices()[j + 1];
+            const Index start1_i = modality1.row_indices_unsafe()[i];
+            const Index end1_i = modality1.row_indices_unsafe()[i + 1];
+            const Index start1_j = modality1.row_indices_unsafe()[j];
+            const Index end1_j = modality1.row_indices_unsafe()[j + 1];
 
             Index i1 = start1_i, j1 = start1_j;
             while (i1 < end1_i && j1 < end1_j) {
-                Index col_i = modality1.col_indices()[i1];
-                Index col_j = modality1.col_indices()[j1];
+                Index col_i = modality1.col_indices_unsafe()[i1];
+                Index col_j = modality1.col_indices_unsafe()[j1];
                 if (col_i == col_j) {
                     Real diff = static_cast<Real>(modality1.values()[i1]) -
                                static_cast<Real>(modality1.values()[j1]);
@@ -460,15 +460,15 @@ void multimodal_neighbors(
 
             // Distance in modality 2
             Real dist2 = Real(0.0);
-            const Index start2_i = modality2.row_indices()[i];
-            const Index end2_i = modality2.row_indices()[i + 1];
-            const Index start2_j = modality2.row_indices()[j];
-            const Index end2_j = modality2.row_indices()[j + 1];
+            const Index start2_i = modality2.row_indices_unsafe()[i];
+            const Index end2_i = modality2.row_indices_unsafe()[i + 1];
+            const Index start2_j = modality2.row_indices_unsafe()[j];
+            const Index end2_j = modality2.row_indices_unsafe()[j + 1];
 
             Index i2 = start2_i, j2 = start2_j;
             while (i2 < end2_i && j2 < end2_j) {
-                Index col_i = modality2.col_indices()[i2];
-                Index col_j = modality2.col_indices()[j2];
+                Index col_i = modality2.col_indices_unsafe()[i2];
+                Index col_j = modality2.col_indices_unsafe()[j2];
                 if (col_i == col_j) {
                     Real diff = static_cast<Real>(modality2.values()[i2]) -
                                static_cast<Real>(modality2.values()[j2]);
@@ -584,16 +584,16 @@ void correlation_in_subset(
         vals1[s] = Real(0.0);
         vals2[s] = Real(0.0);
 
-        const Index row_start1 = data1.row_indices()[c];
-        const Index row_end1 = data1.row_indices()[c + 1];
-        Index pos1 = detail::binary_search_feature(data1.col_indices(), row_start1, row_end1, feature1);
+        const Index row_start1 = data1.row_indices_unsafe()[c];
+        const Index row_end1 = data1.row_indices_unsafe()[c + 1];
+        Index pos1 = detail::binary_search_feature(data1.col_indices_unsafe(), row_start1, row_end1, feature1);
         if (pos1 >= 0) {
             vals1[s] = static_cast<Real>(data1.values()[pos1]);
         }
 
-        const Index row_start2 = data2.row_indices()[c];
-        const Index row_end2 = data2.row_indices()[c + 1];
-        Index pos2 = detail::binary_search_feature(data2.col_indices(), row_start2, row_end2, feature2);
+        const Index row_start2 = data2.row_indices_unsafe()[c];
+        const Index row_end2 = data2.row_indices_unsafe()[c + 1];
+        Index pos2 = detail::binary_search_feature(data2.col_indices_unsafe(), row_start2, row_end2, feature2);
         if (pos2 >= 0) {
             vals2[s] = static_cast<Real>(data2.values()[pos2]);
         }
@@ -647,11 +647,11 @@ void peak_to_gene_activity(
         scl::algo::zero(cell_activity, n_genes);
 
         // Aggregate peak accessibility to gene activity
-        const Index row_start = atac.row_indices()[c];
-        const Index row_end = atac.row_indices()[c + 1];
+        const Index row_start = atac.row_indices_unsafe()[c];
+        const Index row_end = atac.row_indices_unsafe()[c + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index peak = atac.col_indices()[j];
+            Index peak = atac.col_indices_unsafe()[j];
             if (peak < static_cast<Index>(n_peaks)) {
                 Index gene = peak_to_gene_map[peak];
                 if (gene >= 0 && gene < static_cast<Index>(n_genes)) {

@@ -179,15 +179,15 @@ SCL_HOT void spmv_parallel(
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = mat.primary_indices(idx);
-            auto values = mat.primary_values(idx);
-            const Index len = mat.primary_length(idx);
+            auto indices = mat.primary_indices_unsafe(idx);
+            auto values = mat.primary_values_unsafe(idx);
+            const Index len = mat.primary_length_unsafe(idx);
 
             Real sum = Real(0);
 
             // Prefetch next row's indices
             if (SCL_LIKELY(i + 1 < n)) {
-                SCL_PREFETCH_READ(mat.primary_indices(idx + 1).ptr, 0);
+                SCL_PREFETCH_READ(mat.primary_indices_unsafe(idx + 1).ptr, 0);
             }
 
             // 4-way unrolled accumulation
@@ -208,9 +208,9 @@ SCL_HOT void spmv_parallel(
     } else {
         for (Size i = 0; i < n; ++i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = mat.primary_indices(idx);
-            auto values = mat.primary_values(idx);
-            const Index len = mat.primary_length(idx);
+            auto indices = mat.primary_indices_unsafe(idx);
+            auto values = mat.primary_values_unsafe(idx);
+            const Index len = mat.primary_length_unsafe(idx);
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -241,9 +241,9 @@ SCL_HOT void spmm_block(
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = mat.primary_indices(idx);
-            auto values = mat.primary_values(idx);
-            const Index len = mat.primary_length(idx);
+            auto indices = mat.primary_indices_unsafe(idx);
+            auto values = mat.primary_values_unsafe(idx);
+            const Index len = mat.primary_length_unsafe(idx);
 
             Real* Yi = Y + i * n_cols;
 
@@ -259,9 +259,9 @@ SCL_HOT void spmm_block(
     } else {
         for (Size i = 0; i < n; ++i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = mat.primary_indices(idx);
-            auto values = mat.primary_values(idx);
-            const Index len = mat.primary_length(idx);
+            auto indices = mat.primary_indices_unsafe(idx);
+            auto values = mat.primary_values_unsafe(idx);
+            const Index len = mat.primary_length_unsafe(idx);
 
             Real* Yi = Y + i * n_cols;
 
@@ -297,9 +297,9 @@ SCL_HOT void spmv_fused_linear(
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = mat.primary_indices(idx);
-            auto values = mat.primary_values(idx);
-            const Index len = mat.primary_length(idx);
+            auto indices = mat.primary_indices_unsafe(idx);
+            auto values = mat.primary_values_unsafe(idx);
+            const Index len = mat.primary_length_unsafe(idx);
 
             Real sum = Real(0);
             Index k = 0;
@@ -318,9 +318,9 @@ SCL_HOT void spmv_fused_linear(
     } else {
         for (Size i = 0; i < n; ++i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = mat.primary_indices(idx);
-            auto values = mat.primary_values(idx);
-            const Index len = mat.primary_length(idx);
+            auto indices = mat.primary_indices_unsafe(idx);
+            auto values = mat.primary_values_unsafe(idx);
+            const Index len = mat.primary_length_unsafe(idx);
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -463,8 +463,8 @@ SCL_HOT void compute_row_sums_parallel(
 
     if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            auto values = adj.primary_values(static_cast<Index>(i));
-            const Size len = static_cast<Size>(adj.primary_length(static_cast<Index>(i)));
+            auto values = adj.primary_values_unsafe(static_cast<Index>(i));
+            const Size len = static_cast<Size>(adj.primary_length_unsafe(static_cast<Index>(i)));
 
             Real sum = Real(0);
             for (Size k = 0; k < len; ++k) {
@@ -474,8 +474,8 @@ SCL_HOT void compute_row_sums_parallel(
         });
     } else {
         for (Index i = 0; i < n; ++i) {
-            auto values = adj.primary_values(i);
-            const Index len = adj.primary_length(i);
+            auto values = adj.primary_values_unsafe(i);
+            const Index len = adj.primary_length_unsafe(i);
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -528,12 +528,12 @@ void compute_transition_matrix(
             Size* offsets = scl::memory::aligned_alloc<Size>(N + 1, SCL_ALIGNMENT);
             offsets[0] = 0;
             for (Index i = 0; i < n; ++i) {
-                offsets[i + 1] = offsets[i] + static_cast<Size>(adjacency.primary_length(i));
+                offsets[i + 1] = offsets[i] + static_cast<Size>(adjacency.primary_length_unsafe(i));
             }
 
             scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-                auto indices = adjacency.primary_indices(static_cast<Index>(i));
-                const Index len = adjacency.primary_length(static_cast<Index>(i));
+                auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+                const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
                 Size base = offsets[i];
                 Real di = d_inv_sqrt[i];
 
@@ -547,8 +547,8 @@ void compute_transition_matrix(
         } else {
             Size val_idx = 0;
             for (Index i = 0; i < n; ++i) {
-                auto indices = adjacency.primary_indices(i);
-                const Index len = adjacency.primary_length(i);
+                auto indices = adjacency.primary_indices_unsafe(i);
+                const Index len = adjacency.primary_length_unsafe(i);
                 Real di = d_inv_sqrt[i];
 
                 for (Index k = 0; k < len; ++k) {
@@ -565,11 +565,11 @@ void compute_transition_matrix(
             Size* offsets = scl::memory::aligned_alloc<Size>(N + 1, SCL_ALIGNMENT);
             offsets[0] = 0;
             for (Index i = 0; i < n; ++i) {
-                offsets[i + 1] = offsets[i] + static_cast<Size>(adjacency.primary_length(i));
+                offsets[i + 1] = offsets[i] + static_cast<Size>(adjacency.primary_length_unsafe(i));
             }
 
             scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-                const Index len = adjacency.primary_length(static_cast<Index>(i));
+                const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
                 Size base = offsets[i];
                 Real inv_sum = (row_sums[i] > config::MIN_PROB)
                     ? Real(1) / row_sums[i] : Real(0);
@@ -583,7 +583,7 @@ void compute_transition_matrix(
         } else {
             Size val_idx = 0;
             for (Index i = 0; i < n; ++i) {
-                const Index len = adjacency.primary_length(i);
+                const Index len = adjacency.primary_length_unsafe(i);
                 Real inv_sum = (row_sums[i] > config::MIN_PROB)
                     ? Real(1) / row_sums[i] : Real(0);
 

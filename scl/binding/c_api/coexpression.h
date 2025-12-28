@@ -5,7 +5,7 @@
 // BRIEF: C API for co-expression module detection (WGCNA-style)
 // =============================================================================
 
-#include "scl/binding/c_api/core.h"
+#include "scl/binding/c_api/core/core.h"
 
 #ifdef __cplusplus
 extern "C" {

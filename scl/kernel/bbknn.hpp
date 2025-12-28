@@ -240,7 +240,7 @@ void compute_norms(
     const Index primary_dim = matrix.primary_dim();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        auto vals = matrix.primary_values(static_cast<Index>(p));
+        auto vals = matrix.primary_values_unsafe(static_cast<Index>(p));
         norms_sq[p] = scl::vectorize::sum_squared(Array<const T>(vals.data(), vals.size()));
     });
 }
@@ -357,8 +357,8 @@ void bbknn(
 
         Index query_idx = static_cast<Index>(i);
 
-        auto q_vals_arr = matrix.primary_values(query_idx);
-        auto q_inds_arr = matrix.primary_indices(query_idx);
+        auto q_vals_arr = matrix.primary_values_unsafe(query_idx);
+        auto q_inds_arr = matrix.primary_indices_unsafe(query_idx);
 
         Size q_len = q_vals_arr.size();
         const T* q_vals = q_vals_arr.data();
@@ -378,8 +378,8 @@ void bbknn(
                 Index cand_idx = group_data[g];
                 if (cand_idx == query_idx) continue;
 
-                auto c_vals_arr = matrix.primary_values(cand_idx);
-                auto c_inds_arr = matrix.primary_indices(cand_idx);
+                auto c_vals_arr = matrix.primary_values_unsafe(cand_idx);
+                auto c_inds_arr = matrix.primary_indices_unsafe(cand_idx);
 
                 Size c_len = c_vals_arr.size();
                 const T* c_vals = c_vals_arr.data();

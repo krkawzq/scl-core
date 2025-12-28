@@ -153,11 +153,11 @@ Real silhouette_score(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices()[i];
-            const Index row_end = distances.row_indices()[i + 1];
+            const Index row_start = distances.row_indices_unsafe()[i];
+            const Index row_end = distances.row_indices_unsafe()[i + 1];
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = distances.col_indices()[j];
+                Index neighbor = distances.col_indices_unsafe()[j];
                 if (neighbor == static_cast<Index>(i)) continue;
 
                 T dist_val = distances.values()[j];
@@ -211,11 +211,11 @@ Real silhouette_score(
             cluster_dist_sum[c] = Real(0.0);
         }
 
-        const Index row_start = distances.row_indices()[i];
-        const Index row_end = distances.row_indices()[i + 1];
+        const Index row_start = distances.row_indices_unsafe()[i];
+        const Index row_end = distances.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = distances.col_indices()[j];
+            Index neighbor = distances.col_indices_unsafe()[j];
             if (neighbor == static_cast<Index>(i)) continue;
 
             T dist_val = distances.values()[j];
@@ -290,11 +290,11 @@ void silhouette_samples(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices()[i];
-            const Index row_end = distances.row_indices()[i + 1];
+            const Index row_start = distances.row_indices_unsafe()[i];
+            const Index row_end = distances.row_indices_unsafe()[i + 1];
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = distances.col_indices()[j];
+                Index neighbor = distances.col_indices_unsafe()[j];
                 if (neighbor == static_cast<Index>(i)) continue;
 
                 T dist_val = distances.values()[j];
@@ -340,11 +340,11 @@ void silhouette_samples(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices()[i];
-            const Index row_end = distances.row_indices()[i + 1];
+            const Index row_start = distances.row_indices_unsafe()[i];
+            const Index row_end = distances.row_indices_unsafe()[i + 1];
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = distances.col_indices()[j];
+                Index neighbor = distances.col_indices_unsafe()[j];
                 if (neighbor == static_cast<Index>(i)) continue;
 
                 T dist_val = distances.values()[j];
@@ -560,11 +560,11 @@ Real graph_connectivity(
         while (queue_start < queue_end) {
             Index curr = queue[queue_start++];
 
-            const Index row_start = adjacency.row_indices()[curr];
-            const Index row_end = adjacency.row_indices()[curr + 1];
+            const Index row_start = adjacency.row_indices_unsafe()[curr];
+            const Index row_end = adjacency.row_indices_unsafe()[curr + 1];
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = adjacency.col_indices()[j];
+                Index neighbor = adjacency.col_indices_unsafe()[j];
                 if (component_id[neighbor] < 0 && labels.ptr[neighbor] == my_cluster) {
                     component_id[neighbor] = static_cast<Index>(total_components);
                     queue[queue_end++] = neighbor;
@@ -641,12 +641,12 @@ void batch_entropy(
             batch_counts[b] = 0;
         }
 
-        const Index row_start = neighbors.row_indices()[i];
-        const Index row_end = neighbors.row_indices()[i + 1];
+        const Index row_start = neighbors.row_indices_unsafe()[i];
+        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
         Size total_neighbors = static_cast<Size>(row_end - row_start);
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor_idx = neighbors.col_indices()[j];
+            Index neighbor_idx = neighbors.col_indices_unsafe()[j];
             Index batch = batch_labels.ptr[neighbor_idx];
             ++batch_counts[batch];
         }
@@ -710,12 +710,12 @@ void lisi(
             label_counts[l] = 0;
         }
 
-        const Index row_start = neighbors.row_indices()[i];
-        const Index row_end = neighbors.row_indices()[i + 1];
+        const Index row_start = neighbors.row_indices_unsafe()[i];
+        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
         Size total_neighbors = 0;
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor_idx = neighbors.col_indices()[j];
+            Index neighbor_idx = neighbors.col_indices_unsafe()[j];
             Index label = labels.ptr[neighbor_idx];
             ++label_counts[label];
             ++total_neighbors;

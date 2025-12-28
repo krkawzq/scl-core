@@ -715,11 +715,11 @@ void softmax_inplace(Sparse<T, IsCSR>& matrix) {
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
 
         if (SCL_UNLIKELY(len == 0)) return;
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         detail::softmax_adaptive(values.ptr, static_cast<Size>(len));
     });
 }
@@ -733,11 +733,11 @@ void softmax_inplace(Sparse<T, IsCSR>& matrix, T temperature) {
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
 
         if (SCL_UNLIKELY(len == 0)) return;
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         detail::softmax_with_temperature(values.ptr, static_cast<Size>(len), temperature);
     });
 }
@@ -750,11 +750,11 @@ void log_softmax_inplace(Sparse<T, IsCSR>& matrix) {
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
 
         if (SCL_UNLIKELY(len == 0)) return;
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         detail::log_softmax_adaptive(values.ptr, static_cast<Size>(len));
     });
 }
@@ -768,11 +768,11 @@ void log_softmax_inplace(Sparse<T, IsCSR>& matrix, T temperature) {
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
 
         if (SCL_UNLIKELY(len == 0)) return;
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         detail::log_softmax_with_temperature(values.ptr, static_cast<Size>(len), temperature);
     });
 }

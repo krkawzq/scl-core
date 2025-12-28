@@ -79,7 +79,7 @@ void ttest(
     // Find max row length for buffer allocation
     Size max_len = 0;
     for (Index i = 0; i < primary_dim; ++i) {
-        Size len = static_cast<Size>(matrix.primary_length(i));
+        Size len = static_cast<Size>(matrix.primary_length_unsafe(i));
         if (len > max_len) max_len = len;
     }
 
@@ -90,11 +90,11 @@ void ttest(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        auto values = matrix.primary_values(idx);
-        auto indices = matrix.primary_indices(idx);
+        auto values = matrix.primary_values_unsafe(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
 
         T* SCL_RESTRICT buf1 = buf_pool.get1(thread_rank);
         T* SCL_RESTRICT buf2 = buf_pool.get2(thread_rank);
@@ -201,7 +201,7 @@ void compute_group_stats(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (len_sz == 0) return;
@@ -210,8 +210,8 @@ void compute_group_stats(
         Real* var_ptr = out_vars.ptr + (p * n_groups);
         Size* count_ptr = out_counts.ptr + (p * n_groups);
 
-        auto values = matrix.primary_values(idx);
-        auto indices = matrix.primary_indices(idx);
+        auto values = matrix.primary_values_unsafe(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
 
         Size k = 0;
         for (; k + 4 <= len_sz; k += 4) {

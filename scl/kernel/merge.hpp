@@ -109,10 +109,10 @@ Sparse<T, IsCSR> vstack(
 
     Index* nnzs = scl::memory::aligned_alloc<Index>(total_primary, SCL_ALIGNMENT);
     for (Index i = 0; i < primary1; ++i) {
-        nnzs[i] = matrix1.primary_length(i);
+        nnzs[i] = matrix1.primary_length_unsafe(i);
     }
     for (Index i = 0; i < primary2; ++i) {
-        nnzs[primary1 + i] = matrix2.primary_length(i);
+        nnzs[primary1 + i] = matrix2.primary_length_unsafe(i);
     }
 
     Sparse<T, IsCSR> result = Sparse<T, IsCSR>::create(
@@ -126,13 +126,13 @@ Sparse<T, IsCSR> vstack(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary1), [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        const Index len = matrix1.primary_length(idx);
+        const Index len = matrix1.primary_length_unsafe(idx);
         if (len == 0) return;
 
-        const auto src_values = matrix1.primary_values(idx);
-        const auto src_indices = matrix1.primary_indices(idx);
-        auto dst_values = result.primary_values(idx);
-        auto dst_indices = result.primary_indices(idx);
+        const auto src_values = matrix1.primary_values_unsafe(idx);
+        const auto src_indices = matrix1.primary_indices_unsafe(idx);
+        auto dst_values = result.primary_values_unsafe(idx);
+        auto dst_indices = result.primary_indices_unsafe(idx);
 
         std::memcpy(dst_values.ptr, src_values.ptr, len * sizeof(T));
         std::memcpy(dst_indices.ptr, src_indices.ptr, len * sizeof(Index));
@@ -141,13 +141,13 @@ Sparse<T, IsCSR> vstack(
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary2), [&](size_t i) {
         const Index src_idx = static_cast<Index>(i);
         const Index dst_idx = primary1 + src_idx;
-        const Index len = matrix2.primary_length(src_idx);
+        const Index len = matrix2.primary_length_unsafe(src_idx);
         if (len == 0) return;
 
-        const auto src_values = matrix2.primary_values(src_idx);
-        const auto src_indices = matrix2.primary_indices(src_idx);
-        auto dst_values = result.primary_values(dst_idx);
-        auto dst_indices = result.primary_indices(dst_idx);
+        const auto src_values = matrix2.primary_values_unsafe(src_idx);
+        const auto src_indices = matrix2.primary_indices_unsafe(src_idx);
+        auto dst_values = result.primary_values_unsafe(dst_idx);
+        auto dst_indices = result.primary_indices_unsafe(dst_idx);
 
         std::memcpy(dst_values.ptr, src_values.ptr, len * sizeof(T));
         std::memcpy(dst_indices.ptr, src_indices.ptr, len * sizeof(Index));
@@ -174,7 +174,7 @@ Sparse<T, IsCSR> hstack(
 
     Index* nnzs = scl::memory::aligned_alloc<Index>(primary_dim, SCL_ALIGNMENT);
     for (Index i = 0; i < primary_dim; ++i) {
-        nnzs[i] = matrix1.primary_length(i) + matrix2.primary_length(i);
+        nnzs[i] = matrix1.primary_length_unsafe(i) + matrix2.primary_length_unsafe(i);
     }
 
     Sparse<T, IsCSR> result = Sparse<T, IsCSR>::create(
@@ -189,23 +189,23 @@ Sparse<T, IsCSR> hstack(
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
 
-        const Index len1 = matrix1.primary_length(idx);
-        const Index len2 = matrix2.primary_length(idx);
+        const Index len1 = matrix1.primary_length_unsafe(idx);
+        const Index len2 = matrix2.primary_length_unsafe(idx);
 
-        auto dst_values = result.primary_values(idx);
-        auto dst_indices = result.primary_indices(idx);
+        auto dst_values = result.primary_values_unsafe(idx);
+        auto dst_indices = result.primary_indices_unsafe(idx);
 
         if (len1 > 0) {
-            const auto src1_values = matrix1.primary_values(idx);
-            const auto src1_indices = matrix1.primary_indices(idx);
+            const auto src1_values = matrix1.primary_values_unsafe(idx);
+            const auto src1_indices = matrix1.primary_indices_unsafe(idx);
 
             std::memcpy(dst_values.ptr, src1_values.ptr, len1 * sizeof(T));
             std::memcpy(dst_indices.ptr, src1_indices.ptr, len1 * sizeof(Index));
         }
 
         if (len2 > 0) {
-            const auto src2_values = matrix2.primary_values(idx);
-            const auto src2_indices = matrix2.primary_indices(idx);
+            const auto src2_values = matrix2.primary_values_unsafe(idx);
+            const auto src2_indices = matrix2.primary_indices_unsafe(idx);
 
             std::memcpy(dst_values.ptr + len1, src2_values.ptr, len2 * sizeof(T));
             detail::add_offset_simd(

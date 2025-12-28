@@ -160,12 +160,12 @@ void weight_sum(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p, size_t thread_rank) {
         const Index idx = static_cast<Index>(p);
-        const Index len = graph.primary_length(idx);
+        const Index len = graph.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) return;
 
-        auto values = graph.primary_values(idx);
+        auto values = graph.primary_values_unsafe(idx);
         T* local_sum = partial_sums.get(thread_rank);
         *local_sum += scl::vectorize::sum(Array<const T>(values.ptr, len_sz));
     });
@@ -190,24 +190,24 @@ SCL_FORCE_INLINE Real compute_moran_numer_block(
     Real numer = Real(0);
 
     for (Index i = start_cell; i < end_cell; ++i) {
-        const Index g_len = graph.primary_length(i);
+        const Index g_len = graph.primary_length_unsafe(i);
         const Size g_len_sz = static_cast<Size>(g_len);
 
         if (SCL_UNLIKELY(g_len_sz == 0)) continue;
 
         // Prefetch next cell's graph data
         if (SCL_LIKELY(i + 1 < end_cell)) {
-            const Index next_len = graph.primary_length(i + 1);
+            const Index next_len = graph.primary_length_unsafe(i + 1);
             if (next_len > 0) {
-                auto next_weights = graph.primary_values(i + 1);
-                auto next_indices = graph.primary_indices(i + 1);
+                auto next_weights = graph.primary_values_unsafe(i + 1);
+                auto next_indices = graph.primary_indices_unsafe(i + 1);
                 SCL_PREFETCH_READ(next_weights.ptr, 1);
                 SCL_PREFETCH_READ(next_indices.ptr, 1);
             }
         }
 
-        auto g_weights = graph.primary_values(i);
-        auto g_indices = graph.primary_indices(i);
+        auto g_weights = graph.primary_values_unsafe(i);
+        auto g_indices = graph.primary_indices_unsafe(i);
 
         Real z_i = z[i];
         Real neighbor_sum = compute_weighted_neighbor_sum(
@@ -255,11 +255,11 @@ void morans_i(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_features), [&](size_t f, size_t thread_rank) {
         const Index f_idx = static_cast<Index>(f);
-        const Index len = features.primary_length(f_idx);
+        const Index len = features.primary_length_unsafe(f_idx);
         const Size len_sz = static_cast<Size>(len);
 
-        auto feat_values = features.primary_values(f_idx);
-        auto feat_indices = features.primary_indices(f_idx);
+        auto feat_values = features.primary_values_unsafe(f_idx);
+        auto feat_indices = features.primary_indices_unsafe(f_idx);
 
         Real sum = SCL_LIKELY(len_sz > 0)
             ? static_cast<Real>(scl::vectorize::sum(Array<const T>(feat_values.ptr, len_sz)))
@@ -331,24 +331,24 @@ SCL_FORCE_INLINE Real compute_geary_numer_block(
     Real numer = Real(0);
 
     for (Index i = start_cell; i < end_cell; ++i) {
-        const Index g_len = graph.primary_length(i);
+        const Index g_len = graph.primary_length_unsafe(i);
         const Size g_len_sz = static_cast<Size>(g_len);
 
         if (SCL_UNLIKELY(g_len_sz == 0)) continue;
 
         // Prefetch next cell's graph data
         if (SCL_LIKELY(i + 1 < end_cell)) {
-            const Index next_len = graph.primary_length(i + 1);
+            const Index next_len = graph.primary_length_unsafe(i + 1);
             if (next_len > 0) {
-                auto next_weights = graph.primary_values(i + 1);
-                auto next_indices = graph.primary_indices(i + 1);
+                auto next_weights = graph.primary_values_unsafe(i + 1);
+                auto next_indices = graph.primary_indices_unsafe(i + 1);
                 SCL_PREFETCH_READ(next_weights.ptr, 1);
                 SCL_PREFETCH_READ(next_indices.ptr, 1);
             }
         }
 
-        auto g_weights = graph.primary_values(i);
-        auto g_indices = graph.primary_indices(i);
+        auto g_weights = graph.primary_values_unsafe(i);
+        auto g_indices = graph.primary_indices_unsafe(i);
 
         Real z_i = z[i];
 
@@ -445,11 +445,11 @@ void gearys_c(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_features), [&](size_t f, size_t thread_rank) {
         const Index f_idx = static_cast<Index>(f);
-        const Index len = features.primary_length(f_idx);
+        const Index len = features.primary_length_unsafe(f_idx);
         const Size len_sz = static_cast<Size>(len);
 
-        auto feat_values = features.primary_values(f_idx);
-        auto feat_indices = features.primary_indices(f_idx);
+        auto feat_values = features.primary_values_unsafe(f_idx);
+        auto feat_indices = features.primary_indices_unsafe(f_idx);
 
         Real sum = SCL_LIKELY(len_sz > 0)
             ? static_cast<Real>(scl::vectorize::sum(Array<const T>(feat_values.ptr, len_sz)))

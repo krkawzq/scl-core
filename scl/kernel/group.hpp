@@ -87,7 +87,7 @@ void group_stats(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
 
         Real* mean_ptr = out_means.ptr + (p * n_groups);
         Real* var_ptr = out_vars.ptr + (p * n_groups);
@@ -98,8 +98,8 @@ void group_stats(
             return;
         }
 
-        const auto values = matrix.primary_values(idx);
-        const auto indices = matrix.primary_indices(idx);
+        const auto values = matrix.primary_values_unsafe(idx);
+        const auto indices = matrix.primary_indices_unsafe(idx);
 
         Size nnz_counts_local[256];
         Size* nnz_counts = nullptr;

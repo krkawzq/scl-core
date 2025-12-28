@@ -368,7 +368,7 @@
     #define SCL_VECTORIZE _Pragma("clang loop vectorize(enable)")
     #define SCL_NO_VECTORIZE _Pragma("clang loop vectorize(disable)")
 #elif defined(__GNUC__) && __GNUC__ >= 8
-    #define SCL_UNROLL(n) _Pragma("GCC unroll " #n)
+    #define SCL_UNROLL(n) _Pragma(SCL_STRINGIFY_VALUE(GCC unroll n))
     #define SCL_UNROLL_FULL _Pragma("GCC unroll 16")
     #define SCL_VECTORIZE
     #define SCL_NO_VECTORIZE

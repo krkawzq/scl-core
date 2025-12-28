@@ -5,7 +5,7 @@
 // BRIEF: C API for Mann-Whitney U Test
 // =============================================================================
 
-#include "scl/binding/c_api/core.h"
+#include "scl/binding/c_api/core/core.h"
 
 #ifdef __cplusplus
 extern "C" {

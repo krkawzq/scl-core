@@ -410,9 +410,9 @@ void fit_gene_kinetics(
         // Extract gene values for all cells
         if (IsCSR) {
             for (Index c = 0; c < n_cells; ++c) {
-                auto s_indices = spliced.row_indices(c);
-                auto s_values = spliced.row_values(c);
-                Index s_len = spliced.row_length(c);
+                auto s_indices = spliced.row_indices_unsafe(c);
+                auto s_values = spliced.row_values_unsafe(c);
+                Index s_len = spliced.row_length_unsafe(c);
 
                 // Binary search for gene index
                 const Index* s_found = scl::algo::lower_bound(
@@ -423,9 +423,9 @@ void fit_gene_kinetics(
                     s_vals[c] = static_cast<Real>(s_values[k]);
                 }
 
-                auto u_indices = unspliced.row_indices(c);
-                auto u_values = unspliced.row_values(c);
-                Index u_len = unspliced.row_length(c);
+                auto u_indices = unspliced.row_indices_unsafe(c);
+                auto u_values = unspliced.row_values_unsafe(c);
+                Index u_len = unspliced.row_length_unsafe(c);
 
                 const Index* u_found = scl::algo::lower_bound(
                     u_indices.ptr, u_indices.ptr + u_len, g);
@@ -436,9 +436,9 @@ void fit_gene_kinetics(
                 }
             }
         } else {
-            auto s_indices = spliced.col_indices(g);
-            auto s_values = spliced.col_values(g);
-            Index s_len = spliced.col_length(g);
+            auto s_indices = spliced.col_indices_unsafe(g);
+            auto s_values = spliced.col_values_unsafe(g);
+            Index s_len = spliced.col_length_unsafe(g);
 
             for (Index k = 0; k < s_len; ++k) {
                 Index c = s_indices[k];
@@ -447,9 +447,9 @@ void fit_gene_kinetics(
                 }
             }
 
-            auto u_indices = unspliced.col_indices(g);
-            auto u_values = unspliced.col_values(g);
-            Index u_len = unspliced.col_length(g);
+            auto u_indices = unspliced.col_indices_unsafe(g);
+            auto u_values = unspliced.col_values_unsafe(g);
+            Index u_len = unspliced.col_length_unsafe(g);
 
             for (Index k = 0; k < u_len; ++k) {
                 Index c = u_indices[k];
@@ -514,9 +514,9 @@ void compute_velocity(
             Real* vel_row = velocity_out + static_cast<Size>(c) * n_genes;
 
             // Process spliced
-            auto s_indices = spliced.row_indices(c);
-            auto s_values = spliced.row_values(c);
-            Index s_len = spliced.row_length(c);
+            auto s_indices = spliced.row_indices_unsafe(c);
+            auto s_values = spliced.row_values_unsafe(c);
+            Index s_len = spliced.row_length_unsafe(c);
 
             for (Index k = 0; k < s_len; ++k) {
                 Index g = s_indices[k];
@@ -526,9 +526,9 @@ void compute_velocity(
             }
 
             // Process unspliced
-            auto u_indices = unspliced.row_indices(c);
-            auto u_values = unspliced.row_values(c);
-            Index u_len = unspliced.row_length(c);
+            auto u_indices = unspliced.row_indices_unsafe(c);
+            auto u_values = unspliced.row_values_unsafe(c);
+            Index u_len = unspliced.row_length_unsafe(c);
 
             for (Index k = 0; k < u_len; ++k) {
                 Index g = u_indices[k];
@@ -552,9 +552,9 @@ void compute_velocity(
         auto process_gene = [&](Index g) {
             Real gamma_g = gamma[g];
 
-            auto s_indices = spliced.col_indices(g);
-            auto s_values = spliced.col_values(g);
-            Index s_len = spliced.col_length(g);
+            auto s_indices = spliced.col_indices_unsafe(g);
+            auto s_values = spliced.col_values_unsafe(g);
+            Index s_len = spliced.col_length_unsafe(g);
 
             for (Index k = 0; k < s_len; ++k) {
                 Index c = s_indices[k];
@@ -564,9 +564,9 @@ void compute_velocity(
                 }
             }
 
-            auto u_indices = unspliced.col_indices(g);
-            auto u_values = unspliced.col_values(g);
-            Index u_len = unspliced.col_length(g);
+            auto u_indices = unspliced.col_indices_unsafe(g);
+            auto u_values = unspliced.col_values_unsafe(g);
+            Index u_len = unspliced.col_length_unsafe(g);
 
             for (Index k = 0; k < u_len; ++k) {
                 Index c = u_indices[k];
@@ -611,9 +611,9 @@ void splice_ratio(
     // Fill spliced values
     if (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
-            auto indices = spliced.row_indices(c);
-            auto values = spliced.row_values(c);
-            Index len = spliced.row_length(c);
+            auto indices = spliced.row_indices_unsafe(c);
+            auto values = spliced.row_values_unsafe(c);
+            Index len = spliced.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
                 Index g = indices[k];
@@ -624,9 +624,9 @@ void splice_ratio(
         }
     } else {
         for (Index g = 0; g < n_genes; ++g) {
-            auto indices = spliced.col_indices(g);
-            auto values = spliced.col_values(g);
-            Index len = spliced.col_length(g);
+            auto indices = spliced.col_indices_unsafe(g);
+            auto values = spliced.col_values_unsafe(g);
+            Index len = spliced.col_length_unsafe(g);
 
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
@@ -642,9 +642,9 @@ void splice_ratio(
 
     if (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
-            auto indices = unspliced.row_indices(c);
-            auto values = unspliced.row_values(c);
-            Index len = unspliced.row_length(c);
+            auto indices = unspliced.row_indices_unsafe(c);
+            auto values = unspliced.row_values_unsafe(c);
+            Index len = unspliced.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
                 Index g = indices[k];
@@ -658,9 +658,9 @@ void splice_ratio(
         }
     } else {
         for (Index g = 0; g < n_genes; ++g) {
-            auto indices = unspliced.col_indices(g);
-            auto values = unspliced.col_values(g);
-            Index len = unspliced.col_length(g);
+            auto indices = unspliced.col_indices_unsafe(g);
+            auto values = unspliced.col_values_unsafe(g);
+            Index len = unspliced.col_length_unsafe(g);
 
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
@@ -707,8 +707,8 @@ void velocity_graph(
         const Real* vel_i = velocity + static_cast<Size>(i) * n_genes;
         const Real* expr_i = expression + static_cast<Size>(i) * n_genes;
 
-        auto neighbor_indices = knn.primary_indices(i);
-        Index n_neighbors = knn.primary_length(i);
+        auto neighbor_indices = knn.primary_indices_unsafe(i);
+        Index n_neighbors = knn.primary_length_unsafe(i);
         Index actual_k = scl::algo::min2(n_neighbors, k_neighbors);
 
         Real* probs = transition_probs + static_cast<Size>(i) * k_neighbors;

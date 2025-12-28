@@ -313,9 +313,9 @@ SCL_HOT void parallel_distribute(
 
             if (contrib <= config::MIN_SCORE) return;
 
-            auto indices = adj.primary_indices(idx);
-            auto values = adj.primary_values(idx);
-            const Index len = adj.primary_length(idx);
+            auto indices = adj.primary_indices_unsafe(idx);
+            auto values = adj.primary_values_unsafe(idx);
+            const Index len = adj.primary_length_unsafe(idx);
 
             for (Index k = 0; k < len; ++k) {
                 Index j = indices[k];
@@ -339,9 +339,9 @@ SCL_HOT void parallel_distribute(
 
             if (contrib <= config::MIN_SCORE) continue;
 
-            auto indices = adj.primary_indices(idx);
-            auto values = adj.primary_values(idx);
-            const Index len = adj.primary_length(idx);
+            auto indices = adj.primary_indices_unsafe(idx);
+            auto values = adj.primary_values_unsafe(idx);
+            const Index len = adj.primary_length_unsafe(idx);
 
             // 4-way unrolled
             Index k = 0;
@@ -375,15 +375,15 @@ SCL_HOT void spmv_centrality(
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = adj.primary_indices(idx);
-            auto values = adj.primary_values(idx);
-            const Index len = adj.primary_length(idx);
+            auto indices = adj.primary_indices_unsafe(idx);
+            auto values = adj.primary_values_unsafe(idx);
+            const Index len = adj.primary_length_unsafe(idx);
 
             Real sum = Real(0);
 
             // Prefetch
             if (SCL_LIKELY(i + 1 < n)) {
-                SCL_PREFETCH_READ(adj.primary_indices(idx + 1).ptr, 0);
+                SCL_PREFETCH_READ(adj.primary_indices_unsafe(idx + 1).ptr, 0);
             }
 
             Index k = 0;
@@ -403,9 +403,9 @@ SCL_HOT void spmv_centrality(
     } else {
         for (Size i = 0; i < n; ++i) {
             const Index idx = static_cast<Index>(i);
-            auto indices = adj.primary_indices(idx);
-            auto values = adj.primary_values(idx);
-            const Index len = adj.primary_length(idx);
+            auto indices = adj.primary_indices_unsafe(idx);
+            auto values = adj.primary_values_unsafe(idx);
+            const Index len = adj.primary_length_unsafe(idx);
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -428,8 +428,8 @@ void compute_out_degrees(
 
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
-            auto values = adj.primary_values(static_cast<Index>(i));
-            const Index len = adj.primary_length(static_cast<Index>(i));
+            auto values = adj.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adj.primary_length_unsafe(static_cast<Index>(i));
 
             Real deg = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -441,8 +441,8 @@ void compute_out_degrees(
         });
     } else {
         for (Size i = 0; i < n; ++i) {
-            auto values = adj.primary_values(static_cast<Index>(i));
-            const Index len = adj.primary_length(static_cast<Index>(i));
+            auto values = adj.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adj.primary_length_unsafe(static_cast<Index>(i));
 
             Real deg = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -476,11 +476,11 @@ void degree_centrality(
 
     if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            centrality[i] = static_cast<Real>(adjacency.primary_length(static_cast<Index>(i)));
+            centrality[i] = static_cast<Real>(adjacency.primary_length_unsafe(static_cast<Index>(i)));
         });
     } else {
         for (Index i = 0; i < n; ++i) {
-            centrality[i] = static_cast<Real>(adjacency.primary_length(i));
+            centrality[i] = static_cast<Real>(adjacency.primary_length_unsafe(i));
         }
     }
 
@@ -509,8 +509,8 @@ void weighted_degree_centrality(
 
     if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            auto values = adjacency.primary_values(static_cast<Index>(i));
-            const Index len = adjacency.primary_length(static_cast<Index>(i));
+            auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -521,8 +521,8 @@ void weighted_degree_centrality(
         });
     } else {
         for (Index i = 0; i < n; ++i) {
-            auto values = adjacency.primary_values(i);
-            const Index len = adjacency.primary_length(i);
+            auto values = adjacency.primary_values_unsafe(i);
+            const Index len = adjacency.primary_length_unsafe(i);
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -761,9 +761,9 @@ void hits(
             constexpr int64_t SCALE = 1000000000LL;
 
             scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-                auto indices = adjacency.primary_indices(static_cast<Index>(i));
-                auto values = adjacency.primary_values(static_cast<Index>(i));
-                const Index len = adjacency.primary_length(static_cast<Index>(i));
+                auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+                auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+                const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
                 Real hub_i = hub_scores[i];
 
@@ -782,9 +782,9 @@ void hits(
             scl::memory::aligned_free(reinterpret_cast<int64_t*>(atomic_auth), SCL_ALIGNMENT);
         } else {
             for (Index i = 0; i < n; ++i) {
-                auto indices = adjacency.primary_indices(i);
-                auto values = adjacency.primary_values(i);
-                const Index len = adjacency.primary_length(i);
+                auto indices = adjacency.primary_indices_unsafe(i);
+                auto values = adjacency.primary_values_unsafe(i);
+                const Index len = adjacency.primary_length_unsafe(i);
 
                 Real hub_i = hub_scores[i];
 
@@ -954,11 +954,11 @@ void closeness_centrality(
             // Prefetch
             if (queue_head + config::PREFETCH_DISTANCE < queue_tail) {
                 Index next_u = queue[queue_head + config::PREFETCH_DISTANCE];
-                SCL_PREFETCH_READ(adjacency.primary_indices(next_u).ptr, 0);
+                SCL_PREFETCH_READ(adjacency.primary_indices_unsafe(next_u).ptr, 0);
             }
 
-            auto indices = adjacency.primary_indices(u);
-            const Index len = adjacency.primary_length(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
+            const Index len = adjacency.primary_length_unsafe(u);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -1057,8 +1057,8 @@ void betweenness_centrality(
             Index u = ws.queue[queue_head++];
             ws.stack[stack_top++] = u;
 
-            auto indices = adjacency.primary_indices(u);
-            const Index len = adjacency.primary_length(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
+            const Index len = adjacency.primary_length_unsafe(u);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -1077,8 +1077,8 @@ void betweenness_centrality(
         // Back-propagation
         while (stack_top > 0) {
             Index w = ws.stack[--stack_top];
-            auto indices = adjacency.primary_indices(w);
-            const Index len = adjacency.primary_length(w);
+            auto indices = adjacency.primary_indices_unsafe(w);
+            const Index len = adjacency.primary_length_unsafe(w);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -1206,8 +1206,8 @@ void betweenness_centrality_sampled(
             Index u = queue[queue_head++];
             stack[stack_top++] = u;
 
-            auto indices = adjacency.primary_indices(u);
-            const Index len = adjacency.primary_length(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
+            const Index len = adjacency.primary_length_unsafe(u);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -1225,8 +1225,8 @@ void betweenness_centrality_sampled(
 
         while (stack_top > 0) {
             Index w = stack[--stack_top];
-            auto indices = adjacency.primary_indices(w);
-            const Index len = adjacency.primary_length(w);
+            auto indices = adjacency.primary_indices_unsafe(w);
+            const Index len = adjacency.primary_length_unsafe(w);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -1305,8 +1305,8 @@ void harmonic_centrality(
         while (queue_head < queue_tail) {
             Index u = queue[queue_head++];
 
-            auto indices = adjacency.primary_indices(u);
-            const Index len = adjacency.primary_length(u);
+            auto indices = adjacency.primary_indices_unsafe(u);
+            const Index len = adjacency.primary_length_unsafe(u);
 
             for (Index k = 0; k < len; ++k) {
                 Index v = indices[k];
@@ -1365,7 +1365,7 @@ void current_flow_betweenness_approx(
     // Compute degrees for random neighbor selection
     Index* degree = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
     for (Size i = 0; i < N; ++i) {
-        degree[i] = adjacency.primary_length(static_cast<Index>(i));
+        degree[i] = adjacency.primary_length_unsafe(static_cast<Index>(i));
     }
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_walks), [&](size_t walk_id, size_t thread_rank) {
@@ -1384,7 +1384,7 @@ void current_flow_betweenness_approx(
 
             // Random neighbor
             Index k = rng.bounded(deg);
-            current = adjacency.primary_indices(current)[k];
+            current = adjacency.primary_indices_unsafe(current)[k];
         }
     });
 

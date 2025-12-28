@@ -1,202 +1,363 @@
-# slice.hpp
+# Sparse Matrix Slicing Kernels
 
-> scl/kernel/slice.hpp · Sparse matrix slicing kernels
+Optimized parallel sparse matrix slicing operations.
 
-## Overview
-
-This file provides high-performance kernels for slicing sparse matrices along primary and secondary dimensions. It supports efficient inspection (counting non-zeros), materialization (copying to pre-allocated arrays), and full slicing operations that create new sparse matrices. All operations are parallelized and optimized for cache efficiency.
-
-**Header**: `#include "scl/kernel/slice.hpp"`
+**Location**: `scl/kernel/slice.hpp`
 
 ---
 
-## Main APIs
+## inspect_slice_primary
 
-### slice_primary
+**SUMMARY:**
+Count total non-zeros in primary dimension slice without materializing.
 
-::: source_code file="scl/kernel/slice.hpp" symbol="slice_primary" collapsed
-:::
-
-**Algorithm Description**
-
-Creates new sparse matrix containing selected primary slices (rows for CSR, columns for CSC):
-
-1. Call `inspect_slice_primary` to count total non-zeros in selected slices
-2. Allocate output arrays (data, indices, indptr) with appropriate sizes
-3. Call `materialize_slice_primary` to copy selected slices
-4. Wrap arrays as new Sparse matrix
-5. Result preserves order of `keep_indices` and maintains secondary dimension
-
-**Edge Cases**
-
-- **Empty selection**: Returns empty matrix with zero rows/columns
-- **All indices selected**: Returns copy of original matrix
-- **Invalid indices**: Behavior undefined if indices out of range
-- **Duplicate indices**: Duplicate indices in keep_indices result in duplicate rows/columns
-
-**Data Guarantees (Preconditions)**
-
-- All indices in `keep_indices` are in range [0, primary_dim)
-- Source matrix is valid CSR or CSC format
-- `keep_indices` may be unsorted
-
-**Complexity Analysis**
-
-- **Time**: O(nnz_output / n_threads + n_keep) - parallel copy plus metadata setup
-- **Space**: O(nnz_output) for result matrix
-
-**Example**
-
+**SIGNATURE:**
 ```cpp
-#include "scl/kernel/slice.hpp"
-
-Sparse<Real, true> matrix = /* source matrix, CSR */;
-Array<const Index> keep_indices = /* row indices to keep */;
-
-Sparse<Real, true> sliced = scl::kernel::slice::slice_primary(
-    matrix,
-    keep_indices
+template <typename T, bool IsCSR>
+Index inspect_slice_primary(
+    const Sparse<T, IsCSR>& matrix,     // Input matrix
+    Array<const Index> keep_indices     // Indices to keep
 );
-
-// sliced contains only selected rows, columns preserved
 ```
 
+**PARAMETERS:**
+- matrix       [in] Source sparse matrix
+- keep_indices [in] Primary indices to keep (rows for CSR, cols for CSC)
+
+**PRECONDITIONS:**
+- matrix.valid() must be true
+- All keep_indices[i] in [0, matrix.primary_dim())
+
+**POSTCONDITIONS:**
+- Returns total nnz in sliced result
+
+**ALGORITHM:**
+Parallel reduction: sum primary_length over keep_indices.
+
+**COMPLEXITY:**
+- Time:  O(keep_indices.len) parallelized
+- Space: O(num_threads) for reduction
+
+**THREAD SAFETY:**
+Safe - read-only with parallel reduction
+
+**MUTABILITY:**
+CONST - does not modify input
+
 ---
 
-### filter_secondary
+## materialize_slice_primary
 
-::: source_code file="scl/kernel/slice.hpp" symbol="filter_secondary" collapsed
-:::
+**SUMMARY:**
+Copy primary dimension slice into pre-allocated contiguous arrays.
 
-**Algorithm Description**
-
-Creates new sparse matrix filtering by secondary dimension mask (columns for CSR, rows for CSC):
-
-1. Build index mapping from old to new secondary indices (compact range)
-2. Call `inspect_filter_secondary` to count non-zeros after filtering
-3. Allocate output arrays with appropriate sizes
-4. Call `materialize_filter_secondary` to copy and remap indices
-5. Result has compact secondary dimension [0, new_secondary_dim)
-
-**Edge Cases**
-
-- **All zeros mask**: Returns empty matrix (zero columns/rows)
-- **All ones mask**: Returns copy of original matrix
-- **Sparse mask**: Efficiently handles masks with few 1s
-- **Index remapping**: Old indices remapped to compact range
-
-**Data Guarantees (Preconditions)**
-
-- `mask.len >= secondary_dim`
-- Mask values are 0 or 1
-- Source matrix is valid sparse format
-
-**Complexity Analysis**
-
-- **Time**: O(nnz / n_threads + secondary_dim) - parallel filtering plus mapping
-- **Space**: O(nnz_output + secondary_dim) for result and index mapping
-
-**Example**
-
+**SIGNATURE:**
 ```cpp
-Array<const uint8_t> mask = /* boolean mask for columns */;
-
-Sparse<Real, true> filtered = scl::kernel::slice::filter_secondary(
-    matrix,
-    mask
+template <typename T, bool IsCSR>
+void materialize_slice_primary(
+    const Sparse<T, IsCSR>& matrix,
+    Array<const Index> keep_indices,
+    Array<T> out_data,                   // Pre-allocated [out_nnz]
+    Array<Index> out_indices,            // Pre-allocated [out_nnz]
+    Array<Index> out_indptr              // Pre-allocated [n_keep+1]
 );
-
-// filtered contains only columns where mask[col] == 1
-// Column indices remapped to [0, new_n_cols)
 ```
 
----
+**PARAMETERS:**
+- matrix       [in]  Source matrix
+- keep_indices [in]  Indices to keep
+- out_data     [out] Values array (pre-allocated)
+- out_indices  [out] Secondary indices (pre-allocated)
+- out_indptr   [out] Offset array (pre-allocated)
 
-## Utility Functions
+**PRECONDITIONS:**
+- matrix.valid() must be true
+- All keep_indices[i] in valid range
+- out_data.len >= total nnz in slice
+- out_indices.len >= total nnz in slice
+- out_indptr.len >= keep_indices.len + 1
 
-### inspect_slice_primary
+**POSTCONDITIONS:**
+- out_indptr[0] = 0
+- out_indptr[i+1] = out_indptr[i] + length of primary slice keep_indices[i]
+- out_data and out_indices contain copied slice data
 
-Counts total non-zeros in selected primary dimension slices.
+**ALGORITHM:**
+1. Build offset array from lengths
+2. Parallel copy of data and indices slices
 
-::: source_code file="scl/kernel/slice.hpp" symbol="inspect_slice_primary" collapsed
-:::
+**COMPLEXITY:**
+- Time:  O(keep_indices.len + out_nnz) parallelized
+- Space: O(1)
 
-**Complexity**
+**THREAD SAFETY:**
+Safe - non-overlapping writes in parallel
 
-- Time: O(n_keep / n_threads)
-- Space: O(n_threads) for partial sums
-
----
-
-### materialize_slice_primary
-
-Copies selected primary slices to pre-allocated output arrays.
-
-::: source_code file="scl/kernel/slice.hpp" symbol="materialize_slice_primary" collapsed
-:::
-
-**Complexity**
-
-- Time: O(nnz_output / n_threads + n_keep)
-- Space: O(1) beyond output
-
----
-
-### inspect_filter_secondary
-
-Counts non-zeros after filtering by secondary dimension mask.
-
-::: source_code file="scl/kernel/slice.hpp" symbol="inspect_filter_secondary" collapsed
-:::
-
-**Complexity**
-
-- Time: O(nnz / n_threads)
-- Space: O(n_threads) for partial sums
+**MUTABILITY:**
+CONST for matrix, writes to output arrays
 
 ---
 
-### materialize_filter_secondary
+## slice_primary
 
-Copies elements passing secondary mask to pre-allocated output with index remapping.
+**SUMMARY:**
+Extract primary dimension slice as new sparse matrix.
 
-::: source_code file="scl/kernel/slice.hpp" symbol="materialize_filter_secondary" collapsed
-:::
+**SIGNATURE:**
+```cpp
+template <typename T, bool IsCSR>
+Sparse<T, IsCSR> slice_primary(
+    const Sparse<T, IsCSR>& matrix,
+    Array<const Index> keep_indices
+);
+```
 
-**Complexity**
+**PARAMETERS:**
+- matrix       [in] Source matrix
+- keep_indices [in] Primary indices to keep (rows for CSR, cols for CSC)
 
-- Time: O(nnz / n_threads + primary_dim)
-- Space: O(1) beyond output
+**PRECONDITIONS:**
+- matrix.valid() must be true
+- All keep_indices[i] in [0, matrix.primary_dim())
+
+**POSTCONDITIONS:**
+- Returns new matrix with selected rows/columns
+- Result dimensions: (n_keep, cols) for CSR, (rows, n_keep) for CSC
+- Result is in contiguous format
+- Memory registered with registry for automatic cleanup
+
+**ALGORITHM:**
+1. Inspect to compute output nnz
+2. Allocate output arrays via aligned_alloc
+3. Materialize slice data
+4. Register arrays with registry
+5. Wrap as Sparse matrix
+
+**COMPLEXITY:**
+- Time:  O(n_keep + out_nnz) parallelized
+- Space: O(out_nnz + n_keep)
+
+**THREAD SAFETY:**
+Safe - parallel with non-overlapping writes
+
+**MUTABILITY:**
+CONST - creates new matrix
+
+**LIFECYCLE:**
+ALLOCATES - returns matrix with registry-managed memory
 
 ---
 
-## Configuration
+## inspect_filter_secondary
 
-Internal configuration constants:
+**SUMMARY:**
+Count total non-zeros in secondary dimension filter without materializing.
 
-- `PARALLEL_THRESHOLD_ROWS = 512`: Minimum rows for parallel processing
-- `PARALLEL_THRESHOLD_NNZ = 10000`: Minimum nnz for parallel processing
-- `MEMCPY_THRESHOLD = 8`: Minimum elements for memcpy vs loop
+**SIGNATURE:**
+```cpp
+template <typename T, bool IsCSR>
+Index inspect_filter_secondary(
+    const Sparse<T, IsCSR>& matrix,
+    Array<const uint8_t> mask            // Mask for secondary indices
+);
+```
+
+**PARAMETERS:**
+- matrix [in] Source matrix
+- mask   [in] Binary mask [secondary_dim], 1=keep, 0=discard
+
+**PRECONDITIONS:**
+- matrix.valid() must be true
+- mask.len >= matrix.secondary_dim()
+
+**POSTCONDITIONS:**
+- Returns total nnz in filtered result
+- Count includes only elements with mask[indices[k]] == 1
+
+**ALGORITHM:**
+Parallel reduction: for each primary slice, count masked elements.
+
+**COMPLEXITY:**
+- Time:  O(nnz) parallelized with unrolled masked counting
+- Space: O(num_threads)
+
+**THREAD SAFETY:**
+Safe - parallel read-only reduction
+
+**MUTABILITY:**
+CONST
 
 ---
 
-## Performance Notes
+## materialize_filter_secondary
 
-### Parallelization
+**SUMMARY:**
+Copy secondary dimension filter into pre-allocated arrays with index remapping.
 
-- Primary dimension slicing: Parallel reduction for counting, parallel copy for materialization
-- Secondary dimension filtering: Parallel over primary dimension with 8-way unrolled counting
-- Cache-efficient: Uses prefetching and batched processing
+**SIGNATURE:**
+```cpp
+template <typename T, bool IsCSR>
+void materialize_filter_secondary(
+    const Sparse<T, IsCSR>& matrix,
+    Array<const uint8_t> mask,
+    Array<const Index> new_indices,      // Remapped indices [secondary_dim]
+    Array<T> out_data,
+    Array<Index> out_indices,
+    Array<Index> out_indptr
+);
+```
 
-### Memory Efficiency
+**PARAMETERS:**
+- matrix      [in]  Source matrix
+- mask        [in]  Binary mask [secondary_dim]
+- new_indices [in]  Remapped index array: new_indices[old] = new or -1
+- out_data    [out] Values array (pre-allocated)
+- out_indices [out] Remapped secondary indices (pre-allocated)
+- out_indptr  [out] Offset array (pre-allocated)
 
-- Two-phase approach: Inspect first to size output, then materialize
-- Pre-allocated arrays: Allows caller to manage memory
-- Zero-copy potential: Can wrap existing arrays with proper ownership
+**PRECONDITIONS:**
+- matrix.valid() must be true
+- mask.len >= matrix.secondary_dim()
+- new_indices.len >= matrix.secondary_dim()
+- Output arrays have sufficient size
+
+**POSTCONDITIONS:**
+- out_indptr built from masked counts
+- out_data and out_indices contain filtered elements
+- out_indices remapped via new_indices array
+
+**ALGORITHM:**
+1. Build offset array by counting masked elements per primary slice
+2. Parallel copy: for each primary slice, copy masked elements with index remapping
+
+**COMPLEXITY:**
+- Time:  O(nnz) parallelized
+- Space: O(1)
+
+**THREAD SAFETY:**
+Safe - non-overlapping writes
+
+**MUTABILITY:**
+CONST for matrix, writes to output arrays
 
 ---
 
-## See Also
+## filter_secondary
 
-- [Sparse Matrix](../core/sparse) - Sparse matrix operations
-- [Memory Module](../core/memory) - Memory management
+**SUMMARY:**
+Filter secondary dimension (columns for CSR, rows for CSC) by mask.
+
+**SIGNATURE:**
+```cpp
+template <typename T, bool IsCSR>
+Sparse<T, IsCSR> filter_secondary(
+    const Sparse<T, IsCSR>& matrix,
+    Array<const uint8_t> mask
+);
+```
+
+**PARAMETERS:**
+- matrix [in] Source matrix
+- mask   [in] Binary mask [secondary_dim], 1=keep, 0=discard
+
+**PRECONDITIONS:**
+- matrix.valid() must be true
+- mask.len >= matrix.secondary_dim()
+
+**POSTCONDITIONS:**
+- Returns new matrix with filtered secondary dimension
+- Result dimensions: (rows, new_cols) for CSR, (new_rows, cols) for CSC
+- where new_cols/new_rows = number of 1s in mask
+- Result is in contiguous format
+- Memory registered with registry
+
+**ALGORITHM:**
+1. Build index remapping: new_indices[old] = new_idx or -1
+2. Compute new_secondary_dim = count(mask == 1)
+3. Inspect to compute output nnz
+4. Allocate output arrays
+5. Materialize filtered data with index remapping
+6. Register arrays with registry
+7. Wrap as Sparse matrix
+
+**COMPLEXITY:**
+- Time:  O(secondary_dim + nnz) parallelized
+- Space: O(secondary_dim + out_nnz)
+
+**THREAD SAFETY:**
+Safe
+
+**MUTABILITY:**
+CONST - creates new matrix
+
+**LIFECYCLE:**
+ALLOCATES - returns matrix with registry-managed memory
+
+**NUMERICAL NOTES:**
+- Efficient 8-way unrolled masked counting
+- Uses prefetching for large data copies
+- Automatic parallelization threshold tuning
+
+---
+
+## Configuration Constants
+
+**PARALLEL_THRESHOLD_ROWS:**
+Minimum number of primary slices for parallel execution (512).
+
+**PARALLEL_THRESHOLD_NNZ:**
+Minimum nnz for parallel operations (10000).
+
+**MEMCPY_THRESHOLD:**
+Minimum element count for std::memcpy vs scalar loop (8).
+
+---
+
+## Implementation Details
+
+**Fast Copy with Prefetch:**
+- Uses SCL_PREFETCH_READ for sequential access
+- Switches between memcpy (large) and scalar loop (small)
+- Prefetch distance: 16 cache lines ahead
+
+**Parallel Bulk Copy:**
+- Segments work by primary dimension
+- Each thread handles independent memory regions
+- Automatic threshold-based sequential fallback
+
+**Masked Counting:**
+- 8-way unrolled loop for branch-free counting
+- Exploits ILP (instruction-level parallelism)
+- Scalar cleanup for remainder
+
+**Index Remapping:**
+- Sequential scan to build mapping array
+- O(secondary_dim) time, cache-friendly
+- Remapping done during copy (no extra pass)
+
+**Parallel Reduction:**
+- Per-thread partial sums
+- Cache-line aligned accumulator array
+- Final reduction over thread results
+
+---
+
+## Usage Patterns
+
+**Primary Slicing (Fast Path):**
+For row slicing (CSR) or column slicing (CSC), use slice_primary.
+This is a zero-copy operation with efficient parallel copy.
+
+**Secondary Filtering (Slower Path):**
+For column filtering (CSR) or row filtering (CSC), use filter_secondary.
+This requires index remapping but is still parallelized efficiently.
+
+**Two-Phase Inspection:**
+1. Call inspect_* to compute output size
+2. Allocate output buffers
+3. Call materialize_* to fill buffers
+This pattern is useful for custom memory management.
+
+**Registry Integration:**
+All slice_* and filter_* functions return matrices with registry-managed memory.
+Arrays are registered using from_contiguous_arrays with take_ownership=true.

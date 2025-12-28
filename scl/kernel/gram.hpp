@@ -272,11 +272,11 @@ void gram(
 
     scl::threading::parallel_for(Size(0), N_size, [&](size_t i) {
         const Index idx_i = static_cast<Index>(i);
-        const Index len_i = matrix.primary_length(idx_i);
+        const Index len_i = matrix.primary_length_unsafe(idx_i);
         const Size len_i_sz = static_cast<Size>(len_i);
 
-        auto idx_i_arr = matrix.primary_indices(idx_i);
-        auto val_i_arr = matrix.primary_values(idx_i);
+        auto idx_i_arr = matrix.primary_indices_unsafe(idx_i);
+        auto val_i_arr = matrix.primary_values_unsafe(idx_i);
 
         T* row_ptr = output.ptr + (i * N_size);
 
@@ -284,11 +284,11 @@ void gram(
 
         for (Size j = i + 1; j < N_size; ++j) {
             const Index idx_j = static_cast<Index>(j);
-            const Index len_j = matrix.primary_length(idx_j);
+            const Index len_j = matrix.primary_length_unsafe(idx_j);
             const Size len_j_sz = static_cast<Size>(len_j);
 
-            auto idx_j_arr = matrix.primary_indices(idx_j);
-            auto val_j_arr = matrix.primary_values(idx_j);
+            auto idx_j_arr = matrix.primary_indices_unsafe(idx_j);
+            auto val_j_arr = matrix.primary_values_unsafe(idx_j);
 
             T dot = detail::sparse_dot_adaptive(
                 idx_i_arr.ptr, val_i_arr.ptr, len_i_sz,

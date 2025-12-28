@@ -163,7 +163,7 @@ void compute_basic_qc(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         out_n_genes[p] = len;
@@ -173,7 +173,7 @@ void compute_basic_qc(
             return;
         }
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         out_total_counts[p] = detail::simd_sum_4way(values.ptr, len_sz);
     });
 }
@@ -192,7 +192,7 @@ void compute_subset_pct(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) {
@@ -200,8 +200,8 @@ void compute_subset_pct(
             return;
         }
 
-        auto values = matrix.primary_values(idx);
-        auto indices = matrix.primary_indices(idx);
+        auto values = matrix.primary_values_unsafe(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
 
         Real total, subset;
         detail::fused_total_subset_sum(values.ptr, indices.ptr, mask, len_sz, total, subset);
@@ -228,7 +228,7 @@ void compute_fused_qc(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         out_n_genes[p] = len;
@@ -239,8 +239,8 @@ void compute_fused_qc(
             return;
         }
 
-        auto values = matrix.primary_values(idx);
-        auto indices = matrix.primary_indices(idx);
+        auto values = matrix.primary_values_unsafe(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
 
         Real total, subset;
         detail::fused_total_subset_sum(values.ptr, indices.ptr, mask, len_sz, total, subset);

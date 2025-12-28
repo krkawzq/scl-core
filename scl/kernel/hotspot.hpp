@@ -432,13 +432,13 @@ void row_standardize_weights(
     SCL_CHECK_DIM(row_standardized.len >= weights.nnz(), "buffer too small");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto values = weights.primary_values(static_cast<Index>(i));
-        Index len = weights.primary_length(static_cast<Index>(i));
+        auto values = weights.primary_values_unsafe(static_cast<Index>(i));
+        Index len = weights.primary_length_unsafe(static_cast<Index>(i));
         
         // Find offset
         Size offset = 0;
         for (Index r = 0; r < static_cast<Index>(i); ++r) {
-            offset += weights.primary_length(r);
+            offset += weights.primary_length_unsafe(r);
         }
         
         Real row_sum = 0;
@@ -479,8 +479,8 @@ void local_morans_i(
     // Compute S0 (sum of all weights)
     Real S0 = 0;
     for (Index i = 0; i < n; ++i) {
-        auto w_values = spatial_weights.primary_values(i);
-        Index len = spatial_weights.primary_length(i);
+        auto w_values = spatial_weights.primary_values_unsafe(i);
+        Index len = spatial_weights.primary_length_unsafe(i);
         for (Index k = 0; k < len; ++k) {
             S0 += static_cast<Real>(w_values[k]);
         }
@@ -488,9 +488,9 @@ void local_morans_i(
 
     // Parallel local Moran's I computation
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto indices = spatial_weights.primary_indices(static_cast<Index>(i));
-        auto w_values = spatial_weights.primary_values(static_cast<Index>(i));
-        Index len = spatial_weights.primary_length(static_cast<Index>(i));
+        auto indices = spatial_weights.primary_indices_unsafe(static_cast<Index>(i));
+        auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
+        Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
         local_i[i] = detail::compute_local_moran_i(
             static_cast<Index>(i), z_values, indices, w_values, len
@@ -559,9 +559,9 @@ void local_morans_i(
                 }
 
                 for (Index i = 0; i < n; ++i) {
-                    auto indices = spatial_weights.primary_indices(i);
-                    auto w_vals = spatial_weights.primary_values(i);
-                    Index len = spatial_weights.primary_length(i);
+                    auto indices = spatial_weights.primary_indices_unsafe(i);
+                    auto w_vals = spatial_weights.primary_values_unsafe(i);
+                    Index len = spatial_weights.primary_length_unsafe(i);
                     Real perm_local_i = detail::compute_local_moran_i(
                         i, perm_values, indices, w_vals, len
                     );
@@ -607,9 +607,9 @@ void classify_lisa_patterns(
     detail::standardize(values.ptr, n, z_values);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto indices = spatial_weights.primary_indices(static_cast<Index>(i));
-        auto w_values = spatial_weights.primary_values(static_cast<Index>(i));
-        Index len = spatial_weights.primary_length(static_cast<Index>(i));
+        auto indices = spatial_weights.primary_indices_unsafe(static_cast<Index>(i));
+        auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
+        Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
         Real spatial_lag = detail::compute_spatial_lag(indices, w_values, len, z_values);
         patterns[i] = detail::classify_quadrant(
@@ -653,9 +653,9 @@ void getis_ord_g_star(
     }
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto indices = spatial_weights.primary_indices(static_cast<Index>(i));
-        auto w_values = spatial_weights.primary_values(static_cast<Index>(i));
-        Index len = spatial_weights.primary_length(static_cast<Index>(i));
+        auto indices = spatial_weights.primary_indices_unsafe(static_cast<Index>(i));
+        auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
+        Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
         detail::compute_g_star(
             static_cast<Index>(i), values.ptr, indices, w_values, len,
@@ -748,9 +748,9 @@ void local_gearys_c(
     Real inv_m2 = Real(1) / m2;
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto indices = spatial_weights.primary_indices(static_cast<Index>(i));
-        auto w_values = spatial_weights.primary_values(static_cast<Index>(i));
-        Index len = spatial_weights.primary_length(static_cast<Index>(i));
+        auto indices = spatial_weights.primary_indices_unsafe(static_cast<Index>(i));
+        auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
+        Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
         local_c[i] = detail::compute_local_geary_c(
             static_cast<Index>(i), values.ptr, indices, w_values, len
@@ -806,9 +806,9 @@ void local_gearys_c(
                 }
 
                 for (Index i = 0; i < n; ++i) {
-                    auto indices = spatial_weights.primary_indices(i);
-                    auto w_vals = spatial_weights.primary_values(i);
-                    Index len = spatial_weights.primary_length(i);
+                    auto indices = spatial_weights.primary_indices_unsafe(i);
+                    auto w_vals = spatial_weights.primary_values_unsafe(i);
+                    Index len = spatial_weights.primary_length_unsafe(i);
                     Real perm_c = detail::compute_local_geary_c(
                         i, perm_values, indices, w_vals, len
                     ) * inv_m2;
@@ -858,9 +858,9 @@ void global_morans_i(
 
     for (Index i = 0; i < n; ++i) {
         Real zi = values[i] - mean;
-        auto indices = spatial_weights.primary_indices(i);
-        auto w_values = spatial_weights.primary_values(i);
-        Index len = spatial_weights.primary_length(i);
+        auto indices = spatial_weights.primary_indices_unsafe(i);
+        auto w_values = spatial_weights.primary_values_unsafe(i);
+        Index len = spatial_weights.primary_length_unsafe(i);
 
         for (Index k = 0; k < len; ++k) {
             Real w = static_cast<Real>(w_values[k]);
@@ -880,8 +880,8 @@ void global_morans_i(
     Real S1 = 0;
     Real S2 = 0;
     for (Index i = 0; i < n; ++i) {
-        auto w_values = spatial_weights.primary_values(i);
-        Index len = spatial_weights.primary_length(i);
+        auto w_values = spatial_weights.primary_values_unsafe(i);
+        Index len = spatial_weights.primary_length_unsafe(i);
         Real wi_sum = 0;
 
         for (Index k = 0; k < len; ++k) {
@@ -921,9 +921,9 @@ void global_morans_i(
             Real perm_num = 0;
             for (Index i = 0; i < n; ++i) {
                 Real zi = perm_values[i] - mean;
-                auto indices = spatial_weights.primary_indices(i);
-                auto w_vals = spatial_weights.primary_values(i);
-                Index len = spatial_weights.primary_length(i);
+                auto indices = spatial_weights.primary_indices_unsafe(i);
+                auto w_vals = spatial_weights.primary_values_unsafe(i);
+                Index len = spatial_weights.primary_length_unsafe(i);
 
                 for (Index k = 0; k < len; ++k) {
                     Real w = static_cast<Real>(w_vals[k]);
@@ -968,9 +968,9 @@ void global_gearys_c(
     Real numerator = 0;
 
     for (Index i = 0; i < n; ++i) {
-        auto indices = spatial_weights.primary_indices(i);
-        auto w_values = spatial_weights.primary_values(i);
-        Index len = spatial_weights.primary_length(i);
+        auto indices = spatial_weights.primary_indices_unsafe(i);
+        auto w_values = spatial_weights.primary_values_unsafe(i);
+        Index len = spatial_weights.primary_length_unsafe(i);
 
         for (Index k = 0; k < len; ++k) {
             Real w = static_cast<Real>(w_values[k]);
@@ -1004,9 +1004,9 @@ void compute_spatial_lag(
     SCL_CHECK_DIM(spatial_lag.len >= static_cast<Size>(n), "spatial_lag buffer too small");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto indices = spatial_weights.primary_indices(static_cast<Index>(i));
-        auto w_values = spatial_weights.primary_values(static_cast<Index>(i));
-        Index len = spatial_weights.primary_length(static_cast<Index>(i));
+        auto indices = spatial_weights.primary_indices_unsafe(static_cast<Index>(i));
+        auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
+        Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
         spatial_lag[i] = detail::compute_spatial_lag(indices, w_values, len, values.ptr);
     });
 }
@@ -1131,8 +1131,8 @@ Index detect_spatial_clusters(
 
         while (q_start < q_end) {
             Index current = queue[q_start++];
-            auto indices = spatial_weights.primary_indices(current);
-            Index len = spatial_weights.primary_length(current);
+            auto indices = spatial_weights.primary_indices_unsafe(current);
+            Index len = spatial_weights.primary_length_unsafe(current);
 
             for (Index k = 0; k < len; ++k) {
                 Index neighbor = indices[k];
@@ -1350,9 +1350,9 @@ void bivariate_local_morans_i(
 
     // Parallel bivariate I computation
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto indices = spatial_weights.primary_indices(static_cast<Index>(i));
-        auto w_values = spatial_weights.primary_values(static_cast<Index>(i));
-        Index len = spatial_weights.primary_length(static_cast<Index>(i));
+        auto indices = spatial_weights.primary_indices_unsafe(static_cast<Index>(i));
+        auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
+        Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
         Real sum_wy = 0;
         for (Index k = 0; k < len; ++k) {
@@ -1398,9 +1398,9 @@ void bivariate_local_morans_i(
                 }
 
                 for (Index i = 0; i < n; ++i) {
-                    auto indices = spatial_weights.primary_indices(i);
-                    auto w_vals = spatial_weights.primary_values(i);
-                    Index len = spatial_weights.primary_length(i);
+                    auto indices = spatial_weights.primary_indices_unsafe(i);
+                    auto w_vals = spatial_weights.primary_values_unsafe(i);
+                    Index len = spatial_weights.primary_length_unsafe(i);
 
                     Real sum_wy = 0;
                     for (Index k = 0; k < len; ++k) {

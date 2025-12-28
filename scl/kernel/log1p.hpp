@@ -146,10 +146,10 @@ void log1p_inplace(Sparse<T, IsCSR>& matrix) {
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
 
         if (len > 0) {
-            auto values = matrix.primary_values(idx);
+            auto values = matrix.primary_values_unsafe(idx);
             detail::apply_log1p_simd(values.ptr, len);
         }
     });
@@ -161,10 +161,10 @@ void log2p1_inplace(Sparse<T, IsCSR>& matrix) {
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
 
         if (len > 0) {
-            auto values = matrix.primary_values(idx);
+            auto values = matrix.primary_values_unsafe(idx);
             detail::apply_log2p1_simd(values.ptr, len);
         }
     });
@@ -176,10 +176,10 @@ void expm1_inplace(Sparse<T, IsCSR>& matrix) {
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
 
         if (len > 0) {
-            auto values = matrix.primary_values(idx);
+            auto values = matrix.primary_values_unsafe(idx);
             detail::apply_expm1_simd(values.ptr, len);
         }
     });

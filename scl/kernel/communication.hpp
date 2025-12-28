@@ -210,9 +210,9 @@ void extract_gene_expression(
     if (IsCSR) {
         // Row-major: need to scan all rows
         for (Index c = 0; c < n_cells; ++c) {
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            Index len = X.row_length_unsafe(c);
             
             // Binary search for gene
             Index lo = 0, hi = len;
@@ -227,9 +227,9 @@ void extract_gene_expression(
         }
     } else {
         // Column-major: direct access
-        auto indices = X.col_indices(gene);
-        auto values = X.col_values(gene);
-        Index len = X.col_length(gene);
+        auto indices = X.col_indices_unsafe(gene);
+        auto values = X.col_values_unsafe(gene);
+        Index len = X.col_length_unsafe(gene);
         
         for (Index k = 0; k < len; ++k) {
             Index c = indices[k];
@@ -288,9 +288,9 @@ Real compute_mean_expression(
             Index c = cell_indices[i];
             if (c >= n_cells) continue;
 
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            Index len = X.row_length_unsafe(c);
             // Binary search
             Index lo = 0, hi = len;
             while (lo < hi) {
@@ -310,9 +310,9 @@ Real compute_mean_expression(
             if (cell_indices[i] < n_cells) valid[cell_indices[i]] = true;
         }
 
-        auto gene_indices = X.col_indices(gene);
-        auto gene_values = X.col_values(gene);
-        Index gene_len = X.col_length(gene);
+        auto gene_indices = X.col_indices_unsafe(gene);
+        auto gene_values = X.col_values_unsafe(gene);
+        Index gene_len = X.col_length_unsafe(gene);
         for (Index k = 0; k < gene_len; ++k) {
             Index c = gene_indices[k];
             if (c < n_cells && valid[c]) {
@@ -1017,9 +1017,9 @@ void spatial_communication_score(
 
     // Parallel cell scoring
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells), [&](size_t i, size_t) {
-        auto neighbors = spatial_graph.primary_indices(static_cast<Index>(i));
-        auto weights = spatial_graph.primary_values(static_cast<Index>(i));
-        Index n_neighbors = spatial_graph.primary_length(static_cast<Index>(i));
+        auto neighbors = spatial_graph.primary_indices_unsafe(static_cast<Index>(i));
+        auto weights = spatial_graph.primary_values_unsafe(static_cast<Index>(i));
+        Index n_neighbors = spatial_graph.primary_length_unsafe(static_cast<Index>(i));
 
         Real score = 0, w_sum = 0;
         Real l_i = ligand_expr[i];

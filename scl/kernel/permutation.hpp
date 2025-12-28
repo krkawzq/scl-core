@@ -728,7 +728,7 @@ void batch_permutation_test(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_rows), [&](size_t i, size_t rank) {
         const Index idx = static_cast<Index>(i);
-        const Index len = matrix.row_length(idx);
+        const Index len = matrix.row_length_unsafe(idx);
 
         if (len == 0) {
             p_values[i] = Real(1);
@@ -742,8 +742,8 @@ void batch_permutation_test(
             perm[j] = group_labels[j];
         }
 
-        auto indices = matrix.row_indices(idx);
-        auto values = matrix.row_values(idx);
+        auto indices = matrix.row_indices_unsafe(idx);
+        auto values = matrix.row_values_unsafe(idx);
 
         Real obs = detail::compute_mean_diff(
             values.ptr, indices.ptr, static_cast<Size>(len),

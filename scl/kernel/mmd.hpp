@@ -373,8 +373,8 @@ void mmd_rbf(
     // Find max nnz for buffer allocation
     Size max_nnz_x = 0, max_nnz_y = 0;
     for (Index i = 0; i < primary_dim; ++i) {
-        Size nnz_x = static_cast<Size>(mat_x.primary_length(i));
-        Size nnz_y = static_cast<Size>(mat_y.primary_length(i));
+        Size nnz_x = static_cast<Size>(mat_x.primary_length_unsafe(i));
+        Size nnz_y = static_cast<Size>(mat_y.primary_length_unsafe(i));
         if (nnz_x > max_nnz_x) max_nnz_x = nnz_x;
         if (nnz_y > max_nnz_y) max_nnz_y = nnz_y;
     }
@@ -391,10 +391,10 @@ void mmd_rbf(
     scl::threading::parallel_for(Index(0), primary_dim, [&](size_t p_sz, size_t thread_rank) {
         const Index p = static_cast<Index>(p_sz);
 
-        auto vals_x_arr = mat_x.primary_values(p);
-        auto vals_y_arr = mat_y.primary_values(p);
-        Size nnz_x = static_cast<Size>(mat_x.primary_length(p));
-        Size nnz_y = static_cast<Size>(mat_y.primary_length(p));
+        auto vals_x_arr = mat_x.primary_values_unsafe(p);
+        auto vals_y_arr = mat_y.primary_values_unsafe(p);
+        Size nnz_x = static_cast<Size>(mat_x.primary_length_unsafe(p));
+        Size nnz_y = static_cast<Size>(mat_y.primary_length_unsafe(p));
 
         if (SCL_UNLIKELY(nnz_x == 0 && nnz_y == 0)) {
             output[static_cast<Size>(p)] = T(0);

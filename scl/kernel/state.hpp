@@ -71,8 +71,8 @@ SCL_FORCE_INLINE Real compute_geneset_score(
     Real sum = Real(0.0);
     Size count = 0;
 
-    const Index row_start = expression.row_indices()[cell];
-    const Index row_end = expression.row_indices()[cell + 1];
+    const Index row_start = expression.row_indices_unsafe()[cell];
+    const Index row_end = expression.row_indices_unsafe()[cell + 1];
     const Index row_len = row_end - row_start;
 
     // For each gene in the gene set, use binary search
@@ -82,7 +82,7 @@ SCL_FORCE_INLINE Real compute_geneset_score(
         // Binary search for gene in sorted row indices
         if (row_len > 0) {
             Index pos = binary_search_gene(
-                expression.col_indices(), row_start, row_end, gene);
+                expression.col_indices_unsafe(), row_start, row_end, gene);
             if (pos >= 0) {
                 sum += static_cast<Real>(expression.values()[pos]);
                 ++count;
@@ -104,8 +104,8 @@ SCL_FORCE_INLINE Size count_expressed_genes(
     Index cell,
     Real threshold
 ) {
-    const Index row_start = expression.row_indices()[cell];
-    const Index row_end = expression.row_indices()[cell + 1];
+    const Index row_start = expression.row_indices_unsafe()[cell];
+    const Index row_end = expression.row_indices_unsafe()[cell + 1];
 
     Size count = 0;
     for (Index j = row_start; j < row_end; ++j) {
@@ -122,8 +122,8 @@ SCL_FORCE_INLINE Real compute_expression_entropy(
     const Sparse<T, IsCSR>& expression,
     Index cell
 ) {
-    const Index row_start = expression.row_indices()[cell];
-    const Index row_end = expression.row_indices()[cell + 1];
+    const Index row_start = expression.row_indices_unsafe()[cell];
+    const Index row_end = expression.row_indices_unsafe()[cell + 1];
 
     // Sum total expression
     Real total = Real(0.0);
@@ -315,11 +315,11 @@ void differentiation_potential(
     }
 
     scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices()[j];
+            Index gene = expression.col_indices_unsafe()[j];
             int64_t scaled = static_cast<int64_t>(static_cast<Real>(expression.values()[j]) * SCALE);
             atomic_sums[gene].fetch_add(scaled, std::memory_order_relaxed);
         }
@@ -351,12 +351,12 @@ void differentiation_potential(
 
         for (Size i = 0; i < n_cells; ++i) {
             Real gene_val = Real(0.0);
-            const Index row_start = expression.row_indices()[i];
-            const Index row_end = expression.row_indices()[i + 1];
+            const Index row_start = expression.row_indices_unsafe()[i];
+            const Index row_end = expression.row_indices_unsafe()[i + 1];
 
             // Use binary search for gene lookup
             Index pos = detail::binary_search_gene(
-                expression.col_indices(), row_start, row_end, static_cast<Index>(g));
+                expression.col_indices_unsafe(), row_start, row_end, static_cast<Index>(g));
             if (pos >= 0) {
                 gene_val = static_cast<Real>(expression.values()[pos]);
             }
@@ -398,8 +398,8 @@ void differentiation_potential(
         Real score = Real(0.0);
         Real total_weight = Real(0.0);
 
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Size t = 0; t < n_top; ++t) {
             Index gene = top_genes[t];
@@ -409,7 +409,7 @@ void differentiation_potential(
             // Use binary search for gene lookup
             Real val = Real(0.0);
             Index pos = detail::binary_search_gene(
-                expression.col_indices(), row_start, row_end, gene);
+                expression.col_indices_unsafe(), row_start, row_end, gene);
             if (pos >= 0) {
                 val = static_cast<Real>(expression.values()[pos]);
             }
@@ -702,8 +702,8 @@ void signature_score(
         Real weighted_sum = Real(0.0);
         Real weight_sum = Real(0.0);
 
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         for (Size g = 0; g < n_signature; ++g) {
             Index gene = gene_indices.ptr[g];
@@ -712,7 +712,7 @@ void signature_score(
             // Use binary search for gene lookup
             Real val = Real(0.0);
             Index pos = detail::binary_search_gene(
-                expression.col_indices(), row_start, row_end, gene);
+                expression.col_indices_unsafe(), row_start, row_end, gene);
             if (pos >= 0) {
                 val = static_cast<Real>(expression.values()[pos]);
             }
@@ -801,8 +801,8 @@ void transcriptional_diversity(
 
     // Parallel diversity computation
     scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        const Index row_start = expression.row_indices_unsafe()[i];
+        const Index row_end = expression.row_indices_unsafe()[i + 1];
 
         // Simpson's diversity index
         Real total = Real(0.0);

@@ -382,13 +382,14 @@ void clone_phenotype(
 
         ++clone_sizes[clone];
 
-        const Index row_start = expression.row_indices()[i];
-        const Index row_end = expression.row_indices()[i + 1];
+        auto primary_vals = expression.primary_values_unsafe(i);
+        auto primary_idxs = expression.primary_indices_unsafe(i);
+        Index primary_len = expression.primary_length_unsafe(i);
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices()[j];
+        for (Index j = 0; j < primary_len; ++j) {
+            Index gene = primary_idxs.ptr[j];
             clone_profiles[clone * n_genes + gene] +=
-                static_cast<Real>(expression.values()[j]);
+                static_cast<Real>(primary_vals.ptr[j]);
         }
     }
 

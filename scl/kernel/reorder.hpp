@@ -216,7 +216,7 @@ void align_secondary(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (len_sz == 0) {
@@ -224,8 +224,8 @@ void align_secondary(
             return;
         }
 
-        auto indices_arr = matrix.primary_indices(idx);
-        auto values_arr = matrix.primary_values(idx);
+        auto indices_arr = matrix.primary_indices_unsafe(idx);
+        auto values_arr = matrix.primary_values_unsafe(idx);
 
         Index* indices_copy = scl::memory::aligned_alloc<Index>(len_sz, SCL_ALIGNMENT);
         T* values_copy = scl::memory::aligned_alloc<T>(len_sz, SCL_ALIGNMENT);
@@ -269,7 +269,7 @@ Size compute_filtered_nnz(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (len_sz == 0) {
@@ -277,7 +277,7 @@ Size compute_filtered_nnz(
             return;
         }
 
-        auto indices = matrix.primary_indices(idx);
+        auto indices = matrix.primary_indices_unsafe(idx);
         partial_sums[p] = detail::count_valid_adaptive(
             indices.ptr, len_sz, index_map.ptr, new_secondary_dim
         );

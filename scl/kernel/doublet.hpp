@@ -298,9 +298,9 @@ void simulate_doublets(
         Real* profile = doublet_profiles + static_cast<Size>(d) * n_genes;
 
         // Add cell1's expression (4-way unrolled)
-        auto indices1 = X.row_indices(cell1);
-        auto values1 = X.row_values(cell1);
-        Index len1 = X.row_length(cell1);
+        auto indices1 = X.row_indices_unsafe(cell1);
+        auto values1 = X.row_values_unsafe(cell1);
+        Index len1 = X.row_length_unsafe(cell1);
 
         Index k = 0;
         for (; k + 4 <= len1; k += 4) {
@@ -321,9 +321,9 @@ void simulate_doublets(
         }
 
         // Add cell2's expression (4-way unrolled)
-        auto indices2 = X.row_indices(cell2);
-        auto values2 = X.row_values(cell2);
-        Index len2 = X.row_length(cell2);
+        auto indices2 = X.row_indices_unsafe(cell2);
+        auto values2 = X.row_values_unsafe(cell2);
+        Index len2 = X.row_length_unsafe(cell2);
 
         k = 0;
         for (; k + 4 <= len2; k += 4) {
@@ -371,9 +371,9 @@ SCL_FORCE_INLINE void sparse_to_dense_row(
     scl::memory::zero(Array<Real>(dense, static_cast<Size>(n_genes)));
 
     if constexpr (IsCSR) {
-        auto indices = X.row_indices(cell);
-        auto values = X.row_values(cell);
-        Index len = X.row_length(cell);
+        auto indices = X.row_indices_unsafe(cell);
+        auto values = X.row_values_unsafe(cell);
+        Index len = X.row_length_unsafe(cell);
 
         // 4-way unrolled scatter
         Index k = 0;
@@ -892,8 +892,8 @@ void classify_doublet_types_knn(
         // Count neighbor cluster memberships
         scl::memory::zero(Array<Index>(neighbor_cluster_counts, static_cast<Size>(n_clusters)));
 
-        auto indices = knn_graph.primary_indices(i);
-        Index len = knn_graph.primary_length(i);
+        auto indices = knn_graph.primary_indices_unsafe(i);
+        Index len = knn_graph.primary_length_unsafe(i);
 
         // 4-way unrolled counting
         Index k = 0;
@@ -970,8 +970,8 @@ void density_doublet_score(
     const bool use_parallel = n >= static_cast<Index>(config::PARALLEL_THRESHOLD);
 
     auto compute_density = [&](Index i) {
-        auto values = knn_graph.primary_values(i);
-        Index len = knn_graph.primary_length(i);
+        auto values = knn_graph.primary_values_unsafe(i);
+        Index len = knn_graph.primary_length_unsafe(i);
 
         if (SCL_UNLIKELY(len == 0)) {
             density_scores[i] = Real(0);
@@ -1018,9 +1018,9 @@ void variance_doublet_score(
     const bool use_parallel = n_cells >= static_cast<Index>(config::PARALLEL_THRESHOLD);
 
     auto compute_variance = [&](Index c) {
-        auto indices = X.row_indices(c);
-        auto values = X.row_values(c);
-        Index len = X.row_length(c);
+        auto indices = X.row_indices_unsafe(c);
+        auto values = X.row_values_unsafe(c);
+        Index len = X.row_length_unsafe(c);
 
         Real sum_sq_dev = Real(0);
 

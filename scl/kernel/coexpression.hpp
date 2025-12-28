@@ -467,9 +467,9 @@ SCL_HOT void extract_all_gene_expressions(
     if (IsCSR) {
         // Parallel over cells
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            const Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            const Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
@@ -481,9 +481,9 @@ SCL_HOT void extract_all_gene_expressions(
     } else {
         // Parallel over genes
         scl::threading::parallel_for(Size(0), G, [&](size_t g) {
-            auto indices = X.col_indices(static_cast<Index>(g));
-            auto values = X.col_values(static_cast<Index>(g));
-            const Index len = X.col_length(static_cast<Index>(g));
+            auto indices = X.col_indices_unsafe(static_cast<Index>(g));
+            auto values = X.col_values_unsafe(static_cast<Index>(g));
+            const Index len = X.col_length_unsafe(static_cast<Index>(g));
 
             Real* row = gene_expr + g * N;
             for (Index k = 0; k < len; ++k) {
@@ -1124,9 +1124,9 @@ void module_eigengene(
 
         if (IsCSR) {
             for (Index c = 0; c < n_cells; ++c) {
-                auto indices = expression.row_indices(c);
-                auto values = expression.row_values(c);
-                const Index len = expression.row_length(c);
+                auto indices = expression.row_indices_unsafe(c);
+                auto values = expression.row_values_unsafe(c);
+                const Index len = expression.row_length_unsafe(c);
 
                 for (Index k = 0; k < len; ++k) {
                     if (indices[k] == gene) {
@@ -1136,9 +1136,9 @@ void module_eigengene(
                 }
             }
         } else {
-            auto indices = expression.col_indices(gene);
-            auto values = expression.col_values(gene);
-            const Index len = expression.col_length(gene);
+            auto indices = expression.col_indices_unsafe(gene);
+            auto values = expression.col_values_unsafe(gene);
+            const Index len = expression.col_length_unsafe(gene);
 
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];

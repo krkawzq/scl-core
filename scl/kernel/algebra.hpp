@@ -436,12 +436,12 @@ void spmv(
     // Parallel SpMV
     scl::threading::parallel_for(Size(0), N, [&](size_t p) {
         const Index primary_idx = static_cast<Index>(p);
-        const Size len = static_cast<Size>(A.primary_length(primary_idx));
+        const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
 
-        auto vals = A.primary_values(primary_idx);
-        auto inds = A.primary_indices(primary_idx);
+        auto vals = A.primary_values_unsafe(primary_idx);
+        auto inds = A.primary_indices_unsafe(primary_idx);
 
         T dot = detail::sparse_dot_adaptive(inds.ptr, vals.ptr, len, x.ptr);
         y[p] += alpha * dot;
@@ -488,12 +488,12 @@ void spmv_transpose(
 
     scl::threading::parallel_for(Size(0), M, [&](size_t p) {
         const Index primary_idx = static_cast<Index>(p);
-        const Size len = static_cast<Size>(A.primary_length(primary_idx));
+        const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
 
-        auto vals = A.primary_values(primary_idx);
-        auto inds = A.primary_indices(primary_idx);
+        auto vals = A.primary_values_unsafe(primary_idx);
+        auto inds = A.primary_indices_unsafe(primary_idx);
 
         T x_p = x[p] * alpha;
 
@@ -570,12 +570,12 @@ void spmm(
 
         scl::threading::parallel_for(Size(0), M, [&](size_t p) {
             const Index primary_idx = static_cast<Index>(p);
-            const Size len = static_cast<Size>(A.primary_length(primary_idx));
+            const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
             if (SCL_UNLIKELY(len == 0)) return;
 
-            auto vals = A.primary_values(primary_idx);
-            auto inds = A.primary_indices(primary_idx);
+            auto vals = A.primary_values_unsafe(primary_idx);
+            auto inds = A.primary_indices_unsafe(primary_idx);
 
             T* y_row = Y + p * K + col_start;
 
@@ -625,12 +625,12 @@ void spmv_fused_linear(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p) {
         const Index primary_idx = static_cast<Index>(p);
-        const Size len = static_cast<Size>(A.primary_length(primary_idx));
+        const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
 
-        auto vals = A.primary_values(primary_idx);
-        auto inds = A.primary_indices(primary_idx);
+        auto vals = A.primary_values_unsafe(primary_idx);
+        auto inds = A.primary_indices_unsafe(primary_idx);
 
         T dot_x = T(0), dot_z = T(0);
 
@@ -678,14 +678,14 @@ void row_norms(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p) {
         const Index primary_idx = static_cast<Index>(p);
-        const Size len = static_cast<Size>(A.primary_length(primary_idx));
+        const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) {
             norms[p] = T(0);
             return;
         }
 
-        auto vals = A.primary_values(primary_idx);
+        auto vals = A.primary_values_unsafe(primary_idx);
 
         // Use vectorize::sum_squared for SIMD-optimized sum of squares
         T sum_sq = scl::vectorize::sum_squared(Array<const T>(vals.ptr, len));
@@ -709,14 +709,14 @@ void row_sums(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p) {
         const Index primary_idx = static_cast<Index>(p);
-        const Size len = static_cast<Size>(A.primary_length(primary_idx));
+        const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) {
             sums[p] = T(0);
             return;
         }
 
-        auto vals = A.primary_values(primary_idx);
+        auto vals = A.primary_values_unsafe(primary_idx);
 
         // Use vectorize::sum for SIMD-optimized sum
         sums[p] = scl::vectorize::sum(Array<const T>(vals.ptr, len));
@@ -741,12 +741,12 @@ void extract_diagonal(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
-        const Size len = static_cast<Size>(A.primary_length(idx));
+        const Size len = static_cast<Size>(A.primary_length_unsafe(idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
 
-        auto vals = A.primary_values(idx);
-        auto inds = A.primary_indices(idx);
+        auto vals = A.primary_values_unsafe(idx);
+        auto inds = A.primary_indices_unsafe(idx);
 
         // Use algo::lower_bound for binary search
         const Index* pos = scl::algo::lower_bound(inds.ptr, inds.ptr + len, idx);
@@ -774,11 +774,11 @@ void scale_rows(
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p) {
         const Index primary_idx = static_cast<Index>(p);
-        const Size len = static_cast<Size>(A.primary_length(primary_idx));
+        const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
 
-        T* vals = const_cast<T*>(A.primary_values(primary_idx).ptr);
+        T* vals = const_cast<T*>(A.primary_values_unsafe(primary_idx).ptr);
         T s = scale_factors[p];
 
         if (SCL_UNLIKELY(s == T(0))) {

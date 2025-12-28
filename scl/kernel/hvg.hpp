@@ -198,7 +198,7 @@ void compute_moments(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const auto values = matrix.primary_values(idx);
+        const auto values = matrix.primary_values_unsafe(idx);
         const Size len_sz = values.size();
 
         Real sum = Real(0);
@@ -233,8 +233,8 @@ void compute_clipped_moments(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const auto values = matrix.primary_values(idx);
-        const Index len = matrix.primary_length(idx);
+        const auto values = matrix.primary_values_unsafe(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Real clip = clip_vals[p];
 
         Real sum = Real(0);

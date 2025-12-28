@@ -4,6 +4,8 @@
 #include "scl/core/macros.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/registry.hpp"
+#include "scl/core/algo.hpp"
+#include "scl/core/memory.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -22,7 +24,7 @@
 // DESIGN NOTES:
 // - Uses row-pointer (not row-offset) design for efficient slicing
 // - Block allocation to balance memory reuse and fragmentation
-// - Reference counting for shared sub-matrices
+// - Reference counting via registry for shared sub-matrices
 // - Compatible with traditional CSR when using contiguous allocation
 //
 // INVARIANT:
@@ -30,12 +32,13 @@
 //   (sorted). This is enforced by all factory methods and maintained by
 //   all operations. All element access methods assume this invariant.
 //
-// OWNERSHIP SEMANTICS:
-// - Factory methods (create, from_traditional, etc.) -> owns data
-// - wrap_traditional -> does NOT own data (external lifetime management)
-// - row_slice_view/col_slice_view -> shares data via reference counting
-// - clone()/copy() -> deep copy with independent ownership
-// - Move -> transfers ownership, source becomes empty
+// LIFECYCLE MANAGEMENT:
+// - All data lifecycle is managed by Registry (alias reference counting)
+// - Factory methods (create, from_traditional) register data to registry
+// - wrap_traditional creates unregistered pointers (caller manages lifetime)
+// - Slicing uses alias_incref to share data with zero-copy
+// - Destructor calls alias_decref_batch (safe for unregistered pointers)
+// - External data (from Python/NumPy) should be registered before passing
 // =============================================================================
 
 namespace scl {
@@ -159,14 +162,15 @@ struct Sparse {
     // Data Members
     // =========================================================================
 
-    Pointer* data_ptrs;      // Array of pointers to row/col data
-    Pointer* indices_ptrs;   // Array of pointers to row/col indices
-    Index* lengths;          // Length of each row/col
+    Pointer* data_ptrs;      // Array of pointers to row/col data (registry-managed)
+    Pointer* indices_ptrs;   // Array of pointers to row/col indices (registry-managed)
+    Index* lengths;          // Length of each row/col (registry-managed)
     Index rows_;
     Index cols_;
     Index nnz_;
-    bool owns_data_;         // Whether this matrix owns the data (false for wrapped)
-    bool is_view_;           // Whether this is a view (shares pointers with another matrix)
+    // NOTE: No owns_data_ or is_view_ flags - lifecycle managed by registry
+    // - Data aliases are reference-counted via registry
+    // - Metadata (data_ptrs, indices_ptrs, lengths) always owned by this instance
 
     // =========================================================================
     // Constructors
@@ -174,12 +178,12 @@ struct Sparse {
 
     constexpr Sparse() noexcept
         : data_ptrs(nullptr), indices_ptrs(nullptr), lengths(nullptr),
-          rows_(0), cols_(0), nnz_(0), owns_data_(true), is_view_(false) {}
+          rows_(0), cols_(0), nnz_(0) {}
 
     constexpr Sparse(Pointer* dp, Pointer* ip, Index* len,
-                     Index r, Index c, Index n, bool owns = true, bool is_view = false) noexcept
+                     Index r, Index c, Index n) noexcept
         : data_ptrs(dp), indices_ptrs(ip), lengths(len),
-          rows_(r), cols_(c), nnz_(n), owns_data_(owns), is_view_(is_view) {
+          rows_(r), cols_(c), nnz_(n) {
         SCL_ASSERT(r >= 0, "Sparse: rows must be non-negative");
         SCL_ASSERT(c >= 0, "Sparse: cols must be non-negative");
         SCL_ASSERT(n >= 0, "Sparse: nnz must be non-negative");
@@ -201,15 +205,12 @@ struct Sparse {
         , rows_(other.rows_)
         , cols_(other.cols_)
         , nnz_(other.nnz_)
-        , owns_data_(other.owns_data_)
-        , is_view_(other.is_view_)
     {
+        // Clear source without releasing resources (ownership transferred)
         other.data_ptrs = nullptr;
         other.indices_ptrs = nullptr;
         other.lengths = nullptr;
         other.rows_ = other.cols_ = other.nnz_ = 0;
-        other.owns_data_ = false;
-        other.is_view_ = false;
     }
 
     // Move assignment: release current resources and transfer ownership
@@ -223,15 +224,12 @@ struct Sparse {
             rows_ = other.rows_;
             cols_ = other.cols_;
             nnz_ = other.nnz_;
-            owns_data_ = other.owns_data_;
-            is_view_ = other.is_view_;
 
+            // Clear source without releasing resources (ownership transferred)
             other.data_ptrs = nullptr;
             other.indices_ptrs = nullptr;
             other.lengths = nullptr;
             other.rows_ = other.cols_ = other.nnz_ = 0;
-            other.owns_data_ = false;
-            other.is_view_ = false;
         }
         return *this;
     }
@@ -336,14 +334,57 @@ struct Sparse {
         return lengths[i];
     }
 
+    // Unsafe access (no bounds checking) - caller guarantees valid index
+    [[nodiscard]] SCL_FORCE_INLINE Array<T> row_values_unsafe(Index i) const noexcept 
+        requires (IsCSR) {
+        return {static_cast<T*>(data_ptrs[i]), static_cast<Size>(lengths[i])};
+    }
+
+    [[nodiscard]] SCL_FORCE_INLINE Array<Index> row_indices_unsafe(Index i) const noexcept 
+        requires (IsCSR) {
+        return {static_cast<Index*>(indices_ptrs[i]), static_cast<Size>(lengths[i])};
+    }
+
+    [[nodiscard]] SCL_FORCE_INLINE Index row_length_unsafe(Index i) const noexcept 
+        requires (IsCSR) {
+        return lengths[i];
+    }
+
+    [[nodiscard]] SCL_FORCE_INLINE Array<T> col_values_unsafe(Index j) const noexcept 
+        requires (!IsCSR) {
+        return {static_cast<T*>(data_ptrs[j]), static_cast<Size>(lengths[j])};
+    }
+
+    [[nodiscard]] SCL_FORCE_INLINE Array<Index> col_indices_unsafe(Index j) const noexcept 
+        requires (!IsCSR) {
+        return {static_cast<Index*>(indices_ptrs[j]), static_cast<Size>(lengths[j])};
+    }
+
+    [[nodiscard]] SCL_FORCE_INLINE Index col_length_unsafe(Index j) const noexcept 
+        requires (!IsCSR) {
+        return lengths[j];
+    }
+
+    [[nodiscard]] SCL_FORCE_INLINE Array<T> primary_values_unsafe(Index i) const noexcept {
+        return {static_cast<T*>(data_ptrs[i]), static_cast<Size>(lengths[i])};
+    }
+
+    [[nodiscard]] SCL_FORCE_INLINE Array<Index> primary_indices_unsafe(Index i) const noexcept {
+        return {static_cast<Index*>(indices_ptrs[i]), static_cast<Size>(lengths[i])};
+    }
+
+    [[nodiscard]] SCL_FORCE_INLINE Index primary_length_unsafe(Index i) const noexcept {
+        return lengths[i];
+    }
+
     // =========================================================================
     // Element Access
     // =========================================================================
     
     /// @brief Get value at (row, col), returns 0 if not found
     /// @note O(log n) - indices are guaranteed sorted per CSR/CSC specification
-    [[nodiscard]] T at(Index row, Index col) const noexcept {
-        if (!valid() || row < 0 || row >= rows_ || col < 0 || col >= cols_) {
+    [[nodiscard]] SCL_FORCE_INLINE T at(Index row, Index col) const noexcept {
+        if (SCL_UNLIKELY(!valid() || row < 0 || row >= rows_ || col < 0 || col >= cols_)) {
             return T{0};
         }
         
@@ -351,11 +392,11 @@ struct Sparse {
         const Index secondary_idx = IsCSR ? col : row;
         
         const auto indices = primary_indices(primary_idx);
-        if (indices.empty()) return T{0};
+        if (SCL_UNLIKELY(indices.empty())) return T{0};
         
         // Binary search (indices guaranteed sorted)
-        const auto it = std::lower_bound(indices.begin(), indices.end(), secondary_idx);
-        if (it != indices.end() && *it == secondary_idx) {
+        const auto it = scl::algo::lower_bound(indices.begin(), indices.end(), secondary_idx);
+        if (SCL_LIKELY(it != indices.end() && *it == secondary_idx)) {
             return primary_values(primary_idx)[it - indices.begin()];
         }
         return T{0};
@@ -363,8 +404,8 @@ struct Sparse {
     
     /// @brief Check if element exists at (row, col)
     /// @note O(log n) - indices are guaranteed sorted per CSR/CSC specification
-    [[nodiscard]] bool exists(Index row, Index col) const noexcept {
-        if (!valid() || row < 0 || row >= rows_ || col < 0 || col >= cols_) {
+    [[nodiscard]] SCL_FORCE_INLINE bool exists(Index row, Index col) const noexcept {
+        if (SCL_UNLIKELY(!valid() || row < 0 || row >= rows_ || col < 0 || col >= cols_)) {
             return false;
         }
         
@@ -372,11 +413,40 @@ struct Sparse {
         const Index secondary_idx = IsCSR ? col : row;
         
         const auto indices = primary_indices(primary_idx);
-        if (indices.empty()) return false;
+        if (SCL_UNLIKELY(indices.empty())) return false;
         
         // Binary search (indices guaranteed sorted)
-        const auto it = std::lower_bound(indices.begin(), indices.end(), secondary_idx);
-        return it != indices.end() && *it == secondary_idx;
+        const auto it = scl::algo::lower_bound(indices.begin(), indices.end(), secondary_idx);
+        return SCL_LIKELY(it != indices.end() && *it == secondary_idx);
+    }
+    
+    /// @brief Get value at (row, col) without bounds checking (unsafe)
+    /// @warning Caller guarantees: matrix is valid, indices are in bounds
+    [[nodiscard]] SCL_FORCE_INLINE T at_unsafe(Index row, Index col) const noexcept {
+        const Index primary_idx = IsCSR ? row : col;
+        const Index secondary_idx = IsCSR ? col : row;
+        
+        const auto indices = primary_indices_unsafe(primary_idx);
+        if (SCL_UNLIKELY(lengths[primary_idx] == 0)) return T{0};
+        
+        const auto it = scl::algo::lower_bound(indices.begin(), indices.end(), secondary_idx);
+        if (SCL_LIKELY(it != indices.end() && *it == secondary_idx)) {
+            return primary_values_unsafe(primary_idx)[it - indices.begin()];
+        }
+        return T{0};
+    }
+    
+    /// @brief Check if element exists without bounds checking (unsafe)
+    /// @warning Caller guarantees: matrix is valid, indices are in bounds
+    [[nodiscard]] SCL_FORCE_INLINE bool exists_unsafe(Index row, Index col) const noexcept {
+        const Index primary_idx = IsCSR ? row : col;
+        const Index secondary_idx = IsCSR ? col : row;
+        
+        if (SCL_UNLIKELY(lengths[primary_idx] == 0)) return false;
+        
+        const auto indices = primary_indices_unsafe(primary_idx);
+        const auto it = scl::algo::lower_bound(indices.begin(), indices.end(), secondary_idx);
+        return SCL_LIKELY(it != indices.end() && *it == secondary_idx);
     }
 
     // =========================================================================
@@ -385,30 +455,30 @@ struct Sparse {
     
     /// @brief Check if data is stored in a single contiguous block
     [[nodiscard]] bool is_contiguous() const noexcept {
-        if (!valid() || nnz_ == 0) return true;
+        if (SCL_UNLIKELY(!valid() || nnz_ == 0)) return true;
         
         const Index pdim = primary_dim();
         
         // Find first non-empty row
         Index first_nonempty = -1;
         for (Index i = 0; i < pdim; ++i) {
-            if (lengths[i] > 0) {
+            if (SCL_LIKELY(lengths[i] > 0)) {
                 first_nonempty = i;
                 break;
             }
         }
         
-        if (first_nonempty < 0) return true;
+        if (SCL_UNLIKELY(first_nonempty < 0)) return true;
         
         // Check if all data is contiguous
         T* expected_data = static_cast<T*>(data_ptrs[first_nonempty]);
         Index* expected_indices = static_cast<Index*>(indices_ptrs[first_nonempty]);
         
         for (Index i = first_nonempty; i < pdim; ++i) {
-            if (lengths[i] == 0) continue;
+            if (SCL_UNLIKELY(lengths[i] == 0)) continue;
             
-            if (static_cast<T*>(data_ptrs[i]) != expected_data ||
-                static_cast<Index*>(indices_ptrs[i]) != expected_indices) {
+            if (SCL_UNLIKELY(static_cast<T*>(data_ptrs[i]) != expected_data ||
+                static_cast<Index*>(indices_ptrs[i]) != expected_indices)) {
                 return false;
             }
             
@@ -526,11 +596,11 @@ struct Sparse {
             return {};
         }
         
-        std::memset(dp, 0, sizeof(Pointer) * pdim);
-        std::memset(ip, 0, sizeof(Pointer) * pdim);
-        std::memset(len, 0, sizeof(Index) * pdim);
+        scl::algo::zero(dp, static_cast<size_t>(pdim));
+        scl::algo::zero(ip, static_cast<size_t>(pdim));
+        scl::algo::zero(len, static_cast<size_t>(pdim));
         
-        return Sparse(dp, ip, len, rows, cols, 0, true);
+        return Sparse(dp, ip, len, rows, cols, 0);
     }
 
     // =========================================================================
@@ -595,7 +665,7 @@ struct Sparse {
             return {};
         }
 
-        return Sparse(dp, ip, len, rows, cols, total_nnz, true);
+        return Sparse(dp, ip, len, rows, cols, total_nnz);
     }
 
     // =========================================================================
@@ -613,6 +683,13 @@ struct Sparse {
         const Index pdim = IsCSR ? rows : cols;
         SCL_CHECK_ARG(static_cast<Index>(offsets.size()) == pdim + 1,
                       "offsets size must be primary_dim + 1");
+        SCL_CHECK_ARG(pdim == 0 || offsets[0] == 0, "offsets[0] must be 0");
+        
+        // Validate offsets are non-decreasing
+        for (Index i = 0; i < pdim; ++i) {
+            SCL_CHECK_ARG(offsets[i + 1] >= offsets[i],
+                          "offsets must be non-decreasing");
+        }
         
         const Index nnz = offsets[pdim];
         SCL_CHECK_ARG(static_cast<Index>(values.size()) >= nnz &&
@@ -643,12 +720,45 @@ struct Sparse {
 
         // Copy data
         for (Index i = 0; i < pdim; ++i) {
-            if (result.lengths[i] > 0) {
+            if (SCL_LIKELY(result.lengths[i] > 0)) {
                 Index start = offsets[i];
                 Index len = result.lengths[i];
                 
-                std::memcpy(result.data_ptrs[i], &values[start], len * sizeof(T));
-                std::memcpy(result.indices_ptrs[i], &indices[start], len * sizeof(Index));
+                scl::algo::copy(&values[start], static_cast<T*>(result.data_ptrs[i]), static_cast<size_t>(len));
+                scl::algo::copy(&indices[start], static_cast<Index*>(result.indices_ptrs[i]), static_cast<size_t>(len));
+            }
+        }
+
+        return result;
+    }
+    
+    /// @brief Create from traditional CSR/CSC format without validation (unsafe)
+    /// @warning Caller guarantees: offsets is valid, non-decreasing, offsets[0]==0,
+    ///          values/indices have sufficient size, indices are sorted within rows
+    [[nodiscard]] static Sparse from_traditional_unsafe(
+        Index rows, Index cols,
+        std::span<const T> values,
+        std::span<const Index> indices,
+        std::span<const Index> offsets,
+        BlockStrategy strategy = BlockStrategy::adaptive())
+    {
+        const Index pdim = IsCSR ? rows : cols;
+        const Index nnz = offsets[pdim];
+
+        std::vector<Index> primary_nnzs(pdim);
+        for (Index i = 0; i < pdim; ++i) {
+            primary_nnzs[i] = offsets[i + 1] - offsets[i];
+        }
+
+        Sparse result = create(rows, cols, primary_nnzs, strategy);
+        if (!result.valid()) return {};
+
+        for (Index i = 0; i < pdim; ++i) {
+            if (SCL_LIKELY(result.lengths[i] > 0)) {
+                Index start = offsets[i];
+                Index len = result.lengths[i];
+                scl::algo::copy(&values[start], static_cast<T*>(result.data_ptrs[i]), static_cast<size_t>(len));
+                scl::algo::copy(&indices[start], static_cast<Index*>(result.indices_ptrs[i]), static_cast<size_t>(len));
             }
         }
 
@@ -657,6 +767,9 @@ struct Sparse {
     
     /// @brief Wrap existing traditional CSR/CSC arrays (zero-copy, external ownership)
     /// @warning Caller must ensure arrays outlive the Sparse object
+    /// @note Data pointers are NOT registered with registry. When destroyed, only
+    ///       metadata is freed. For proper lifecycle management, caller should
+    ///       register data with registry before calling this function.
     [[nodiscard]] static Sparse wrap_traditional(
         Index rows, Index cols,
         T* values,
@@ -668,6 +781,13 @@ struct Sparse {
                       "offsets size must be primary_dim + 1");
         SCL_CHECK_ARG(values != nullptr && indices != nullptr,
                       "values and indices must not be null");
+        SCL_CHECK_ARG(offsets[0] == 0, "offsets[0] must be 0");
+
+        // Validate offsets are non-decreasing
+        for (Index i = 0; i < pdim; ++i) {
+            SCL_CHECK_ARG(offsets[i + 1] >= offsets[i],
+                          "offsets must be non-decreasing");
+        }
 
         const Index nnz = offsets[pdim];
         auto& reg = get_registry();
@@ -692,8 +812,43 @@ struct Sparse {
             ip[i] = len[i] > 0 ? (indices + start) : nullptr;
         }
 
-        // Note: data is NOT registered, so unregister_all() will only free metadata
-        return Sparse(dp, ip, len, rows, cols, nnz, false);
+        // Data pointers are NOT registered - alias_decref_batch will skip them
+        // Only metadata arrays (dp, ip, len) are registry-managed
+        return Sparse(dp, ip, len, rows, cols, nnz);
+    }
+    
+    /// @brief Wrap existing traditional CSR/CSC arrays without validation (unsafe)
+    /// @warning Caller guarantees: offsets is valid, non-decreasing, offsets[0]==0,
+    ///          values/indices are not null, arrays outlive the Sparse object
+    [[nodiscard]] static Sparse wrap_traditional_unsafe(
+        Index rows, Index cols,
+        T* values,
+        Index* indices, 
+        std::span<const Index> offsets)
+    {
+        const Index pdim = IsCSR ? rows : cols;
+        const Index nnz = offsets[pdim];
+        auto& reg = get_registry();
+
+        auto* dp = reg.new_array<Pointer>(static_cast<size_t>(pdim));
+        auto* ip = reg.new_array<Pointer>(static_cast<size_t>(pdim));
+        auto* len = reg.new_array<Index>(static_cast<size_t>(pdim));
+
+        if (!dp || !ip || !len) {
+            if (dp) reg.unregister_ptr(dp);
+            if (ip) reg.unregister_ptr(ip);
+            if (len) reg.unregister_ptr(len);
+            return {};
+        }
+
+        for (Index i = 0; i < pdim; ++i) {
+            Index start = offsets[i];
+            len[i] = offsets[i + 1] - start;
+            dp[i] = len[i] > 0 ? (values + start) : nullptr;
+            ip[i] = len[i] > 0 ? (indices + start) : nullptr;
+        }
+
+        return Sparse(dp, ip, len, rows, cols, nnz);
     }
 
     // =========================================================================
@@ -718,15 +873,18 @@ struct Sparse {
                       static_cast<Index>(col_indices.size()) == nnz,
                       "COO arrays size mismatch");
 
-        if (nnz == 0) return zeros(rows, cols);
+        if (SCL_UNLIKELY(nnz == 0)) return zeros(rows, cols);
 
         const Index pdim = IsCSR ? rows : cols;
 
         // Count nnz per row/col
+        const Index sdim = IsCSR ? cols : rows;
         std::vector<Index> primary_nnzs(pdim, 0);
         for (Index i = 0; i < nnz; ++i) {
             Index pidx = IsCSR ? row_indices[i] : col_indices[i];
-            SCL_CHECK_ARG(pidx >= 0 && pidx < pdim, "index out of bounds");
+            Index sidx = IsCSR ? col_indices[i] : row_indices[i];
+            SCL_CHECK_ARG(pidx >= 0 && pidx < pdim, "primary index out of bounds");
+            SCL_CHECK_ARG(sidx >= 0 && sidx < sdim, "secondary index out of bounds");
             ++primary_nnzs[pidx];
         }
 
@@ -737,8 +895,16 @@ struct Sparse {
         // Track insertion position for each row/col
         std::vector<Index> insert_pos(pdim, 0);
 
-        // Fill data (first pass: unsorted)
+        // Fill data (first pass: unsorted) with prefetching
+        constexpr Index PREFETCH_DISTANCE = 16;
         for (Index i = 0; i < nnz; ++i) {
+            // Prefetch future data
+            if (SCL_LIKELY(i + PREFETCH_DISTANCE < nnz)) {
+                Index future_pidx = IsCSR ? row_indices[i + PREFETCH_DISTANCE] : col_indices[i + PREFETCH_DISTANCE];
+                SCL_PREFETCH_WRITE(result.data_ptrs[future_pidx], 1);
+                SCL_PREFETCH_WRITE(result.indices_ptrs[future_pidx], 1);
+            }
+            
             Index pidx = IsCSR ? row_indices[i] : col_indices[i];
             Index sidx = IsCSR ? col_indices[i] : row_indices[i];
             Index pos = insert_pos[pidx]++;
@@ -748,6 +914,53 @@ struct Sparse {
         }
 
         // Sort each row/col by secondary index
+        result.sort_indices();
+
+        return result;
+    }
+    
+    /// @brief Create sparse matrix from COO format without validation (unsafe)
+    /// @warning Caller guarantees: all arrays have same size, all indices are in bounds
+    [[nodiscard]] static Sparse from_coo_unsafe(
+        Index rows, Index cols,
+        std::span<const Index> row_indices,
+        std::span<const Index> col_indices,
+        std::span<const T> values,
+        BlockStrategy strategy = BlockStrategy::adaptive())
+    {
+        const Index nnz = static_cast<Index>(values.size());
+        if (nnz == 0) return zeros(rows, cols);
+
+        const Index pdim = IsCSR ? rows : cols;
+
+        std::vector<Index> primary_nnzs(pdim, 0);
+        for (Index i = 0; i < nnz; ++i) {
+            Index pidx = IsCSR ? row_indices[i] : col_indices[i];
+            ++primary_nnzs[pidx];
+        }
+
+        Sparse result = create(rows, cols, primary_nnzs, strategy);
+        if (!result.valid()) return {};
+
+        std::vector<Index> insert_pos(pdim, 0);
+
+        constexpr Index PREFETCH_DISTANCE = 16;
+        for (Index i = 0; i < nnz; ++i) {
+            // Prefetch future data
+            if (SCL_LIKELY(i + PREFETCH_DISTANCE < nnz)) {
+                Index future_pidx = IsCSR ? row_indices[i + PREFETCH_DISTANCE] : col_indices[i + PREFETCH_DISTANCE];
+                SCL_PREFETCH_WRITE(result.data_ptrs[future_pidx], 1);
+                SCL_PREFETCH_WRITE(result.indices_ptrs[future_pidx], 1);
+            }
+            
+            Index pidx = IsCSR ? row_indices[i] : col_indices[i];
+            Index sidx = IsCSR ? col_indices[i] : row_indices[i];
+            Index pos = insert_pos[pidx]++;
+            
+            static_cast<T*>(result.data_ptrs[pidx])[pos] = values[i];
+            static_cast<Index*>(result.indices_ptrs[pidx])[pos] = sidx;
+        }
+
         result.sort_indices();
 
         return result;
@@ -765,7 +978,7 @@ struct Sparse {
         Pred&& is_nonzero = nullptr,
         BlockStrategy strategy = BlockStrategy::adaptive())
     {
-        SCL_CHECK_ARG(static_cast<Index>(data.size()) >= rows * cols,
+        SCL_CHECK_ARG(data.size() >= static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols),
                       "dense data size mismatch");
 
         const Index pdim = IsCSR ? rows : cols;
@@ -875,13 +1088,21 @@ struct Sparse {
         Sparse result = create(rows_, cols_, nnzs, strategy);
         if (!result.valid()) return {};
 
-        // Copy data
+        // Copy data with prefetching
         for (Index i = 0; i < pdim; ++i) {
-            if (lengths[i] > 0) {
-                std::memcpy(result.data_ptrs[i], data_ptrs[i], 
-                           lengths[i] * sizeof(T));
-                std::memcpy(result.indices_ptrs[i], indices_ptrs[i],
-                           lengths[i] * sizeof(Index));
+            if (SCL_LIKELY(lengths[i] > 0)) {
+                // Prefetch next row if available
+                if (SCL_LIKELY(i + 1 < pdim && lengths[i + 1] > 0)) {
+                    SCL_PREFETCH_READ(data_ptrs[i + 1], 2);
+                    SCL_PREFETCH_READ(indices_ptrs[i + 1], 2);
+                    SCL_PREFETCH_WRITE(result.data_ptrs[i + 1], 2);
+                    SCL_PREFETCH_WRITE(result.indices_ptrs[i + 1], 2);
+                }
+                
+                scl::algo::copy(static_cast<T*>(data_ptrs[i]), static_cast<T*>(result.data_ptrs[i]), 
+                               static_cast<size_t>(lengths[i]));
+                scl::algo::copy(static_cast<Index*>(indices_ptrs[i]), static_cast<Index*>(result.indices_ptrs[i]),
+                               static_cast<size_t>(lengths[i]));
             }
         }
 
@@ -921,10 +1142,16 @@ struct Sparse {
             
         if (!result.valid()) return {};
 
-        // Fill transposed data
+        // Fill transposed data with prefetching
         std::vector<Index> insert_pos(new_pdim, 0);
         
         for (Index i = 0; i < primary_dim(); ++i) {
+            // Prefetch next row if available
+            if (SCL_LIKELY(i + 1 < primary_dim() && lengths[i + 1] > 0)) {
+                SCL_PREFETCH_READ(data_ptrs[i + 1], 2);
+                SCL_PREFETCH_READ(indices_ptrs[i + 1], 2);
+            }
+            
             auto indices = primary_indices(i);
             auto values = primary_values(i);
             
@@ -947,21 +1174,13 @@ struct Sparse {
     // Slicing: View (Shared Memory)
     // =========================================================================
     
-    /// @brief Create a row slice that shares memory with the original
+    /// @brief Create a row slice that shares memory with the original (zero-copy)
     /// @note Modifications to the slice affect the original
-    /// @warning Cannot create view of wrapped matrix (created with wrap_traditional)
-    ///          Use row_slice_copy instead for wrapped matrices
+    /// @note For unregistered data (wrap_traditional), slice works but without refcounting
     [[nodiscard]] Sparse row_slice_view(std::span<const Index> row_indices) const
         requires (IsCSR)
     {
         if (!valid() || row_indices.empty()) return {};
-        
-        // Wrapped matrices don't have proper refcounting, so views are unsafe
-        if (!owns_data_) {
-            SCL_ASSERT(false, 
-                "Cannot create view of wrapped matrix - use row_slice_copy instead");
-            return {};  // Release mode: return empty matrix
-        }
 
         auto& reg = get_registry();
         const Index new_rows = static_cast<Index>(row_indices.size());
@@ -978,11 +1197,10 @@ struct Sparse {
             return {};
         }
 
-        // Copy pointers and increment refcounts
+        // Copy pointers and collect aliases for refcount increment
         Index new_nnz = 0;
-        std::vector<void*> data_aliases, idx_aliases;
-        data_aliases.reserve(new_rows);
-        idx_aliases.reserve(new_rows);
+        std::vector<void*> aliases;
+        aliases.reserve(new_rows * 2);
 
         for (Index i = 0; i < new_rows; ++i) {
             Index src = row_indices[i];
@@ -993,20 +1211,17 @@ struct Sparse {
             new_len[i] = lengths[src];
             new_nnz += lengths[src];
 
-            if (new_dp[i]) data_aliases.push_back(new_dp[i]);
-            if (new_ip[i]) idx_aliases.push_back(new_ip[i]);
+            if (new_dp[i]) aliases.push_back(new_dp[i]);
+            if (new_ip[i]) aliases.push_back(new_ip[i]);
         }
 
-        // Increment reference counts for shared buffers by registering new aliases
-        if (!data_aliases.empty()) {
-            increment_alias_refcounts_safe(reg, data_aliases);
-        }
-        if (!idx_aliases.empty()) {
-            increment_alias_refcounts_safe(reg, idx_aliases);
+        // Increment reference counts for shared aliases
+        // For unregistered pointers (wrap_traditional), incref safely skips them
+        if (!aliases.empty()) {
+            reg.alias_incref_batch(aliases);
         }
 
-        // Create view with is_view_=true (owns_data_=true, is_view_=true)
-        return Sparse(new_dp, new_ip, new_len, new_rows, cols_, new_nnz, true, true);
+        return Sparse(new_dp, new_ip, new_len, new_rows, cols_, new_nnz);
     }
     
     /// @brief Create a contiguous row range view
@@ -1023,20 +1238,13 @@ struct Sparse {
         return row_slice_view(indices);
     }
     
-    /// @brief Column slice view (CSC version)
-    /// @warning Cannot create view of wrapped matrix (created with wrap_traditional)
-    ///          Use col_slice_copy instead for wrapped matrices
+    /// @brief Column slice view (CSC version) - zero-copy sharing
+    /// @note Modifications to the slice affect the original
+    /// @note For unregistered data (wrap_traditional), slice works but without refcounting
     [[nodiscard]] Sparse col_slice_view(std::span<const Index> col_indices) const
         requires (!IsCSR)
     {
         if (!valid() || col_indices.empty()) return {};
-        
-        // Wrapped matrices don't have proper refcounting, so views are unsafe
-        if (!owns_data_) {
-            SCL_ASSERT(false,
-                "Cannot create view of wrapped matrix - use col_slice_copy instead");
-            return {};  // Release mode: return empty matrix
-        }
 
         auto& reg = get_registry();
         const Index new_cols = static_cast<Index>(col_indices.size());
@@ -1053,9 +1261,8 @@ struct Sparse {
         }
 
         Index new_nnz = 0;
-        std::vector<void*> data_aliases, idx_aliases;
-        data_aliases.reserve(new_cols);
-        idx_aliases.reserve(new_cols);
+        std::vector<void*> aliases;
+        aliases.reserve(new_cols * 2);
 
         for (Index i = 0; i < new_cols; ++i) {
             Index src = col_indices[i];
@@ -1066,19 +1273,16 @@ struct Sparse {
             new_len[i] = lengths[src];
             new_nnz += lengths[src];
 
-            if (new_dp[i]) data_aliases.push_back(new_dp[i]);
-            if (new_ip[i]) idx_aliases.push_back(new_ip[i]);
+            if (new_dp[i]) aliases.push_back(new_dp[i]);
+            if (new_ip[i]) aliases.push_back(new_ip[i]);
         }
 
-        if (!data_aliases.empty()) {
-            increment_alias_refcounts_safe(reg, data_aliases);
-        }
-        if (!idx_aliases.empty()) {
-            increment_alias_refcounts_safe(reg, idx_aliases);
+        // Increment reference counts for shared aliases
+        if (!aliases.empty()) {
+            reg.alias_incref_batch(aliases);
         }
 
-        // Create view with is_view_=true (owns_data_=true, is_view_=true)
-        return Sparse(new_dp, new_ip, new_len, rows_, new_cols, new_nnz, true, true);
+        return Sparse(new_dp, new_ip, new_len, rows_, new_cols, new_nnz);
     }
 
     // =========================================================================
@@ -1111,11 +1315,11 @@ struct Sparse {
         // Copy data
         for (Index i = 0; i < new_rows; ++i) {
             Index src = row_indices[i];
-            if (lengths[src] > 0) {
-                std::memcpy(result.data_ptrs[i], data_ptrs[src],
-                           lengths[src] * sizeof(T));
-                std::memcpy(result.indices_ptrs[i], indices_ptrs[src],
-                           lengths[src] * sizeof(Index));
+            if (SCL_LIKELY(lengths[src] > 0)) {
+                scl::algo::copy(static_cast<T*>(data_ptrs[src]), static_cast<T*>(result.data_ptrs[i]),
+                               static_cast<size_t>(lengths[src]));
+                scl::algo::copy(static_cast<Index*>(indices_ptrs[src]), static_cast<Index*>(result.indices_ptrs[i]),
+                               static_cast<size_t>(lengths[src]));
             }
         }
 
@@ -1160,11 +1364,11 @@ struct Sparse {
 
         for (Index i = 0; i < new_cols; ++i) {
             Index src = col_indices[i];
-            if (lengths[src] > 0) {
-                std::memcpy(result.data_ptrs[i], data_ptrs[src],
-                           lengths[src] * sizeof(T));
-                std::memcpy(result.indices_ptrs[i], indices_ptrs[src],
-                           lengths[src] * sizeof(Index));
+            if (SCL_LIKELY(lengths[src] > 0)) {
+                scl::algo::copy(static_cast<T*>(data_ptrs[src]), static_cast<T*>(result.data_ptrs[i]),
+                               static_cast<size_t>(lengths[src]));
+                scl::algo::copy(static_cast<Index*>(indices_ptrs[src]), static_cast<Index*>(result.indices_ptrs[i]),
+                               static_cast<size_t>(lengths[src]));
             }
         }
 
@@ -1287,17 +1491,17 @@ struct Sparse {
     
     /// @brief Sort indices within each row/column
     void sort_indices() {
-        if (!valid()) return;
+        if (SCL_UNLIKELY(!valid())) return;
 
         const Index pdim = primary_dim();
         
         // Find maximum row/column length for buffer preallocation
         Index max_len = 0;
         for (Index i = 0; i < pdim; ++i) {
-            max_len = std::max(max_len, lengths[i]);
+            max_len = scl::algo::max2(max_len, lengths[i]);
         }
         
-        if (max_len <= 1) return;  // Already sorted or empty
+        if (SCL_UNLIKELY(max_len <= 1)) return;  // Already sorted or empty
         
         // Preallocate buffers (reused for all rows/columns)
         std::vector<Index> perm(max_len);
@@ -1305,11 +1509,17 @@ struct Sparse {
         std::vector<Index> temp_idxs(max_len);
         
         for (Index i = 0; i < pdim; ++i) {
-            if (lengths[i] <= 1) continue;
+            if (SCL_UNLIKELY(lengths[i] <= 1)) continue;
 
             auto* vals = static_cast<T*>(data_ptrs[i]);
             auto* idxs = static_cast<Index*>(indices_ptrs[i]);
             const Index len = lengths[i];
+
+            // Prefetch next row data if available
+            if (SCL_LIKELY(i + 1 < pdim && lengths[i + 1] > 0)) {
+                SCL_PREFETCH_READ(data_ptrs[i + 1], 3);
+                SCL_PREFETCH_READ(indices_ptrs[i + 1], 3);
+            }
 
             // Create permutation array
             std::iota(perm.begin(), perm.begin() + len, 0);
@@ -1323,8 +1533,8 @@ struct Sparse {
                 temp_idxs[k] = idxs[perm[k]];
             }
             
-            std::memcpy(vals, temp_vals.data(), len * sizeof(T));
-            std::memcpy(idxs, temp_idxs.data(), len * sizeof(Index));
+            scl::algo::copy(temp_vals.data(), vals, static_cast<size_t>(len));
+            scl::algo::copy(temp_idxs.data(), idxs, static_cast<size_t>(len));
         }
     }
     
@@ -1405,24 +1615,24 @@ struct Sparse {
     
     /// @brief Export to dense matrix (row-major)
     [[nodiscard]] std::vector<T> to_dense() const {
-        std::vector<T> result(rows_ * cols_, T{0});
+        std::vector<T> result(static_cast<std::size_t>(rows_) * static_cast<std::size_t>(cols_), T{0});
         
         if (!valid()) return result;
 
         if constexpr (IsCSR) {
             for (Index i = 0; i < rows_; ++i) {
                 auto vals = row_values(i);
-                auto cols = row_indices(i);
+                auto col_idxs = row_indices(i);
                 for (Index k = 0; k < lengths[i]; ++k) {
-                    result[i * cols_ + cols[k]] = vals[k];
+                    result[static_cast<std::size_t>(i) * static_cast<std::size_t>(cols_) + col_idxs[k]] = vals[k];
                 }
             }
         } else {
             for (Index j = 0; j < cols_; ++j) {
                 auto vals = col_values(j);
-                auto rows = col_indices(j);
+                auto row_idxs = col_indices(j);
                 for (Index k = 0; k < lengths[j]; ++k) {
-                    result[rows[k] * cols_ + j] = vals[k];
+                    result[static_cast<std::size_t>(row_idxs[k]) * static_cast<std::size_t>(cols_) + j] = vals[k];
                 }
             }
         }
@@ -1441,36 +1651,34 @@ struct Sparse {
     
 private:
     /// @brief Internal method to release resources (used by destructor and move assignment)
+    /// 
+    /// Uses unified alias_decref_batch for all data pointers:
+    /// - For registered aliases: decrements ref_count, removes alias if count reaches 0
+    /// - For unregistered pointers (e.g., from wrap_traditional): safely skipped
+    /// - Metadata arrays (data_ptrs, indices_ptrs, lengths) are always unregistered
     void release_resources() {
         if (!valid()) return;
 
         const Index pdim = primary_dim();
         auto& reg = get_registry();
 
-        // Only unregister data aliases if we own the data
-        if (owns_data_) {
-            // Collect all non-null aliases
-            std::vector<void*> aliases;
-            aliases.reserve(pdim * 2);
+        // Collect all non-null data/indices aliases
+        std::vector<void*> aliases;
+        aliases.reserve(pdim * 2);
 
-            for (Index i = 0; i < pdim; ++i) {
-                if (data_ptrs[i]) aliases.push_back(data_ptrs[i]);
-                if (indices_ptrs[i]) aliases.push_back(indices_ptrs[i]);
-            }
-
-            if (!aliases.empty()) {
-                if (is_view_) {
-                    // View: only decrement refcounts, don't remove alias mappings
-                    // The original matrix owns the alias mappings
-                    reg.decrement_buffer_refcounts(aliases);
-                } else {
-                    // Original matrix: remove alias mappings and decrement refcounts
-                    reg.unregister_aliases(aliases);
-                }
-            }
+        for (Index i = 0; i < pdim; ++i) {
+            if (data_ptrs[i]) aliases.push_back(data_ptrs[i]);
+            if (indices_ptrs[i]) aliases.push_back(indices_ptrs[i]);
         }
 
-        // Free metadata arrays (always owned)
+        // Unified lifecycle management via registry
+        // - Registered aliases: ref_count decremented, freed if reaches 0
+        // - Unregistered pointers: safely skipped (returns false)
+        if (!aliases.empty()) {
+            reg.alias_decref_batch(aliases);
+        }
+
+        // Metadata arrays are always managed by registry (created by new_array)
         reg.unregister_ptr(data_ptrs);
         reg.unregister_ptr(indices_ptrs);
         reg.unregister_ptr(lengths);
@@ -1480,25 +1688,30 @@ private:
         indices_ptrs = nullptr;
         lengths = nullptr;
         rows_ = cols_ = nnz_ = 0;
-        owns_data_ = true;
-        is_view_ = false;
     }
     
 public:
     
     /// @brief Release memory only if this is the sole owner
     /// @return true if memory was released, false if still shared
+    /// @note Checks alias ref_count, not buffer ref_count
     bool try_unregister() {
         if (!valid()) return true;
 
-        // Check if any data is shared
+        // Check if any alias is shared (ref_count > 1)
         auto& reg = get_registry();
         const Index pdim = primary_dim();
         
         for (Index i = 0; i < pdim; ++i) {
             if (data_ptrs[i]) {
-                BufferID id = reg.get_buffer_id(data_ptrs[i]);
-                if (id != 0 && reg.get_refcount(id) > 1) {
+                std::uint32_t ref = reg.alias_refcount(data_ptrs[i]);
+                if (ref > 1) {
+                    return false;  // Alias is still shared
+                }
+            }
+            if (indices_ptrs[i]) {
+                std::uint32_t ref = reg.alias_refcount(indices_ptrs[i]);
+                if (ref > 1) {
                     return false;
                 }
             }
@@ -1512,39 +1725,6 @@ private:
     // =========================================================================
     // Internal Implementation
     // =========================================================================
-    
-    /// @brief Safely increment reference counts for aliases in a view
-    /// @note When creating a view, the new metadata arrays contain pointer values
-    ///       that are identical to the original (same memory addresses). These
-    ///       pointers are already registered as aliases. We need to increment
-    ///       the reference count for each unique buffer that the view references.
-    /// @note If an alias is not registered (id == 0), it means the original matrix
-    ///       was created with wrap_traditional, and we can't create a view safely.
-    ///       In this case, the function silently continues, but the view won't
-    ///       prevent the original from being destroyed.
-    static void increment_alias_refcounts_safe(
-        Registry& reg, std::span<void* const> aliases)
-    {
-        if (aliases.empty()) return;
-        
-        // Collect unique buffer IDs and count how many aliases reference each buffer
-        std::unordered_map<BufferID, std::uint32_t> increments;
-        
-        for (void* alias : aliases) {
-            if (!alias) continue;
-            BufferID id = reg.get_buffer_id(alias);
-            if (id != 0) {
-                ++increments[id];
-            }
-            // If id == 0, the alias is not registered (e.g., from wrap_traditional)
-            // We silently ignore it - the view will work but won't have proper refcounting
-        }
-        
-        // Increment reference counts for each unique buffer
-        for (const auto& [buffer_id, increment] : increments) {
-            reg.increment_buffer_refcount(buffer_id, increment);
-        }
-    }
     
     static bool allocate_blocks_impl(
         Pointer* dp, Pointer* ip, Index* len,
@@ -1608,26 +1788,50 @@ private:
                 offset += len[i];
             }
 
-            // Register as shared buffers
+            // Register buffers and create aliases using new Registry v2 API
             if (!data_aliases.empty()) {
-                if (!reg.register_buffer_with_aliases(
-                        data_block, block_nnz * sizeof(T),
-                        data_aliases, AllocType::ArrayNew)) {
+                BufferID data_buf = reg.create_buffer(
+                    data_block,
+                    block_nnz * sizeof(T),
+                    AllocType::ArrayNew
+                );
+                if (!data_buf) {
                     delete[] data_block;
                     delete[] idx_block;
                     return false;
+                }
+                
+                // Create aliases for each row's data slice
+                Index offset = 0;
+                for (Index i = row_start; i < row_end; ++i) {
+                    if (len[i] > 0) {
+                        reg.create_alias(dp[i], data_buf, offset * sizeof(T));
+                        offset += len[i];
+                    }
                 }
             } else {
                 delete[] data_block;
             }
 
             if (!idx_aliases.empty()) {
-                if (!reg.register_buffer_with_aliases(
-                        idx_block, block_nnz * sizeof(Index),
-                        idx_aliases, AllocType::ArrayNew)) {
+                BufferID idx_buf = reg.create_buffer(
+                    idx_block,
+                    block_nnz * sizeof(Index),
+                    AllocType::ArrayNew
+                );
+                if (!idx_buf) {
                     // Data block already registered, will be cleaned up
                     delete[] idx_block;
                     return false;
+                }
+                
+                // Create aliases for each row's index slice
+                Index offset = 0;
+                for (Index i = row_start; i < row_end; ++i) {
+                    if (len[i] > 0) {
+                        reg.create_alias(ip[i], idx_buf, offset * sizeof(Index));
+                        offset += len[i];
+                    }
                 }
             } else {
                 delete[] idx_block;
@@ -1650,8 +1854,9 @@ private:
             if (ip[i]) aliases.push_back(ip[i]);
         }
 
+        // Use new alias_decref_batch API (safe for unregistered pointers)
         if (!aliases.empty()) {
-            reg.unregister_aliases(aliases);
+            reg.alias_decref_batch(aliases);
         }
     }
 };
@@ -1726,15 +1931,21 @@ template <typename T>
     Sparse<T, true> result = Sparse<T, true>::create(total_rows, cols, nnzs, strategy);
     if (!result.valid()) return {};
 
-    // Copy data
+    // Copy data with prefetching
     Index dst_row = 0;
     for (const auto& mat : matrices) {
         for (Index i = 0; i < mat.rows(); ++i) {
-            if (mat.lengths[i] > 0) {
-                std::memcpy(result.data_ptrs[dst_row], mat.data_ptrs[i],
-                           mat.lengths[i] * sizeof(T));
-                std::memcpy(result.indices_ptrs[dst_row], mat.indices_ptrs[i],
-                           mat.lengths[i] * sizeof(Index));
+            // Prefetch next row if available
+            if (SCL_LIKELY(i + 1 < mat.rows() && mat.lengths[i + 1] > 0)) {
+                SCL_PREFETCH_READ(mat.data_ptrs[i + 1], 2);
+                SCL_PREFETCH_READ(mat.indices_ptrs[i + 1], 2);
+            }
+            
+            if (SCL_LIKELY(mat.lengths[i] > 0)) {
+                scl::algo::copy(static_cast<T*>(mat.data_ptrs[i]), static_cast<T*>(result.data_ptrs[dst_row]),
+                               static_cast<size_t>(mat.lengths[i]));
+                scl::algo::copy(static_cast<Index*>(mat.indices_ptrs[i]), static_cast<Index*>(result.indices_ptrs[dst_row]),
+                               static_cast<size_t>(mat.lengths[i]));
             }
             ++dst_row;
         }
@@ -1780,11 +1991,17 @@ template <typename T>
     Index dst_col = 0;
     for (const auto& mat : matrices) {
         for (Index j = 0; j < mat.cols(); ++j) {
-            if (mat.lengths[j] > 0) {
-                std::memcpy(result.data_ptrs[dst_col], mat.data_ptrs[j],
-                           mat.lengths[j] * sizeof(T));
-                std::memcpy(result.indices_ptrs[dst_col], mat.indices_ptrs[j],
-                           mat.lengths[j] * sizeof(Index));
+            // Prefetch next column if available
+            if (SCL_LIKELY(j + 1 < mat.cols() && mat.lengths[j + 1] > 0)) {
+                SCL_PREFETCH_READ(mat.data_ptrs[j + 1], 2);
+                SCL_PREFETCH_READ(mat.indices_ptrs[j + 1], 2);
+            }
+            
+            if (SCL_LIKELY(mat.lengths[j] > 0)) {
+                scl::algo::copy(static_cast<T*>(mat.data_ptrs[j]), static_cast<T*>(result.data_ptrs[dst_col]),
+                               static_cast<size_t>(mat.lengths[j]));
+                scl::algo::copy(static_cast<Index*>(mat.indices_ptrs[j]), static_cast<Index*>(result.indices_ptrs[dst_col]),
+                               static_cast<size_t>(mat.lengths[j]));
             }
             ++dst_col;
         }

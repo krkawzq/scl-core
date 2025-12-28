@@ -30,9 +30,8 @@ typedef struct scl_sparse_raw {
     scl_index_t rows;
     scl_index_t cols;
     scl_index_t nnz;
-    int owns_data;              // 1 if matrix owns data, 0 if wrapped
-    int is_view;                // 1 if this is a view (shared pointers)
     int is_csr;                 // 1 = CSR, 0 = CSC
+    // NOTE: owns_data and is_view removed - lifecycle managed by registry
 } scl_sparse_raw_t;
 
 // =============================================================================

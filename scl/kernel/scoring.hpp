@@ -357,9 +357,9 @@ void compute_gene_means(
         }
 
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            const Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            const Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
@@ -380,8 +380,8 @@ void compute_gene_means(
     } else {
         // Parallel over genes for CSC
         scl::threading::parallel_for(Size(0), G, [&](size_t g) {
-            auto values = X.col_values(static_cast<Index>(g));
-            const Index len = X.col_length(static_cast<Index>(g));
+            auto values = X.col_values_unsafe(static_cast<Index>(g));
+            const Index len = X.col_length_unsafe(static_cast<Index>(g));
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -426,9 +426,9 @@ void mean_score(
 
     if (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            const Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            const Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -455,9 +455,9 @@ void mean_score(
             Index gene = gene_set[i];
             if (gene < 0 || gene >= n_genes) return;
 
-            auto indices = X.col_indices(gene);
-            auto values = X.col_values(gene);
-            const Index len = X.col_length(gene);
+            auto indices = X.col_indices_unsafe(gene);
+            auto values = X.col_values_unsafe(gene);
+            const Index len = X.col_length_unsafe(gene);
 
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
@@ -520,9 +520,9 @@ void weighted_score(
 
     if (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            const Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            const Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             Real weighted_sum = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -549,9 +549,9 @@ void weighted_score(
             if (gene < 0 || gene >= n_genes) return;
 
             Real w = gene_weights[i];
-            auto indices = X.col_indices(gene);
-            auto values = X.col_values(gene);
-            const Index len = X.col_length(gene);
+            auto indices = X.col_indices_unsafe(gene);
+            auto values = X.col_values_unsafe(gene);
+            const Index len = X.col_length_unsafe(gene);
 
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
@@ -614,9 +614,9 @@ void auc_score(
         scl::algo::zero(expr_values, G);
 
         if (IsCSR) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            const Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            const Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
@@ -626,9 +626,9 @@ void auc_score(
             }
         } else {
             for (Index g = 0; g < n_genes; ++g) {
-                auto indices = X.col_indices(g);
-                auto values = X.col_values(g);
-                const Index len = X.col_length(g);
+                auto indices = X.col_indices_unsafe(g);
+                auto values = X.col_values_unsafe(g);
+                const Index len = X.col_length_unsafe(g);
 
                 for (Index k = 0; k < len; ++k) {
                     if (indices[k] == static_cast<Index>(c)) {
@@ -896,9 +896,9 @@ void zscore_score(
         }
 
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            const Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            const Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
@@ -917,8 +917,8 @@ void zscore_score(
         scl::memory::aligned_free(atomic_vars, SCL_ALIGNMENT);
     } else {
         scl::threading::parallel_for(Size(0), G, [&](size_t g) {
-            auto values = X.col_values(static_cast<Index>(g));
-            const Index len = X.col_length(static_cast<Index>(g));
+            auto values = X.col_values_unsafe(static_cast<Index>(g));
+            const Index len = X.col_length_unsafe(static_cast<Index>(g));
 
             Real mean_g = gene_means[g];
             Real var = Real(0);
@@ -992,9 +992,9 @@ void zscore_score(
             // Initialize with z-scores for zero values
             std::memcpy(cell_zscores, z_zero, n_set * sizeof(Real));
 
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            const Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            const Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             // Update for non-zero values
             for (Index k = 0; k < len; ++k) {
@@ -1040,9 +1040,9 @@ void zscore_score(
             Real inv_std = set_inv_std[i];
             Real z_zero = -mean_g * inv_std;
 
-            auto indices = X.col_indices(gene);
-            auto values = X.col_values(gene);
-            const Index len = X.col_length(gene);
+            auto indices = X.col_indices_unsafe(gene);
+            auto values = X.col_values_unsafe(gene);
+            const Index len = X.col_length_unsafe(gene);
 
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
@@ -1223,9 +1223,9 @@ void quantile_score(
         scl::algo::zero(values, static_cast<Size>(n_set));
 
         if (IsCSR) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto vals = X.row_values(static_cast<Index>(c));
-            const Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto vals = X.row_values_unsafe(static_cast<Index>(c));
+            const Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];

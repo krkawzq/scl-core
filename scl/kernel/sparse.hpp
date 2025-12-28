@@ -124,7 +124,7 @@ void primary_sums(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (len_sz == 0) {
@@ -132,7 +132,7 @@ void primary_sums(
             return;
         }
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         output[p] = scl::vectorize::sum(Array<const T>(values.ptr, len_sz));
     });
 }
@@ -149,7 +149,7 @@ void primary_means(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (len_sz == 0) {
@@ -157,7 +157,7 @@ void primary_means(
             return;
         }
 
-        auto values = matrix.primary_values(idx);
+        auto values = matrix.primary_values_unsafe(idx);
         output[p] = scl::vectorize::sum(Array<const T>(values.ptr, len_sz)) * inv_n;
     });
 }
@@ -176,13 +176,13 @@ void primary_variances(
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length(idx);
+        const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         T sum = T(0), sumsq = T(0);
 
         if (len_sz > 0) {
-            auto values = matrix.primary_values(idx);
+            auto values = matrix.primary_values_unsafe(idx);
             detail::simd_sum_sumsq_fused(values.ptr, len_sz, sum, sumsq);
         }
 
@@ -203,7 +203,7 @@ void primary_nnz(
     // Sequential for small matrices (parallel overhead > computation)
     if (SCL_UNLIKELY(n < config::PARALLEL_THRESHOLD)) {
         for (Size p = 0; p < n; ++p) {
-            output[p] = matrix.primary_length(static_cast<Index>(p));
+            output[p] = matrix.primary_length_unsafe(static_cast<Index>(p));
         }
         return;
     }
@@ -216,7 +216,7 @@ void primary_nnz(
         const Size end = scl::algo::min2(start + config::BATCH_SIZE, n);
 
         for (Size p = start; p < end; ++p) {
-            output[p] = matrix.primary_length(static_cast<Index>(p));
+            output[p] = matrix.primary_length_unsafe(static_cast<Index>(p));
         }
     });
 }
@@ -282,10 +282,10 @@ ContiguousArraysT<T> to_contiguous_arrays(const Sparse<T, IsCSR>& matrix) {
     Index offset = 0;
     
     for (Index i = 0; i < primary_dim; ++i) {
-        const Index len = matrix.primary_length(i);
+        const Index len = matrix.primary_length_unsafe(i);
         if (len > 0) {
-            auto vals = matrix.primary_values(i);
-            auto idxs = matrix.primary_indices(i);
+            auto vals = matrix.primary_values_unsafe(i);
+            auto idxs = matrix.primary_indices_unsafe(i);
             
             std::memcpy(data + offset, vals.ptr, len * sizeof(T));
             std::memcpy(indices + offset, idxs.ptr, len * sizeof(Index));
@@ -308,8 +308,8 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
     COOArraysT<T> result{};
     
     if (!matrix.valid()) {
-        result.row_indices = nullptr;
-        result.col_indices = nullptr;
+        result.row_indices_unsafe = nullptr;
+        result.col_indices_unsafe = nullptr;
         result.values = nullptr;
         result.nnz = 0;
         return result;
@@ -318,8 +318,8 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
     const Index nnz = matrix.nnz();
     
     if (nnz == 0) {
-        result.row_indices = nullptr;
-        result.col_indices = nullptr;
+        result.row_indices_unsafe = nullptr;
+        result.col_indices_unsafe = nullptr;
         result.values = nullptr;
         result.nnz = 0;
         return result;
@@ -344,16 +344,16 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
     std::vector<Index> offsets(primary_dim + 1);
     offsets[0] = 0;
     for (Index i = 0; i < primary_dim; ++i) {
-        offsets[i + 1] = offsets[i] + matrix.primary_length(i);
+        offsets[i + 1] = offsets[i] + matrix.primary_length_unsafe(i);
     }
     
     // Parallel conversion to COO format
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index i = static_cast<Index>(p);
-        const Index len = matrix.primary_length(i);
+        const Index len = matrix.primary_length_unsafe(i);
         if (len > 0) {
-            auto vals = matrix.primary_values(i);
-            auto idxs = matrix.primary_indices(i);
+            auto vals = matrix.primary_values_unsafe(i);
+            auto idxs = matrix.primary_indices_unsafe(i);
             const Index base_pos = offsets[i];
             
             for (Index k = 0; k < len; ++k) {
@@ -370,14 +370,19 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
         }
     });
     
-    result.row_indices = row_indices;
-    result.col_indices = col_indices;
+    result.row_indices_unsafe = row_indices;
+    result.col_indices_unsafe = col_indices;
     result.values = values;
     result.nnz = nnz;
     
     return result;
 }
 
+/// @brief Create Sparse matrix from contiguous arrays
+/// @param take_ownership If true, data arrays are registered with registry and
+///        will be freed when matrix is destroyed. If false, caller manages lifetime.
+/// @note When take_ownership=true, arrays are registered as buffer+aliases so
+///       they participate in reference counting for slicing operations.
 template <typename T, bool IsCSR>
 Sparse<T, IsCSR> from_contiguous_arrays(
     T* data, Index* indices, Index* indptr,
@@ -389,21 +394,60 @@ Sparse<T, IsCSR> from_contiguous_arrays(
     }
     
     const Index primary_dim = IsCSR ? rows : cols;
-    std::span<const Index> indptr_span(indptr, static_cast<size_t>(primary_dim + 1));
     
-    // wrap_traditional creates a non-owning view
-    // If take_ownership is true, we need to register the arrays first
     if (take_ownership) {
         auto& reg = get_registry();
         
-        // Register the data arrays with registry
-        reg.register_ptr(data, static_cast<size_t>(nnz) * sizeof(T), AllocType::ArrayNew);
-        reg.register_ptr(indices, static_cast<size_t>(nnz) * sizeof(Index), AllocType::ArrayNew);
-        reg.register_ptr(indptr, static_cast<size_t>(primary_dim + 1) * sizeof(Index), AllocType::ArrayNew);
+        // Build alias lists for data and indices (one per non-empty row/column)
+        std::vector<void*> data_aliases;
+        std::vector<void*> indices_aliases;
+        data_aliases.reserve(primary_dim);
+        indices_aliases.reserve(primary_dim);
+        
+        for (Index i = 0; i < primary_dim; ++i) {
+            Index start = indptr[i];
+            Index len = indptr[i + 1] - start;
+            if (len > 0) {
+                data_aliases.push_back(data + start);
+                indices_aliases.push_back(indices + start);
+            }
+        }
+        
+        // Register data array as buffer with aliases
+        if (!data_aliases.empty()) {
+            if (!reg.register_buffer_with_aliases(
+                    data, 
+                    static_cast<std::size_t>(nnz) * sizeof(T),
+                    data_aliases, 
+                    AllocType::AlignedAlloc)) {
+                // Data registration failed - caller still owns memory
+                return Sparse<T, IsCSR>{};
+            }
+        }
+        
+        // Register indices array as buffer with aliases
+        if (!indices_aliases.empty()) {
+            if (!reg.register_buffer_with_aliases(
+                    indices,
+                    static_cast<std::size_t>(nnz) * sizeof(Index),
+                    indices_aliases,
+                    AllocType::AlignedAlloc)) {
+                // Indices registration failed - data already registered, will be cleaned
+                // up when aliases are released via sparse destructor
+                return Sparse<T, IsCSR>{};
+            }
+        }
+        
+        // Register indptr as simple pointer (not sliced)
+        reg.register_ptr(indptr, 
+                        static_cast<std::size_t>(primary_dim + 1) * sizeof(Index),
+                        AllocType::AlignedAlloc);
     }
     
-    // Create Sparse using wrap_traditional (creates metadata arrays, wraps data)
-    return Sparse<T, IsCSR>::wrap_traditional(rows, cols, data, indices, indptr_span);
+    // Create Sparse using wrap_traditional (unsafe variant for performance since
+    // we've already validated the arrays above or caller guarantees validity)
+    std::span<const Index> indptr_span(indptr, static_cast<size_t>(primary_dim + 1));
+    return Sparse<T, IsCSR>::wrap_traditional_unsafe(rows, cols, data, indices, indptr_span);
 }
 
 // =============================================================================
@@ -423,9 +467,9 @@ Sparse<T, IsCSR> eliminate_zeros(
     // Parallel count non-zero elements per row/column
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index i = static_cast<Index>(p);
-        const Index len = matrix.primary_length(i);
+        const Index len = matrix.primary_length_unsafe(i);
         if (len > 0) {
-            auto vals = matrix.primary_values(i);
+            auto vals = matrix.primary_values_unsafe(i);
             Index count = 0;
             for (Index k = 0; k < len; ++k) {
                 T abs_val = (vals[k] < T(0)) ? -vals[k] : vals[k];
@@ -446,10 +490,10 @@ Sparse<T, IsCSR> eliminate_zeros(
     // Parallel copy non-zero elements
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const Index i = static_cast<Index>(p);
-        const Index len = matrix.primary_length(i);
+        const Index len = matrix.primary_length_unsafe(i);
         if (len > 0 && new_nnzs[i] > 0) {
-            auto vals = matrix.primary_values(i);
-            auto idxs = matrix.primary_indices(i);
+            auto vals = matrix.primary_values_unsafe(i);
+            auto idxs = matrix.primary_indices_unsafe(i);
             
             T* out_vals = static_cast<T*>(result.data_ptrs[i]);
             Index* out_idxs = static_cast<Index*>(result.indices_ptrs[i]);
@@ -486,9 +530,9 @@ Sparse<T, IsCSR> prune(
         
         const Index primary_dim = result.primary_dim();
         for (Index i = 0; i < primary_dim; ++i) {
-            const Index len = result.primary_length(i);
+            const Index len = result.primary_length_unsafe(i);
             if (len > 0) {
-                auto vals = result.primary_values(i);
+                auto vals = result.primary_values_unsafe(i);
                 for (Index k = 0; k < len; ++k) {
                     T abs_val = (vals[k] < T(0)) ? -vals[k] : vals[k];
                     if (abs_val < threshold) {
@@ -538,11 +582,11 @@ ValidationResult validate(const Sparse<T, IsCSR>& matrix) {
     Index total_nnz = 0;
     
     for (Index i = 0; i < primary_dim; ++i) {
-        const Index len = matrix.primary_length(i);
+        const Index len = matrix.primary_length_unsafe(i);
         total_nnz += len;
         
         if (len > 0) {
-            auto idxs = matrix.primary_indices(i);
+            auto idxs = matrix.primary_indices_unsafe(i);
             const Index secondary_dim = matrix.secondary_dim();
             
             // Check indices are in valid range
@@ -635,9 +679,9 @@ void resize_secondary(Sparse<T, IsCSR>& matrix, Index new_secondary_dim) {
     if (new_secondary_dim < old_secondary_dim) {
         const Index primary_dim = matrix.primary_dim();
         for (Index i = 0; i < primary_dim; ++i) {
-            const Index len = matrix.primary_length(i);
+            const Index len = matrix.primary_length_unsafe(i);
             if (len > 0) {
-                auto idxs = matrix.primary_indices(i);
+                auto idxs = matrix.primary_indices_unsafe(i);
                 for (Index k = 0; k < len; ++k) {
                     SCL_ASSERT(idxs[k] < new_secondary_dim,
                               "resize_secondary: index out of bounds for new dimension");

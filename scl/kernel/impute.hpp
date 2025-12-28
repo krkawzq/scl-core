@@ -242,16 +242,16 @@ SCL_FORCE_INLINE Real get_expression(
 ) noexcept {
     T val;
     if (IsCSR) {
-        auto indices = X.row_indices(cell);
-        auto values = X.row_values(cell);
-        Index len = X.row_length(cell);
+        auto indices = X.row_indices_unsafe(cell);
+        auto values = X.row_values_unsafe(cell);
+        Index len = X.row_length_unsafe(cell);
         if (has_expression(indices, values, len, gene, val)) {
             return static_cast<Real>(val);
         }
     } else {
-        auto indices = X.col_indices(gene);
-        auto values = X.col_values(gene);
-        Index len = X.col_length(gene);
+        auto indices = X.col_indices_unsafe(gene);
+        auto values = X.col_values_unsafe(gene);
+        Index len = X.col_length_unsafe(gene);
         if (has_expression(indices, values, len, cell, val)) {
             return static_cast<Real>(val);
         }
@@ -285,9 +285,9 @@ SCL_HOT Index collect_neighbor_values_batch(
 
         T val;
         if (IsCSR) {
-            auto indices = X.row_indices(neighbor);
-            auto row_values = X.row_values(neighbor);
-            Index len = X.row_length(neighbor);
+            auto indices = X.row_indices_unsafe(neighbor);
+            auto row_values = X.row_values_unsafe(neighbor);
+            Index len = X.row_length_unsafe(neighbor);
             
             if (has_expression(indices, row_values, len, gene, val)) {
                 values[k] = static_cast<Real>(val);
@@ -298,9 +298,9 @@ SCL_HOT Index collect_neighbor_values_batch(
                 has_value[k] = 0;
             }
         } else {
-            auto indices = X.col_indices(gene);
-            auto col_values = X.col_values(gene);
-            Index len = X.col_length(gene);
+            auto indices = X.col_indices_unsafe(gene);
+            auto col_values = X.col_values_unsafe(gene);
+            Index len = X.col_length_unsafe(gene);
 
             if (has_expression(indices, col_values, len, neighbor, val)) {
                 values[k] = static_cast<Real>(val);
@@ -335,9 +335,9 @@ SCL_HOT void spmm_diffusion(
         Real* out_row = X_out + i * G;
         scl::algo::zero(out_row, G);
 
-        auto t_indices = transition.primary_indices(static_cast<Index>(i));
-        auto t_values = transition.primary_values(static_cast<Index>(i));
-        const Index t_len = transition.primary_length(static_cast<Index>(i));
+        auto t_indices = transition.primary_indices_unsafe(static_cast<Index>(i));
+        auto t_values = transition.primary_values_unsafe(static_cast<Index>(i));
+        const Index t_len = transition.primary_length_unsafe(static_cast<Index>(i));
 
         // Accumulate weighted neighbor rows
         for (Index k = 0; k < t_len; ++k) {
@@ -378,9 +378,9 @@ SCL_HOT void spmm_normalized(
 
         scl::algo::zero(out_row, G);
 
-        auto a_indices = affinity.primary_indices(static_cast<Index>(i));
-        auto a_values = affinity.primary_values(static_cast<Index>(i));
-        const Index a_len = affinity.primary_length(static_cast<Index>(i));
+        auto a_indices = affinity.primary_indices_unsafe(static_cast<Index>(i));
+        auto a_values = affinity.primary_values_unsafe(static_cast<Index>(i));
+        const Index a_len = affinity.primary_length_unsafe(static_cast<Index>(i));
 
         Real inv_sum = Real(1) / row_sum;
 
@@ -422,9 +422,9 @@ void knn_impute_dense(
     // Step 1: Copy original values (parallel)
     if (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             Real* row = X_imputed + c * G;
             for (Index k = 0; k < len; ++k) {
@@ -436,9 +436,9 @@ void knn_impute_dense(
         });
     } else {
         scl::threading::parallel_for(Size(0), G, [&](size_t g) {
-            auto indices = X.col_indices(static_cast<Index>(g));
-            auto values = X.col_values(static_cast<Index>(g));
-            Index len = X.col_length(static_cast<Index>(g));
+            auto indices = X.col_indices_unsafe(static_cast<Index>(g));
+            auto values = X.col_values_unsafe(static_cast<Index>(g));
+            Index len = X.col_length_unsafe(static_cast<Index>(g));
 
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
@@ -535,9 +535,9 @@ void knn_impute_weighted_dense(
     // Copy original values
     if (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             Real* row = X_imputed + c * G;
             for (Index k = 0; k < len; ++k) {
@@ -616,9 +616,9 @@ void diffusion_impute_sparse_transition(
 
     if (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             Real* row = X_imputed + c * G;
             for (Index k = 0; k < len; ++k) {
@@ -630,9 +630,9 @@ void diffusion_impute_sparse_transition(
         });
     } else {
         scl::threading::parallel_for(Size(0), G, [&](size_t g) {
-            auto indices = X.col_indices(static_cast<Index>(g));
-            auto values = X.col_values(static_cast<Index>(g));
-            Index len = X.col_length(static_cast<Index>(g));
+            auto indices = X.col_indices_unsafe(static_cast<Index>(g));
+            auto values = X.col_values_unsafe(static_cast<Index>(g));
+            Index len = X.col_length_unsafe(static_cast<Index>(g));
 
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
@@ -684,9 +684,9 @@ void magic_impute(
 
     if (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             Real* row = X_imputed + c * G;
             for (Index k = 0; k < len; ++k) {
@@ -702,8 +702,8 @@ void magic_impute(
     Real* row_sums = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        auto values = affinity_matrix.primary_values(static_cast<Index>(i));
-        Index len = affinity_matrix.primary_length(static_cast<Index>(i));
+        auto values = affinity_matrix.primary_values_unsafe(static_cast<Index>(i));
+        Index len = affinity_matrix.primary_length_unsafe(static_cast<Index>(i));
 
         Real sum = Real(0);
         for (Index k = 0; k < len; ++k) {
@@ -992,9 +992,9 @@ void detect_dropouts(
         constexpr int64_t SCALE = 1000000LL;
 
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             for (Index k = 0; k < len; ++k) {
                 Index g = indices[k];
@@ -1016,8 +1016,8 @@ void detect_dropouts(
     } else {
         // Parallel over genes
         scl::threading::parallel_for(Size(0), G, [&](size_t g) {
-            auto values = X.col_values(static_cast<Index>(g));
-            Index len = X.col_length(static_cast<Index>(g));
+            auto values = X.col_values_unsafe(static_cast<Index>(g));
+            Index len = X.col_length_unsafe(static_cast<Index>(g));
 
             gene_nnz[g] = len;
             Real sum = Real(0);
@@ -1162,9 +1162,9 @@ void smooth_expression(
             weight_sum += w;
 
             if (IsCSR) {
-                auto indices = X.row_indices(neighbor);
-                auto values = X.row_values(neighbor);
-                Index len = X.row_length(neighbor);
+                auto indices = X.row_indices_unsafe(neighbor);
+                auto values = X.row_values_unsafe(neighbor);
+                Index len = X.row_length_unsafe(neighbor);
 
                 for (Index j = 0; j < len; ++j) {
                     Index g = indices[j];
@@ -1182,9 +1182,9 @@ void smooth_expression(
 
         // Add original contribution
         if (IsCSR) {
-            auto indices = X.row_indices(static_cast<Index>(c));
-            auto values = X.row_values(static_cast<Index>(c));
-            Index len = X.row_length(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
+            auto values = X.row_values_unsafe(static_cast<Index>(c));
+            Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             for (Index k = 0; k < len; ++k) {
                 Index g = indices[k];
@@ -1218,9 +1218,9 @@ void diffusion_impute_dense(
     // Initialize
     if (IsCSR) {
         for (Index c = 0; c < n_cells; ++c) {
-            auto indices = X.row_indices(c);
-            auto values = X.row_values(c);
-            Index len = X.row_length(c);
+            auto indices = X.row_indices_unsafe(c);
+            auto values = X.row_values_unsafe(c);
+            Index len = X.row_length_unsafe(c);
 
             Real* row = X_imputed + static_cast<Size>(c) * G;
             for (Index k = 0; k < len; ++k) {

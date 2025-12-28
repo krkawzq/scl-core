@@ -126,11 +126,11 @@ SCL_FORCE_INLINE SCL_HOT T sparse_dot_dense(
         T result = T(0);
         
         for (Index i = 0; i < n_rows; ++i) {
-            const Index len = X.primary_length(i);
+            const Index len = X.primary_length_unsafe(i);
             if (len == 0) continue;
             
-            auto indices = X.primary_indices(i);
-            auto values = X.primary_values(i);
+            auto indices = X.primary_indices_unsafe(i);
+            auto values = X.primary_values_unsafe(i);
             
             // Binary search for col_idx
             const Index* pos = scl::algo::lower_bound(
@@ -144,11 +144,11 @@ SCL_FORCE_INLINE SCL_HOT T sparse_dot_dense(
         return result;
     } else {
         // For CSC, direct column access
-        const Index len = X.primary_length(col_idx);
+        const Index len = X.primary_length_unsafe(col_idx);
         if (len == 0) return T(0);
         
-        auto indices = X.primary_indices(col_idx);
-        auto values = X.primary_values(col_idx);
+        auto indices = X.primary_indices_unsafe(col_idx);
+        auto values = X.primary_values_unsafe(col_idx);
         const Size len_sz = static_cast<Size>(len);
         
         T acc0 = T(0), acc1 = T(0), acc2 = T(0), acc3 = T(0);
@@ -181,10 +181,10 @@ SCL_FORCE_INLINE SCL_HOT T column_squared_norm(
 ) {
     if constexpr (!IsCSR) {
         // CSC: direct column access
-        const Index len = X.primary_length(col_idx);
+        const Index len = X.primary_length_unsafe(col_idx);
         if (len == 0) return T(0);
         
-        auto values = X.primary_values(col_idx);
+        auto values = X.primary_values_unsafe(col_idx);
         return scl::vectorize::sum_squared(Array<const T>(values.ptr, static_cast<Size>(len)));
     } else {
         // CSR: iterate all rows
@@ -192,11 +192,11 @@ SCL_FORCE_INLINE SCL_HOT T column_squared_norm(
         T result = T(0);
         
         for (Index i = 0; i < n_rows; ++i) {
-            const Index len = X.primary_length(i);
+            const Index len = X.primary_length_unsafe(i);
             if (len == 0) continue;
             
-            auto indices = X.primary_indices(i);
-            auto values = X.primary_values(i);
+            auto indices = X.primary_indices_unsafe(i);
+            auto values = X.primary_values_unsafe(i);
             
             const Index* pos = scl::algo::lower_bound(
                 indices.ptr, indices.ptr + len, col_idx);
@@ -222,11 +222,11 @@ SCL_FORCE_INLINE void update_residuals_column(
     
     if constexpr (!IsCSR) {
         // CSC: direct column access
-        const Index len = X.primary_length(col_idx);
+        const Index len = X.primary_length_unsafe(col_idx);
         if (len == 0) return;
         
-        auto indices = X.primary_indices(col_idx);
-        auto values = X.primary_values(col_idx);
+        auto indices = X.primary_indices_unsafe(col_idx);
+        auto values = X.primary_values_unsafe(col_idx);
         const Size len_sz = static_cast<Size>(len);
         
         Size k = 0;
@@ -243,11 +243,11 @@ SCL_FORCE_INLINE void update_residuals_column(
         // CSR: iterate all rows
         const Index n_rows = X.rows();
         for (Index i = 0; i < n_rows; ++i) {
-            const Index len = X.primary_length(i);
+            const Index len = X.primary_length_unsafe(i);
             if (len == 0) continue;
             
-            auto indices = X.primary_indices(i);
-            auto values = X.primary_values(i);
+            auto indices = X.primary_indices_unsafe(i);
+            auto values = X.primary_values_unsafe(i);
             
             const Index* pos = scl::algo::lower_bound(
                 indices.ptr, indices.ptr + len, col_idx);
@@ -276,11 +276,11 @@ void sparse_matvec(
         
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_rows), [&](size_t i) {
             const Index idx = static_cast<Index>(i);
-            const Index len = X.primary_length(idx);
+            const Index len = X.primary_length_unsafe(idx);
             if (len == 0) return;
             
-            auto indices = X.primary_indices(idx);
-            auto values = X.primary_values(idx);
+            auto indices = X.primary_indices_unsafe(idx);
+            auto values = X.primary_values_unsafe(idx);
             const Size len_sz = static_cast<Size>(len);
             
             Real acc0 = Real(0), acc1 = Real(0), acc2 = Real(0), acc3 = Real(0);
@@ -305,11 +305,11 @@ void sparse_matvec(
         const Index n_cols = X.cols();
         
         for (Index j = 0; j < n_cols; ++j) {
-            const Index len = X.primary_length(j);
+            const Index len = X.primary_length_unsafe(j);
             if (len == 0 || coef[j] == Real(0)) continue;
             
-            auto indices = X.primary_indices(j);
-            auto values = X.primary_values(j);
+            auto indices = X.primary_indices_unsafe(j);
+            auto values = X.primary_values_unsafe(j);
             const Size len_sz = static_cast<Size>(len);
             const Real c = coef[j];
             
@@ -389,11 +389,11 @@ Real estimate_lipschitz_constant(
         } else {
             // CSR: iterate rows
             for (Index i = 0; i < n_rows; ++i) {
-                const Index len = X.primary_length(i);
+                const Index len = X.primary_length_unsafe(i);
                 if (len == 0) continue;
                 
-                auto indices = X.primary_indices(i);
-                auto values = X.primary_values(i);
+                auto indices = X.primary_indices_unsafe(i);
+                auto values = X.primary_values_unsafe(i);
                 
                 for (Index k = 0; k < len; ++k) {
                     v[indices[k]] += static_cast<Real>(values[k]) * u[i];
@@ -703,11 +703,11 @@ void proximal_gradient(
             }
         } else {
             for (Index i = 0; i < n_samples; ++i) {
-                const Index len = X.primary_length(i);
+                const Index len = X.primary_length_unsafe(i);
                 if (len == 0) continue;
                 
-                auto indices = X.primary_indices(i);
-                auto values = X.primary_values(i);
+                auto indices = X.primary_indices_unsafe(i);
+                auto values = X.primary_values_unsafe(i);
                 
                 for (Index k = 0; k < len; ++k) {
                     gradient[indices[k]] += static_cast<Real>(values[k]) * residuals[i];
@@ -814,11 +814,11 @@ void fista(
             }
         } else {
             for (Index i = 0; i < n_samples; ++i) {
-                const Index len = X.primary_length(i);
+                const Index len = X.primary_length_unsafe(i);
                 if (len == 0) continue;
                 
-                auto indices = X.primary_indices(i);
-                auto values = X.primary_values(i);
+                auto indices = X.primary_indices_unsafe(i);
+                auto values = X.primary_values_unsafe(i);
                 
                 for (Index k = 0; k < len; ++k) {
                     gradient[indices[k]] += static_cast<Real>(values[k]) * residuals[i];
@@ -903,11 +903,11 @@ void iht(
             }
         } else {
             for (Index i = 0; i < n_samples; ++i) {
-                const Index len = X.primary_length(i);
+                const Index len = X.primary_length_unsafe(i);
                 if (len == 0) continue;
                 
-                auto indices = X.primary_indices(i);
-                auto values = X.primary_values(i);
+                auto indices = X.primary_indices_unsafe(i);
+                auto values = X.primary_values_unsafe(i);
                 
                 for (Index k = 0; k < len; ++k) {
                     gradient[indices[k]] += static_cast<Real>(values[k]) * residuals[i];
@@ -1155,11 +1155,11 @@ void sparse_logistic_regression(
             Real rho = Real(0);
             
             if constexpr (!IsCSR) {
-                const Index len = X.primary_length(j);
+                const Index len = X.primary_length_unsafe(j);
                 if (len == 0) continue;
                 
-                auto indices = X.primary_indices(j);
-                auto values = X.primary_values(j);
+                auto indices = X.primary_indices_unsafe(j);
+                auto values = X.primary_values_unsafe(j);
                 
                 for (Index k = 0; k < len; ++k) {
                     Index i = indices[k];
@@ -1169,11 +1169,11 @@ void sparse_logistic_regression(
                 }
             } else {
                 for (Index i = 0; i < n_samples; ++i) {
-                    const Index len = X.primary_length(i);
+                    const Index len = X.primary_length_unsafe(i);
                     if (len == 0) continue;
                     
-                    auto indices = X.primary_indices(i);
-                    auto values = X.primary_values(i);
+                    auto indices = X.primary_indices_unsafe(i);
+                    auto values = X.primary_values_unsafe(i);
                     
                     const Index* pos = scl::algo::lower_bound(
                         indices.ptr, indices.ptr + len, j);
@@ -1198,20 +1198,20 @@ void sparse_logistic_regression(
             if (delta != Real(0)) {
                 // Update linear predictor
                 if constexpr (!IsCSR) {
-                    const Index len = X.primary_length(j);
-                    auto indices = X.primary_indices(j);
-                    auto values = X.primary_values(j);
+                    const Index len = X.primary_length_unsafe(j);
+                    auto indices = X.primary_indices_unsafe(j);
+                    auto values = X.primary_values_unsafe(j);
                     
                     for (Index k = 0; k < len; ++k) {
                         linear_pred[indices[k]] += delta * static_cast<Real>(values[k]);
                     }
                 } else {
                     for (Index i = 0; i < n_samples; ++i) {
-                        const Index len = X.primary_length(i);
+                        const Index len = X.primary_length_unsafe(i);
                         if (len == 0) continue;
                         
-                        auto indices = X.primary_indices(i);
-                        auto values = X.primary_values(i);
+                        auto indices = X.primary_indices_unsafe(i);
+                        auto values = X.primary_values_unsafe(i);
                         
                         const Index* pos = scl::algo::lower_bound(
                             indices.ptr, indices.ptr + len, j);

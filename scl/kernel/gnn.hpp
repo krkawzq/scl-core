@@ -371,8 +371,8 @@ void precompute_gcn_norm(
 
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
-            auto values = adj.primary_values(static_cast<Index>(i));
-            const Index len = adj.primary_length(static_cast<Index>(i));
+            auto values = adj.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adj.primary_length_unsafe(static_cast<Index>(i));
 
             Real deg = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -386,8 +386,8 @@ void precompute_gcn_norm(
         });
     } else {
         for (Size i = 0; i < n; ++i) {
-            auto values = adj.primary_values(static_cast<Index>(i));
-            const Index len = adj.primary_length(static_cast<Index>(i));
+            auto values = adj.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adj.primary_length_unsafe(static_cast<Index>(i));
 
             Real deg = Real(0);
             for (Index k = 0; k < len; ++k) {
@@ -428,9 +428,9 @@ void message_passing(
 
     if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            auto indices = adjacency.primary_indices(static_cast<Index>(i));
-            auto values = adjacency.primary_values(static_cast<Index>(i));
-            const Index len = adjacency.primary_length(static_cast<Index>(i));
+            auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+            auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
             Real* out_feat = output.ptr + i * F;
 
@@ -488,9 +488,9 @@ void message_passing(
     } else {
         // Sequential version
         for (Index i = 0; i < n; ++i) {
-            auto indices = adjacency.primary_indices(i);
-            auto values = adjacency.primary_values(i);
-            const Index len = adjacency.primary_length(i);
+            auto indices = adjacency.primary_indices_unsafe(i);
+            auto values = adjacency.primary_values_unsafe(i);
+            const Index len = adjacency.primary_length_unsafe(i);
 
             Real* out_feat = output.ptr + static_cast<Size>(i) * F;
 
@@ -570,7 +570,7 @@ void graph_attention(
     // Find max neighbors for workspace sizing
     Index max_neighbors = 0;
     for (Index i = 0; i < n; ++i) {
-        max_neighbors = scl::algo::max2(max_neighbors, adjacency.primary_length(i));
+        max_neighbors = scl::algo::max2(max_neighbors, adjacency.primary_length_unsafe(i));
     }
     max_neighbors += 1;  // For self-loop
 
@@ -583,8 +583,8 @@ void graph_attention(
     prob_pool.init(n_threads, static_cast<Size>(max_neighbors));
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
-        auto indices = adjacency.primary_indices(static_cast<Index>(i));
-        const Index len = adjacency.primary_length(static_cast<Index>(i));
+        auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+        const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
         const Real* feat_i = node_features.ptr + i * F;
         Real* out_feat = output.ptr + i * F;
@@ -654,7 +654,7 @@ void multi_head_attention(
 
     Index max_neighbors = 0;
     for (Index i = 0; i < n; ++i) {
-        max_neighbors = scl::algo::max2(max_neighbors, adjacency.primary_length(i));
+        max_neighbors = scl::algo::max2(max_neighbors, adjacency.primary_length_unsafe(i));
     }
     max_neighbors += 1;
 
@@ -667,8 +667,8 @@ void multi_head_attention(
 
     // Process all heads for each node
     scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
-        auto indices = adjacency.primary_indices(static_cast<Index>(i));
-        const Index len = adjacency.primary_length(static_cast<Index>(i));
+        auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+        const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
         Real* attn_scores = score_pool.get(thread_rank);
         Real* attn_probs = prob_pool.get(thread_rank);
@@ -745,9 +745,9 @@ void graph_convolution(
     agg_pool.init(n_threads, static_cast<Size>(in_dim));
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
-        auto indices = adjacency.primary_indices(static_cast<Index>(i));
-        auto values = adjacency.primary_values(static_cast<Index>(i));
-        const Index len = adjacency.primary_length(static_cast<Index>(i));
+        auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+        auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+        const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
         const Real* feat_i = node_features.ptr + i * in_dim;
         Real* out_feat = output.ptr + i * out_dim;
@@ -809,8 +809,8 @@ void sage_aggregate(
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        auto indices = adjacency.primary_indices(static_cast<Index>(i));
-        Index len = adjacency.primary_length(static_cast<Index>(i));
+        auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+        Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
         if (max_neighbors > 0 && len > max_neighbors) {
             len = max_neighbors;
@@ -877,9 +877,9 @@ void feature_smoothing(
 
     for (Index iter = 0; iter < n_iterations; ++iter) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            auto indices = adjacency.primary_indices(static_cast<Index>(i));
-            auto values = adjacency.primary_values(static_cast<Index>(i));
-            const Index len = adjacency.primary_length(static_cast<Index>(i));
+            auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+            auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
+            const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
             Real* temp_feat = temp + i * F;
             const Real* orig_feat = features.ptr + i * F;
@@ -1099,14 +1099,14 @@ void compute_edge_features(
     Size* offsets = scl::memory::aligned_alloc<Size>(static_cast<Size>(n) + 1, SCL_ALIGNMENT);
     offsets[0] = 0;
     for (Index i = 0; i < n; ++i) {
-        offsets[i + 1] = offsets[i] + static_cast<Size>(adjacency.primary_length(i));
+        offsets[i + 1] = offsets[i] + static_cast<Size>(adjacency.primary_length_unsafe(i));
     }
 
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i) {
-        auto indices = adjacency.primary_indices(static_cast<Index>(i));
-        const Index len = adjacency.primary_length(static_cast<Index>(i));
+        auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
+        const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
         const Real* feat_i = node_features.ptr + i * F;
         Size base_edge_idx = offsets[i];
