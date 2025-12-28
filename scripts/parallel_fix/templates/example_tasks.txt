@@ -1,0 +1,15 @@
+# 示例任务文件 (简单文本格式)
+# 格式: ID|类型|文件|描述|难度
+# 类型: sparse_api, template_param, type_cast, syntax, missing_header, api_binding, generic
+# 难度: easy, normal, hard (可选，不填则自动检测)
+#
+# 注释行以 # 开头
+
+1|sparse_api|scl/kernel/alignment.hpp|修复稀疏矩阵API|normal
+2|sparse_api|scl/kernel/coexpression.hpp|修复稀疏矩阵API|normal
+3|sparse_api|scl/kernel/comparison.hpp|修复稀疏矩阵API|normal
+4|template_param|scl/kernel/centrality.hpp, scl/kernel/components.hpp|修复模板参数|hard
+5|syntax|scl/kernel/annotation.hpp|修复语法错误|hard
+6|missing_header|scl/kernel/components.hpp|添加缺少的头文件|easy
+7|api_binding|scl/binding/c_api/association.cpp|修复C API绑定|normal
+

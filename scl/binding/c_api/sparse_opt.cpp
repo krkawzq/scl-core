@@ -8,6 +8,33 @@
 #include "scl/kernel/sparse_opt.hpp"
 #include "scl/core/type.hpp"
 
+// =============================================================================
+// Helper Functions (C++ scope)
+// =============================================================================
+
+namespace {
+
+scl::kernel::sparse_opt::RegularizationType convert_regularization_type(
+    scl_regularization_type_t type)
+{
+    switch (type) {
+        case SCL_REG_L1:
+            return scl::kernel::sparse_opt::RegularizationType::L1;
+        case SCL_REG_L2:
+            return scl::kernel::sparse_opt::RegularizationType::L2;
+        case SCL_REG_ELASTIC_NET:
+            return scl::kernel::sparse_opt::RegularizationType::ELASTIC_NET;
+        case SCL_REG_SCAD:
+            return scl::kernel::sparse_opt::RegularizationType::SCAD;
+        case SCL_REG_MCP:
+            return scl::kernel::sparse_opt::RegularizationType::MCP;
+        default:
+            return scl::kernel::sparse_opt::RegularizationType::L1;
+    }
+}
+
+} // anonymous namespace
+
 extern "C" {
 
 scl_error_t scl_sparse_opt_prox_l1(
@@ -62,16 +89,16 @@ scl_error_t scl_sparse_opt_lasso_coordinate_descent(
     }
 
     try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(X);
-        scl::Index n_samples = sparse->rows();
-        scl::Index n_features = sparse->cols();
+        auto* wrapper = static_cast<scl::binding::SparseWrapper*>(X);
+        scl::Index n_samples = wrapper->rows();
+        scl::Index n_features = wrapper->cols();
 
         scl::Array<const scl::Real> y_arr(reinterpret_cast<const scl::Real*>(y),
                                          static_cast<scl::Size>(n_samples));
         scl::Array<scl::Real> coef_arr(reinterpret_cast<scl::Real*>(coefficients),
                                        static_cast<scl::Size>(n_features));
 
-        sparse->visit([&](auto& m) {
+        wrapper->visit([&](auto& m) {
             scl::kernel::sparse_opt::lasso_coordinate_descent(
                 m, y_arr, static_cast<scl::Real>(alpha), coef_arr,
                 max_iter, static_cast<scl::Real>(tol)
@@ -98,16 +125,16 @@ scl_error_t scl_sparse_opt_elastic_net_coordinate_descent(
     }
 
     try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(X);
-        scl::Index n_samples = sparse->rows();
-        scl::Index n_features = sparse->cols();
+        auto* wrapper = static_cast<scl::binding::SparseWrapper*>(X);
+        scl::Index n_samples = wrapper->rows();
+        scl::Index n_features = wrapper->cols();
 
         scl::Array<const scl::Real> y_arr(reinterpret_cast<const scl::Real*>(y),
                                          static_cast<scl::Size>(n_samples));
         scl::Array<scl::Real> coef_arr(reinterpret_cast<scl::Real*>(coefficients),
                                       static_cast<scl::Size>(n_features));
 
-        sparse->visit([&](auto& m) {
+        wrapper->visit([&](auto& m) {
             scl::kernel::sparse_opt::elastic_net_coordinate_descent(
                 m, y_arr, static_cast<scl::Real>(alpha), static_cast<scl::Real>(l1_ratio),
                 coef_arr, max_iter, static_cast<scl::Real>(tol)
@@ -133,16 +160,16 @@ scl_error_t scl_sparse_opt_fista_lasso(
     }
 
     try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(X);
-        scl::Index n_samples = sparse->rows();
-        scl::Index n_features = sparse->cols();
+        auto* wrapper = static_cast<scl::binding::SparseWrapper*>(X);
+        scl::Index n_samples = wrapper->rows();
+        scl::Index n_features = wrapper->cols();
 
         scl::Array<const scl::Real> y_arr(reinterpret_cast<const scl::Real*>(y),
                                          static_cast<scl::Size>(n_samples));
         scl::Array<scl::Real> coef_arr(reinterpret_cast<scl::Real*>(coefficients),
                                       static_cast<scl::Size>(n_features));
 
-        sparse->visit([&](auto& m) {
+        wrapper->visit([&](auto& m) {
             scl::kernel::sparse_opt::fista_lasso(
                 m, y_arr, static_cast<scl::Real>(alpha), coef_arr,
                 max_iter, static_cast<scl::Real>(tol)
@@ -167,16 +194,16 @@ scl_error_t scl_sparse_opt_iht(
     }
 
     try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(X);
-        scl::Index n_samples = sparse->rows();
-        scl::Index n_features = sparse->cols();
+        auto* wrapper = static_cast<scl::binding::SparseWrapper*>(X);
+        scl::Index n_samples = wrapper->rows();
+        scl::Index n_features = wrapper->cols();
 
         scl::Array<const scl::Real> y_arr(reinterpret_cast<const scl::Real*>(y),
                                          static_cast<scl::Size>(n_samples));
         scl::Array<scl::Real> coef_arr(reinterpret_cast<scl::Real*>(coefficients),
                                       static_cast<scl::Size>(n_features));
 
-        sparse->visit([&](auto& m) {
+        wrapper->visit([&](auto& m) {
             scl::kernel::sparse_opt::iht(
                 m, y_arr, sparsity_level, coef_arr, max_iter
             );
@@ -238,29 +265,6 @@ scl_error_t scl_sparse_opt_lasso_path(
 // =============================================================================
 // Regularization Types
 // =============================================================================
-
-namespace {
-
-scl::kernel::sparse_opt::RegularizationType convert_regularization_type(
-    scl_regularization_type_t type)
-{
-    switch (type) {
-        case SCL_REG_L1:
-            return scl::kernel::sparse_opt::RegularizationType::L1;
-        case SCL_REG_L2:
-            return scl::kernel::sparse_opt::RegularizationType::L2;
-        case SCL_REG_ELASTIC_NET:
-            return scl::kernel::sparse_opt::RegularizationType::ELASTIC_NET;
-        case SCL_REG_SCAD:
-            return scl::kernel::sparse_opt::RegularizationType::SCAD;
-        case SCL_REG_MCP:
-            return scl::kernel::sparse_opt::RegularizationType::MCP;
-        default:
-            return scl::kernel::sparse_opt::RegularizationType::L1;
-    }
-}
-
-} // anonymous namespace
 
 scl_error_t scl_sparse_opt_proximal_gradient(
     scl_sparse_t X,

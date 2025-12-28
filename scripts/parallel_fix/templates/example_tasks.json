@@ -1,0 +1,61 @@
+{
+  "description": "示例任务文件 - 根据实际编译错误修改",
+  "generated_at": "2024-12-29T00:00:00+00:00",
+  "tasks": [
+    {
+      "id": "1",
+      "type": "sparse_api",
+      "files": ["scl/kernel/alignment.hpp"],
+      "description": "修复稀疏矩阵API (50个错误)",
+      "difficulty": "normal",
+      "context": "主要问题在 kbet_score() 和 compute_correction_vectors() 函数"
+    },
+    {
+      "id": "2",
+      "type": "sparse_api",
+      "files": ["scl/kernel/coexpression.hpp"],
+      "description": "修复稀疏矩阵API - CSR/CSC区分",
+      "difficulty": "normal",
+      "context": "该文件在CSR矩阵上错误使用了 col_* 方法"
+    },
+    {
+      "id": "3",
+      "type": "sparse_api",
+      "files": ["scl/kernel/comparison.hpp"],
+      "description": "修复稀疏矩阵API",
+      "difficulty": "normal"
+    },
+    {
+      "id": "4",
+      "type": "template_param",
+      "files": ["scl/kernel/centrality.hpp", "scl/kernel/components.hpp"],
+      "description": "修复模板参数和原子指针转换",
+      "difficulty": "hard",
+      "context": "DualWorkspacePool 模板参数错误，以及 atomic 指针转换问题，需要深入理解模板元编程"
+    },
+    {
+      "id": "5",
+      "type": "syntax",
+      "files": ["scl/kernel/annotation.hpp"],
+      "description": "修复语法错误 (括号不匹配)",
+      "difficulty": "hard",
+      "context": "第1244, 1260, 1294行附近有括号不匹配问题，需要仔细分析代码结构"
+    },
+    {
+      "id": "6",
+      "type": "missing_header",
+      "files": ["scl/kernel/components.hpp"],
+      "description": "添加缺少的头文件",
+      "difficulty": "easy",
+      "context": "需要添加 #include <cmath>"
+    },
+    {
+      "id": "7",
+      "type": "api_binding",
+      "files": ["scl/binding/c_api/association.cpp", "scl/binding/c_api/annotation.cpp"],
+      "description": "修复C API绑定函数签名",
+      "difficulty": "normal"
+    }
+  ]
+}
+

@@ -1286,7 +1286,7 @@ public:
         if (!alias_ptr) return 0;
         
         BufferID id = 0;
-        alias_shards_[shard_index(alias_ptr)].aliases.access(alias_ptr,
+        alias_shards_[shard_index(alias_ptr)].aliases.access(const_cast<void*>(alias_ptr),
             [&](const AliasRecord& rec) {
                 id = rec.buffer_id;
             });

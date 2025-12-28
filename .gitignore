@@ -75,3 +75,8 @@ scl_v*/
 
 
 node_modules/
+
+# Parallel fix state
+.parallel_fix_state/
+.claude.lock*
+.claude_logs/

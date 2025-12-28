@@ -1,0 +1,77 @@
+---
+# SCL Core C++ Code Style Configuration
+# Based on LLVM style with customizations
+
+BasedOnStyle: LLVM
+
+# Basic formatting
+Language: Cpp
+Standard: c++20
+ColumnLimit: 100
+TabWidth: 4
+IndentWidth: 4
+UseTab: Never
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Line breaking
+AlwaysBreakAfterReturnType: None
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBraces: Attach
+BreakConstructorInitializers: BeforeColon
+ConstructorInitializerIndentWidth: 4
+
+# Spacing
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: true
+SpaceBeforeInheritanceColon: true
+SpaceBeforeParens: ControlStatements
+SpaceBeforeRangeBasedForLoopColon: true
+SpacesInAngles: false
+SpacesInContainerLiterals: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Right
+AlignOperands: true
+AlignTrailingComments: true
+
+# Other settings
+AllowShortBlocksOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BinPackArguments: true
+BinPackParameters: true
+CompactNamespaces: false
+Cpp11BracedListStyle: true
+FixNamespaceComments: true
+IncludeBlocks: Regroup
+IndentCaseLabels: false
+IndentPPDirectives: None
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+NamespaceIndentation: None
+ReflowComments: true
+SortIncludes: true
+SortUsingDeclarations: true
+
+# Include sorting
+IncludeCategories:
+  - Regex:           '^"scl/'
+    Priority:        1
+  - Regex:           '^<(hwy|bs_thread_pool)/'
+    Priority:        2
+  - Regex:           '^<[a-z_]+>'
+    Priority:        3
+  - Regex:           '.*'
+    Priority:        4

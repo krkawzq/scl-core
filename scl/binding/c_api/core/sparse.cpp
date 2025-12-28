@@ -14,6 +14,28 @@
 using namespace scl;
 using namespace scl::binding;
 
+// =============================================================================
+// Helper Functions (C++ scope)
+// =============================================================================
+
+namespace {
+
+BlockStrategy convert_block_strategy(scl_block_strategy_t strategy) {
+    switch (strategy) {
+        case SCL_BLOCK_STRATEGY_CONTIGUOUS:
+            return BlockStrategy::contiguous();
+        case SCL_BLOCK_STRATEGY_SMALL:
+            return BlockStrategy::small_blocks();
+        case SCL_BLOCK_STRATEGY_LARGE:
+            return BlockStrategy::large_blocks();
+        case SCL_BLOCK_STRATEGY_ADAPTIVE:
+        default:
+            return BlockStrategy::adaptive();
+    }
+}
+
+} // anonymous namespace
+
 extern "C" {
 
 // =============================================================================
@@ -623,24 +645,6 @@ scl_error_t scl_sparse_slice_cols(
 // =============================================================================
 // Block Strategy Support
 // =============================================================================
-
-namespace {
-
-BlockStrategy convert_block_strategy(scl_block_strategy_t strategy) {
-    switch (strategy) {
-        case SCL_BLOCK_STRATEGY_CONTIGUOUS:
-            return BlockStrategy::contiguous();
-        case SCL_BLOCK_STRATEGY_SMALL:
-            return BlockStrategy::small_blocks();
-        case SCL_BLOCK_STRATEGY_LARGE:
-            return BlockStrategy::large_blocks();
-        case SCL_BLOCK_STRATEGY_ADAPTIVE:
-        default:
-            return BlockStrategy::adaptive();
-    }
-}
-
-} // anonymous namespace
 
 scl_error_t scl_sparse_create_with_strategy(
     scl_sparse_t* out,

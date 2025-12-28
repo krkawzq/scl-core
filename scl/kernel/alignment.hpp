@@ -48,38 +48,41 @@ SCL_FORCE_INLINE Real sparse_distance_squared(
 ) {
     Real dist = Real(0.0);
 
-    const Index start1 = data1.row_indices_unsafe()[row1];
-    const Index end1 = data1.row_indices_unsafe()[row1 + 1];
-    const Index start2 = data2.row_indices_unsafe()[row2];
-    const Index end2 = data2.row_indices_unsafe()[row2 + 1];
+    auto row1_vals = data1.row_values_unsafe(row1);
+    auto row1_idxs = data1.row_indices_unsafe(row1);
+    Index row1_len = data1.row_length_unsafe(row1);
+    
+    auto row2_vals = data2.row_values_unsafe(row2);
+    auto row2_idxs = data2.row_indices_unsafe(row2);
+    Index row2_len = data2.row_length_unsafe(row2);
 
-    Index i1 = start1, i2 = start2;
-    while (i1 < end1 && i2 < end2) {
-        Index col1 = data1.col_indices_unsafe()[i1];
-        Index col2 = data2.col_indices_unsafe()[i2];
+    Index i1 = 0, i2 = 0;
+    while (i1 < row1_len && i2 < row2_len) {
+        Index col1 = row1_idxs.ptr[i1];
+        Index col2 = row2_idxs.ptr[i2];
 
         if (col1 == col2) {
-            Real diff = static_cast<Real>(data1.values()[i1]) -
-                       static_cast<Real>(data2.values()[i2]);
+            Real diff = static_cast<Real>(row1_vals.ptr[i1]) -
+                       static_cast<Real>(row2_vals.ptr[i2]);
             dist += diff * diff;
             ++i1;
             ++i2;
         } else if (col1 < col2) {
-            Real val = static_cast<Real>(data1.values()[i1]);
+            Real val = static_cast<Real>(row1_vals.ptr[i1]);
             dist += val * val;
             ++i1;
         } else {
-            Real val = static_cast<Real>(data2.values()[i2]);
+            Real val = static_cast<Real>(row2_vals.ptr[i2]);
             dist += val * val;
             ++i2;
         }
     }
-    while (i1 < end1) {
-        Real val = static_cast<Real>(data1.values()[i1++]);
+    while (i1 < row1_len) {
+        Real val = static_cast<Real>(row1_vals.ptr[i1++]);
         dist += val * val;
     }
-    while (i2 < end2) {
-        Real val = static_cast<Real>(data2.values()[i2++]);
+    while (i2 < row2_len) {
+        Real val = static_cast<Real>(row2_vals.ptr[i2++]);
         dist += val * val;
     }
 

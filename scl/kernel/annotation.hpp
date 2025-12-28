@@ -85,7 +85,7 @@ SCL_FORCE_INLINE Real compute_row_mean(
 ) {
     if (SCL_UNLIKELY(n_cols == 0)) return Real(0);
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         auto values = X.row_values_unsafe(row);
         Index len = X.row_length_unsafe(row);
         const Size len_sz = static_cast<Size>(len);

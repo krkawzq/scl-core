@@ -308,8 +308,8 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
     COOArraysT<T> result{};
     
     if (!matrix.valid()) {
-        result.row_indices_unsafe = nullptr;
-        result.col_indices_unsafe = nullptr;
+        result.row_indices = nullptr;
+        result.col_indices = nullptr;
         result.values = nullptr;
         result.nnz = 0;
         return result;
@@ -318,8 +318,8 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
     const Index nnz = matrix.nnz();
     
     if (nnz == 0) {
-        result.row_indices_unsafe = nullptr;
-        result.col_indices_unsafe = nullptr;
+        result.row_indices = nullptr;
+        result.col_indices = nullptr;
         result.values = nullptr;
         result.nnz = 0;
         return result;
@@ -370,8 +370,8 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
         }
     });
     
-    result.row_indices_unsafe = row_indices;
-    result.col_indices_unsafe = col_indices;
+    result.row_indices = row_indices;
+    result.col_indices = col_indices;
     result.values = values;
     result.nnz = nnz;
     
