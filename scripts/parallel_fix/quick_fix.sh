@@ -7,6 +7,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
+# 切换到项目根目录 (scripts/parallel_fix -> 项目根)
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
+
+log_info "工作目录: $PROJECT_ROOT"
+
 show_help() {
     cat << EOF
 快速编译修复 - 一键运行完整流程
@@ -82,7 +88,7 @@ main() {
         log_step "Step 1/4: 编译项目..."
         LOG_FILE="build_errors_$(date +%Y%m%d_%H%M%S).log"
         
-        if make 2>&1 | tee "$LOG_FILE"; then
+        if make build 2>&1 | tee "$LOG_FILE"; then
             log_success "编译成功，无需修复"
             exit 0
         fi
@@ -153,7 +159,7 @@ main() {
     log_step "Step 4/4: 重新编译验证..."
     local verify_log="build_verify_$(date +%Y%m%d_%H%M%S).log"
     
-    if make 2>&1 | tee "$verify_log"; then
+    if make build 2>&1 | tee "$verify_log"; then
         local end_time
         end_time=$(date +%s)
         local duration=$((end_time - start_time))

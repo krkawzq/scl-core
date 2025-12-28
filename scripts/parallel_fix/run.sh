@@ -472,7 +472,7 @@ main() {
     log_success "所有任务完成！"
     echo ""
     echo "下一步: 重新编译验证修复结果"
-    echo "  make 2>&1 | tee build_after_fix.log"
+    echo "  make build 2>&1 | tee build_after_fix.log"
 }
 
 main "$@"

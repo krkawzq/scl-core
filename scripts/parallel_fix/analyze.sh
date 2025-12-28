@@ -29,7 +29,7 @@ show_help() {
 
 示例:
     # 分析并生成JSON任务文件
-    make 2>&1 | tee build.log
+    make build 2>&1 | tee build.log
     $0 build.log -o tasks.json
 
     # 分析并输出简单文本格式

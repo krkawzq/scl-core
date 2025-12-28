@@ -6,14 +6,21 @@
 
 ```bash
 # 1. 分析编译错误并生成任务
-./scripts/parallel_fix/analyze.sh build.log
+./scripts/parallel_fix/analyze.sh build.log -o tasks.json
 
 # 2. 执行并行修复
-./scripts/parallel_fix/run.sh
+./scripts/parallel_fix/run.sh tasks.json
 
-# 3. 验证修复结果
-make 2>&1 | tee build_after_fix.log
+# 3. 或使用交互模式（推荐用于复杂任务）
+./scripts/parallel_fix/run.sh --interactive tasks.json
+
+# 4. 验证修复结果
+make build 2>&1 | tee build_after_fix.log
 ```
+
+📖 **详细文档**: 
+- [交互式模式完整指南](./INTERACTIVE_MODE.md)
+- 包含使用场景、技巧、最佳实践
 
 ## 工作流架构
 
@@ -195,7 +202,7 @@ DEFAULT_DIFFICULTY="normal"
 
 ```bash
 # 1. 编译并捕获错误
-make 2>&1 | tee build.log
+make build 2>&1 | tee build.log
 
 # 2. 分析错误生成任务
 ./scripts/parallel_fix/analyze.sh build.log -o tasks.json
@@ -207,7 +214,7 @@ make 2>&1 | tee build.log
 ./scripts/parallel_fix/run.sh tasks.json
 
 # 5. 验证
-make
+make build
 ```
 
 ### 交互式模式 🆕
