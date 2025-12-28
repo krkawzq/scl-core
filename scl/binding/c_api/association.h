@@ -5,7 +5,7 @@
 // BRIEF: C API for feature association analysis across modalities
 // =============================================================================
 
-#include "scl/binding/c_api/core/core.h"
+#include "scl/binding/c_api/core.h"
 
 #ifdef __cplusplus
 extern "C" {

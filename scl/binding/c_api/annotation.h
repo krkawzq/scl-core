@@ -5,7 +5,7 @@
 // BRIEF: C API for cell type annotation from reference
 // =============================================================================
 
-#include "scl/binding/c_api/core/core.h"
+#include "scl/binding/c_api/core.h"
 
 #ifdef __cplusplus
 extern "C" {

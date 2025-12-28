@@ -5,7 +5,7 @@
 // BRIEF: C API for tissue architecture and organization analysis
 // =============================================================================
 
-#include "scl/binding/c_api/core/core.h"
+#include "scl/binding/c_api/core.h"
 
 #ifdef __cplusplus
 extern "C" {
