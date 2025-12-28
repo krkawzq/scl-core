@@ -1,299 +1,275 @@
 # AGENT.md - AI Developer Guide for scl-core
 
-This document serves as the authoritative guide for AI agents working on the `scl-core` project. It defines the architectural philosophy, coding standards, and collaborative protocols required to maintain the project's high-performance nature.
+This document defines the coding standards and protocols for the `scl-core` project.
 
-**Core Mission**: To build a high-performance, biological operator library with zero-overhead C++ kernels and a stable C-ABI surface for Python integration.
+**Core Mission**: Build a high-performance biological operator library with zero-overhead C++ kernels and a stable C-ABI surface for Python integration.
 
 ---
 
-## 1. The Human-AI Collaboration Protocol
+## 1. Documentation Standard
 
-We strictly enforce a "Human-in-the-Loop" architecture. Code is not just logic; it is a collaborative artifact.
+### 1.1 Documentation Location
 
-### 1.1 Documentation Standard
-
-**Documentation Location**:
-
-This project uses a centralized documentation approach:
-- `xxx.hpp`: Implementation with minimal inline comments
+- `xxx.hpp`: Implementation files with minimal inline comments
 - `docs/`: Comprehensive API documentation in Markdown format
 
-**Implementation Files (.hpp) - Minimal Comments**:
+### 1.2 Implementation Files
 
-Implementation files should contain only brief, essential comments:
+Keep inline comments minimal:
 - One-line function purpose (optional if self-explanatory)
 - Non-obvious algorithm tricks or optimizations
-- Warning about subtle behavior
+- Warnings about subtle behavior
 
-Keep implementation clean and readable. All detailed documentation belongs in the `docs/` directory.
+### 1.3 API Documentation Format
 
-```cpp
-// GOOD - minimal inline comment
-template <CSRLike MatrixT>
-void normalize_rows(MatrixT& matrix, NormMode mode, Real eps) {
-    // Use Kahan summation for numerical stability
-    parallel_for(0, matrix.rows(), [&](Index i) {
-        // ... implementation
-    });
-}
-
-// BAD - too verbose for implementation file
-/// @brief Normalizes each row of a sparse matrix to unit norm.
-/// @detailed This function computes the norm of each row and divides
-/// each element by the norm. Supports L1, L2, Max normalization...
-/// (This belongs in docs/)
-```
-
-**API Documentation in docs/ - Comprehensive Reference**:
-
-All API documentation is stored in the `docs/` directory using Markdown format. The documentation structure mirrors the codebase organization:
-- `docs/cpp/kernels/`: Documentation for kernel modules
-- `docs/cpp/core/`: Documentation for core utilities
-- `docs/cpp/mmap/`: Documentation for memory-mapped operations
-- `docs/api/`: API reference documentation
-
-**Structure**: Each documentation file should contain:
-- Function signatures with C++ syntax
-- Comprehensive API documentation using the format specified below
-- Clear organization matching the codebase structure
-
-### 1.2 API Documentation Format
-
-API documentation in `docs/` uses Markdown format with code blocks for function signatures:
-
-```markdown
-# Normalize Kernels
-
-## row_norms
-
-**SUMMARY:**
-Compute the norm of each row in a CSR sparse matrix.
-
-**SIGNATURE:**
-```cpp
-template <CSRLike MatrixT>
-void row_norms(
-    const MatrixT& matrix,        // CSR matrix input
-    NormMode mode,                 // L1, L2, Max, or Sum
-    MutableSpan<Real> output       // Output buffer [n_rows]
-);
-```
-
-**PARAMETERS:**
-- matrix [in]  CSR sparse matrix, shape (n_rows, n_cols)
-- mode   [in]  Norm type: L1, L2, Max, or Sum
-- output [out] Pre-allocated buffer, size = n_rows
-
-**PRECONDITIONS:**
-- output.size() == matrix.rows()
-- matrix must be valid CSR format (sorted indices, no duplicates)
-
-**POSTCONDITIONS:**
-- output[i] contains the norm of row i
-- matrix is unchanged
-
-**ALGORITHM:**
-For each row i in parallel:
-1. Iterate over non-zero elements in row i
-2. Accumulate according to mode:
-   - L1:  sum(|x_j|)
-   - L2:  sqrt(sum(x_j^2))
-   - Max: max(|x_j|)
-   - Sum: sum(x_j)
-3. Write result to output[i]
-
-**COMPLEXITY:**
-- Time:  O(nnz)
-- Space: O(1) auxiliary
-
-**THREAD SAFETY:**
-Safe - parallelized over rows, no shared mutable state
-
-**THROWS:**
-DimensionError - if output.size() != matrix.rows()
-
----
-
-## normalize_rows_inplace
-
-**SUMMARY:**
-Normalize each row of a CSR matrix to unit norm in-place.
-
-**SIGNATURE:**
-```cpp
-template <CSRLike MatrixT>
-void normalize_rows_inplace(
-    MatrixT& matrix,               // CSR matrix, modified in-place
-    NormMode mode,                 // Normalization type
-    Real epsilon = 1e-12           // Zero-norm threshold
-);
-```
-
-**PARAMETERS:**
-- matrix  [in,out] Mutable CSR matrix, modified in-place
-- mode    [in]     Norm type for normalization
-- epsilon [in]     Small constant to prevent division by zero
-
-**PRECONDITIONS:**
-- matrix must be valid CSR format
-- matrix values must be mutable
-
-**POSTCONDITIONS:**
-- Each row has unit norm under specified mode (if original norm > epsilon)
-- Rows with norm <= epsilon are unchanged
-- Matrix structure (indices, indptr) unchanged
-
-**MUTABILITY:**
-INPLACE - modifies matrix.values() directly
-
-**ALGORITHM:**
-For each row i in parallel:
-1. Compute norm of row i
-2. If norm > epsilon: divide each element by norm
-3. Otherwise: leave row unchanged
-
-**COMPLEXITY:**
-- Time:  O(nnz)
-- Space: O(1) auxiliary
-
-**NUMERICAL NOTES:**
-- Uses epsilon to handle zero/near-zero rows gracefully
-- L2 norm uses compensated summation for accuracy
-
----
-
-## NormMode
-
-**VALUES:**
-- L1   - Sum of absolute values: sum(|x_i|)
-- L2   - Euclidean norm: sqrt(sum(x_i^2))
-- Max  - Maximum absolute value: max(|x_i|)
-- Sum  - Simple sum (signed): sum(x_i)
-
-**SIGNATURE:**
-```cpp
-enum class NormMode {
-    L1,    // sum(|x_i|)
-    L2,    // sqrt(sum(x_i^2))
-    Max,   // max(|x_i|)
-    Sum    // sum(x_i) - signed
-};
-```
-
-### 1.3 API Documentation Sections
-
-Each function documentation block MUST include these sections (in order):
+All API documentation in `docs/` must include these sections (in order):
 
 | Section | Required | Description |
 |---------|----------|-------------|
-| SUMMARY | Yes | One-line description of purpose |
-| PARAMETERS | Yes | Each parameter with [in], [out], or [in,out] tag |
-| PRECONDITIONS | Yes | Requirements that must be true before calling |
-| POSTCONDITIONS | Yes | Guarantees after successful execution |
+| SUMMARY | Yes | One-line description |
+| PARAMETERS | Yes | Each parameter with [in], [out], or [in,out] |
+| PRECONDITIONS | Yes | Requirements before calling |
+| POSTCONDITIONS | Yes | Guarantees after execution |
 | MUTABILITY | If applicable | INPLACE, CONST, or ALLOCATES |
-| ALGORITHM | If non-trivial | Step-by-step algorithm description |
+| ALGORITHM | If non-trivial | Step-by-step description |
 | COMPLEXITY | Yes | Time and space complexity |
 | THREAD SAFETY | Yes | Safe, Unsafe, or conditional |
 | THROWS | If applicable | Exceptions and conditions |
 | NUMERICAL NOTES | If applicable | Precision, stability, edge cases |
 
-After the documentation block, include the actual function declaration with inline comments:
-- Each parameter should have a brief inline comment explaining its purpose
-- Use alignment for readability
-- Keep inline comments concise (visible in quick queries)
+Function signatures in documentation must match implementation exactly. Use code blocks for signatures with inline parameter comments.
 
-**IMPORTANT**: API documentation must NOT contain examples. Use precise descriptions of contracts, invariants, and algorithms instead. Examples can introduce ambiguity and become outdated.
+**IMPORTANT**: API documentation must NOT contain examples. Describe contracts and behavior precisely.
 
 ### 1.4 Workflow Requirement
 
-**CRITICAL**: After completing any file modification task, you MUST update the corresponding documentation in `docs/` to reflect the changes.
+**CRITICAL**: After any file modification, update corresponding documentation in `docs/`.
 
-Checklist before marking task complete:
-1. Implementation in `.hpp` file is correct
-2. Corresponding documentation file exists in `docs/` directory
-3. Documentation contains actual function signatures in code blocks
-4. All function signatures in documentation match implementation exactly
-5. Documentation includes all PRECONDITIONS and POSTCONDITIONS
-6. Function signatures are clearly formatted with inline comments
-7. MUTABILITY section is correct for any in-place operations
-8. Documentation structure matches codebase organization
+Checklist:
+1. Implementation in `.hpp` is correct
+2. Documentation exists in `docs/` directory
+3. Function signatures match exactly
+4. All required sections are present
+5. MUTABILITY is correct for in-place operations
 
-### 1.5 Language and Formatting Rules
+### 1.5 Language and Formatting
 
-**Language**: English only. All comments and documentation must be in English.
-
-**Format**: Plain Text Only (STRICTLY No Markdown/LaTeX)
-
-**CRITICAL RULE**: Code comments and documentation MUST use plain text ONLY.
-
-* **NO Markdown Syntax**:
-  * Do NOT use `**bold**` or `*italic*`
-  * Do NOT use backticks for inline code
-  * Do NOT use `# headers`
-  * Do NOT use `- lists` or `* lists`
-  * Do NOT use code fences
-
-* **NO LaTeX Syntax**:
-  * Do NOT use `$...$` or `$$...$$`
-  * Do NOT use `\frac{}{}`, `\sum`, `\int`
-  * Write formulas in plain ASCII: `norm = sqrt(sum(x_i^2))`
-
-* **NO Examples in API Docs**:
-  * Do NOT include usage examples
-  * Do NOT include sample code
-  * Describe contracts and behavior precisely instead
+- **Language**: English only
+- **Format**: Plain text only (NO Markdown/LaTeX syntax in code comments)
+- **No examples** in API documentation
 
 ---
 
-## 2. C++ Kernel Architecture: "Zero-Overhead"
+## 2. C++ Standards
 
-The internal C++ layer (`scl/`) is designed for maximum throughput and minimal latency.
+### 2.1 Language Standard
 
-### 2.1 Code Style Standards
+- **C++20** (ISO/IEC 14882:2020)
+- **Compilers**: GCC 11+, Clang 14+, MSVC 19.29+
 
-**Namespace Organization**:
+**Compile Flags**:
+```bash
+# Release: -std=c++20 -O3 -DNDEBUG -march=native -ffast-math -flto
+# Debug:   -std=c++20 -O0 -g -fsanitize=address,undefined
+```
 
-* `scl::core`: Core types, utilities, and infrastructure
-* `scl::kernel`: Computational kernels (normalize, mwu, neighbors, etc.)
-* `scl::math`: Mathematical functions (regression, stats, etc.)
-* `scl::utils`: Utility functions (matrix operations, etc.)
-* `scl::threading`: Parallelization abstraction layer
-* `scl::binding`: C-ABI interface for Python bindings
+### 2.2 Required C++20 Features
 
-**Code Formatting**:
+- Concepts (prefer over SFINAE)
+- std::span (replace raw pointer + size)
+- constexpr (maximize compile-time computation)
+- [[likely]]/[[unlikely]] (hot paths)
+- std::bit_cast (type punning for POD)
+- noexcept (especially move operations)
 
-* Use `#pragma once` for header guards
-* Section headers use `// =============================================================================`
-* Indentation: 4 spaces (no tabs)
-* Line length: Prefer < 100 characters, max 120
-* Braces: Opening brace on same line
+### 2.3 Code Style
 
-**Attributes and Qualifiers**:
+**Namespaces**:
+- `scl::core`: Core types and utilities
+- `scl::kernel`: Computational kernels
+- `scl::math`: Mathematical functions
+- `scl::threading`: Parallelization layer
+- `scl::binding`: C-ABI interface
 
-* Use `SCL_FORCE_INLINE` for hot-path functions
-* Use `SCL_NODISCARD` for return values that must be checked
-* Use `constexpr` for compile-time constants
-* Use `noexcept` where appropriate
-* Use `SCL_RESTRICT` for non-aliased pointers in hot loops
+**Formatting**:
+- `#pragma once` for header guards
+- Section headers: `// =============================================================================`
+- Indentation: 4 spaces
+- Line length: < 100 chars (max 120)
+- Opening brace on same line
+
+**Attributes**:
+- `SCL_FORCE_INLINE` for hot-path functions
+- `SCL_NODISCARD` for return values that must be checked
+- `SCL_RESTRICT` for non-aliased pointers in hot loops
+- `constexpr` for compile-time constants
 
 **Error Handling**:
+- `SCL_ASSERT` for internal invariants (debug-only)
+- `SCL_CHECK_ARG` for user input validation
+- `SCL_CHECK_DIM` for dimension mismatches
+- Prefer error codes over exceptions in hot paths
 
-* Use `SCL_ASSERT` for internal invariants
-* Use `SCL_CHECK_ARG` for user input validation
-* Use `SCL_CHECK_DIM` for dimension mismatches
+---
 
-## 3. Development Checklist
+## 3. Clang-Tidy Compliance
 
-When completing any task, verify:
+### 3.1 Configuration
 
-- [ ] Implementation is correct and compiles
-- [ ] Code uses minimal inline comments
-- [ ] Corresponding documentation file is created/updated in `docs/`
-- [ ] Documentation contains actual function signatures in code blocks
-- [ ] All function signatures in documentation match implementation exactly
-- [ ] Function signatures are clearly formatted with inline comments
-- [ ] PRECONDITIONS document all input requirements
-- [ ] POSTCONDITIONS document all guarantees
-- [ ] MUTABILITY is specified for state-changing functions
-- [ ] Documentation structure matches codebase organization
-- [ ] No examples in API documentation (use precise contract descriptions)
+Project uses `.clang-tidy` at repository root. Key disabled checks:
+- `modernize-use-trailing-return-type`
+- `readability-identifier-length`
+- `readability-magic-numbers`
+- `cppcoreguidelines-pro-bounds-pointer-arithmetic`
+- `cppcoreguidelines-owning-memory`
+
+### 3.2 Mandatory Checks
+
+Never disable without justification:
+- `bugprone-*`
+- `clang-analyzer-*`
+- `cert-*`
+- `cppcoreguidelines-init-variables`
+- `cppcoreguidelines-slicing`
+- `modernize-use-nullptr`
+- `modernize-use-override`
+- `performance-move-const-arg`
+
+---
+
+## 4. Performance Exceptions (NOLINT)
+
+When performance conflicts with clang-tidy rules, document exceptions.
+
+### 4.1 NOLINT Format
+
+```cpp
+// PERFORMANCE: [brief reason]
+// [detailed explanation if needed]
+// NOLINTNEXTLINE(check-name)
+code_line;
+```
+
+### 4.2 Common Exceptions
+
+**Allowed with documentation**:
+- Pointer arithmetic in hot loops (with benchmark)
+- Reinterpret cast for SIMD (with SIMD target and speedup)
+- Magic numbers in algorithms (with mathematical reference)
+- Uninitialized variables (with justification)
+- Raw loops over ranges (with benchmark)
+- Owning raw pointers in C-ABI layer (with ownership model)
+- Short variable names in math code (with algorithm reference)
+
+### 4.3 Prohibited Suppressions
+
+Never suppress without human review:
+- `bugprone-use-after-move`
+- `clang-analyzer-core.NullDereference`
+- `clang-analyzer-core.UndefinedBinaryOperatorResult`
+- `cppcoreguidelines-slicing`
+- `bugprone-undefined-memory-manipulation`
+- `cert-err58-cpp`
+
+### 4.4 Performance Documentation Template
+
+```cpp
+// =============================================================================
+// PERFORMANCE EXCEPTION: [Short Title]
+// =============================================================================
+// Rule Suppressed: [check-name]
+// Reason: [Why this rule cannot be followed]
+// Alternative Considered: [What standard-compliant approach was tried]
+// Benchmark: [Performance comparison]
+// Safety: [Why this is still safe]
+// =============================================================================
+```
+
+---
+
+## 5. Modern C++ Patterns
+
+### 5.1 RAII
+
+Use RAII wrappers for all resources. Mark move operations `noexcept`.
+
+### 5.2 Strong Types
+
+Use strong types to prevent parameter confusion:
+```cpp
+struct RowIndex { Index value; };
+struct ColIndex { Index value; };
+```
+
+### 5.3 constexpr
+
+Maximize compile-time computation. Use `consteval` for lookup tables.
+
+### 5.4 Structured Bindings
+
+Use structured bindings for tuple-like returns. Use designated initializers for clarity.
+
+---
+
+## 6. Development Checklist
+
+### Code Quality
+- [ ] Compiles with `-std=c++20 -Wall -Wextra -Werror`
+- [ ] Passes `clang-tidy` with project configuration
+- [ ] All NOLINT suppressions documented
+- [ ] Performance exceptions include benchmark data
+- [ ] Modern C++20 features used appropriately
+
+### Documentation
+- [ ] Minimal inline comments in implementation
+- [ ] Documentation exists in `docs/`
+- [ ] Function signatures match exactly
+- [ ] All required sections present
+- [ ] MUTABILITY specified for state-changing functions
+- [ ] No examples in API documentation
+
+### Testing
+- [ ] Unit tests cover all public functions
+- [ ] Edge cases tested
+- [ ] Thread safety tests for parallel functions
+- [ ] Sanitizer builds pass (ASan, UBSan, TSan)
+
+---
+
+## 7. Quick Reference
+
+### 7.1 Macros
+
+```cpp
+#define SCL_FORCE_INLINE [[gnu::always_inline]] inline
+#define SCL_NODISCARD [[nodiscard]]
+#define SCL_RESTRICT __restrict__
+#define SCL_LIKELY(x) [[likely]] (x)
+#define SCL_UNLIKELY(x) [[unlikely]] (x)
+#define SCL_ASSERT(cond) assert(cond)  // debug-only
+#define SCL_CHECK_ARG(cond, msg) /* throws std::invalid_argument */
+#define SCL_CHECK_DIM(cond, msg) /* throws DimensionError */
+```
+
+### 7.2 Type Aliases
+
+```cpp
+namespace scl {
+    using Index = std::int64_t;
+    using Real = double;
+    template <typename T> using Span = std::span<T>;
+    template <typename T> using MutableSpan = std::span<T>;
+    template <typename T> using ConstSpan = std::span<const T>;
+}
+```
+
+### 7.3 Clang-Tidy Quick Reference
+
+| Check | Default | Notes |
+|-------|---------|-------|
+| `cppcoreguidelines-pro-bounds-pointer-arithmetic` | OFF | Allow with NOLINT |
+| `readability-magic-numbers` | OFF | Allow with documentation |
+| `readability-identifier-length` | OFF | Allow math notation |
+| `cppcoreguidelines-owning-memory` | OFF | Allow in C-ABI layer |
+| `bugprone-*` | ON | Never disable |
+| `clang-analyzer-*` | ON | Never disable |

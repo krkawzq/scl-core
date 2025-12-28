@@ -5,7 +5,6 @@
 #include "scl/core/error.hpp"
 #include "scl/core/registry.hpp"
 #include "scl/core/algo.hpp"
-#include "scl/core/memory.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -95,7 +94,7 @@ struct BlockStrategy {
     }
     
     /// @brief Compute optimal block size for given data
-    [[nodiscard]] Index compute_block_size(Index total_nnz, Index primary_dim) const {
+    [[nodiscard]] Index compute_block_size(Index total_nnz, Index /*primary_dim*/) const {
         if (force_contiguous || total_nnz == 0) {
             return total_nnz;
         }
@@ -472,7 +471,7 @@ struct Sparse {
         
         // Check if all data is contiguous
         T* expected_data = static_cast<T*>(data_ptrs[first_nonempty]);
-        Index* expected_indices = static_cast<Index*>(indices_ptrs[first_nonempty]);
+        auto* expected_indices = static_cast<Index*>(indices_ptrs[first_nonempty]);
         
         for (Index i = first_nonempty; i < pdim; ++i) {
             if (SCL_UNLIKELY(lengths[i] == 0)) continue;
@@ -743,7 +742,6 @@ struct Sparse {
         BlockStrategy strategy = BlockStrategy::adaptive())
     {
         const Index pdim = IsCSR ? rows : cols;
-        const Index nnz = offsets[pdim];
 
         std::vector<Index> primary_nnzs(pdim);
         for (Index i = 0; i < pdim; ++i) {
@@ -868,7 +866,7 @@ struct Sparse {
         std::span<const T> values,
         BlockStrategy strategy = BlockStrategy::adaptive())
     {
-        const Index nnz = static_cast<Index>(values.size());
+        const auto nnz = static_cast<Index>(values.size());
         SCL_CHECK_ARG(static_cast<Index>(row_indices.size()) == nnz &&
                       static_cast<Index>(col_indices.size()) == nnz,
                       "COO arrays size mismatch");
@@ -928,7 +926,7 @@ struct Sparse {
         std::span<const T> values,
         BlockStrategy strategy = BlockStrategy::adaptive())
     {
-        const Index nnz = static_cast<Index>(values.size());
+        const auto nnz = static_cast<Index>(values.size());
         if (nnz == 0) return zeros(rows, cols);
 
         const Index pdim = IsCSR ? rows : cols;
@@ -982,7 +980,6 @@ struct Sparse {
                       "dense data size mismatch");
 
         const Index pdim = IsCSR ? rows : cols;
-        const Index sdim = IsCSR ? cols : rows;
 
         // Determine which elements are non-zero
         auto check_nonzero = [&](T val) -> bool {
@@ -1121,7 +1118,6 @@ struct Sparse {
         if (!valid()) return {};
 
         const Index new_pdim = secondary_dim();
-        const Index new_sdim = primary_dim();
 
         // Count nnz per new primary dimension
         std::vector<Index> new_nnzs(new_pdim, 0);
@@ -1183,7 +1179,7 @@ struct Sparse {
         if (!valid() || row_indices.empty()) return {};
 
         auto& reg = get_registry();
-        const Index new_rows = static_cast<Index>(row_indices.size());
+        const auto new_rows = static_cast<Index>(row_indices.size());
 
         // Allocate new metadata
         auto* new_dp = reg.new_array<Pointer>(new_rows);
@@ -1247,7 +1243,7 @@ struct Sparse {
         if (!valid() || col_indices.empty()) return {};
 
         auto& reg = get_registry();
-        const Index new_cols = static_cast<Index>(col_indices.size());
+        const auto new_cols = static_cast<Index>(col_indices.size());
 
         auto* new_dp = reg.new_array<Pointer>(new_cols);
         auto* new_ip = reg.new_array<Pointer>(new_cols);
@@ -1298,7 +1294,7 @@ struct Sparse {
     {
         if (!valid() || row_indices.empty()) return {};
 
-        const Index new_rows = static_cast<Index>(row_indices.size());
+        const auto new_rows = static_cast<Index>(row_indices.size());
 
         // Gather nnz counts
         std::vector<Index> new_nnzs(new_rows);
@@ -1350,7 +1346,7 @@ struct Sparse {
     {
         if (!valid() || col_indices.empty()) return {};
 
-        const Index new_cols = static_cast<Index>(col_indices.size());
+        const auto new_cols = static_cast<Index>(col_indices.size());
 
         std::vector<Index> new_nnzs(new_cols);
         for (Index i = 0; i < new_cols; ++i) {
@@ -1388,7 +1384,7 @@ struct Sparse {
     {
         if (!valid() || col_indices.empty()) return {};
 
-        const Index new_cols = static_cast<Index>(col_indices.size());
+        const auto new_cols = static_cast<Index>(col_indices.size());
 
         // Build column index mapping: old_col -> new_col (-1 if not included)
         std::vector<Index> col_map(cols_, -1);
@@ -1443,7 +1439,7 @@ struct Sparse {
     {
         if (!valid() || row_indices.empty()) return {};
 
-        const Index new_rows = static_cast<Index>(row_indices.size());
+        const auto new_rows = static_cast<Index>(row_indices.size());
 
         std::vector<Index> row_map(rows_, -1);
         for (Index i = 0; i < new_rows; ++i) {
@@ -1760,7 +1756,7 @@ private:
 
             // Allocate data block
             T* data_block = new (std::nothrow) T[static_cast<size_t>(block_nnz)]();
-            Index* idx_block = new (std::nothrow) Index[static_cast<size_t>(block_nnz)]();
+            auto* idx_block = new (std::nothrow) Index[static_cast<size_t>(block_nnz)]();
 
             if (!data_block || !idx_block) {
                 delete[] data_block;

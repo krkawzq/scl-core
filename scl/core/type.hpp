@@ -7,6 +7,8 @@
 #include <type_traits>
 #include <concepts>
 #include <cassert>
+#include <iterator>
+#include <span>
 
 // =============================================================================
 // FILE: scl/core/type.hpp
@@ -67,32 +69,128 @@ using Pointer = void*;
 
 template <typename T>
 struct Array {
+    // Type aliases for STL compatibility
     using value_type = T;
+    using pointer = T*;
+    using const_pointer = const T*;
+    using reference = T&;
+    using const_reference = const T&;
+    using size_type = Size;
+    using difference_type = std::ptrdiff_t;
+    using iterator = T*;
+    using const_iterator = const T*;
+    using reverse_iterator = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
     
     T* ptr;
     Size len;
 
+    // Constructors
     constexpr Array() noexcept : ptr(nullptr), len(0) {}
     constexpr Array(T* p, Size s) noexcept : ptr(p), len(s) {}
     
+    // Conversion from non-const to const
     template <typename U>
         requires (std::is_const_v<T> && std::is_same_v<std::remove_const_t<T>, U>)
     constexpr Array(const Array<U>& other) noexcept 
         : ptr(other.ptr), len(other.len) {}
+    
+    // Conversion from std::span (C++20)
+    template <std::size_t Extent = std::dynamic_extent>
+    constexpr Array(std::span<T, Extent> span) noexcept
+        : ptr(span.data()), len(static_cast<Size>(span.size())) {}
 
-    SCL_FORCE_INLINE constexpr T& operator[](Index i) const noexcept {
+    // Element access
+    SCL_FORCE_INLINE constexpr auto operator[](Index i) const noexcept -> T& {
 #if !defined(NDEBUG)
         assert(i >= 0 && static_cast<Size>(i) < len && "Array index out of bounds");
 #endif
-        return ptr[i];
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        // Intentional: zero-overhead array indexing for performance
+        return ptr[i];  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     }
     
-    SCL_FORCE_INLINE constexpr T* data() const noexcept { return ptr; }
-    SCL_FORCE_INLINE constexpr Size size() const noexcept { return len; }
-    SCL_FORCE_INLINE constexpr bool empty() const noexcept { return len == 0; }
-    SCL_FORCE_INLINE constexpr T* begin() const noexcept { return ptr; }
-    SCL_FORCE_INLINE constexpr T* end() const noexcept { return ptr + len; }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto front() const noexcept -> T& {
+#if !defined(NDEBUG)
+        assert(len > 0 && "Array is empty");
+#endif
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        return ptr[0];
+    }
+    
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto back() const noexcept -> T& {
+#if !defined(NDEBUG)
+        assert(len > 0 && "Array is empty");
+#endif
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        return ptr[len - 1];
+    }
+    
+    // Capacity
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto data() const noexcept -> T* { return ptr; }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto size() const noexcept -> Size { return len; }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto empty() const noexcept -> bool { return len == 0; }
+    
+    // Iterators
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto begin() const noexcept -> T* { return ptr; }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto end() const noexcept -> T* { 
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        return ptr + len; 
+    }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto cbegin() const noexcept -> const T* { return ptr; }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto cend() const noexcept -> const T* { 
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        return ptr + len; 
+    }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto rbegin() const noexcept -> reverse_iterator {
+        return reverse_iterator(end());
+    }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto rend() const noexcept -> reverse_iterator {
+        return reverse_iterator(begin());
+    }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto crbegin() const noexcept -> const_reverse_iterator {
+        return const_reverse_iterator(cend());
+    }
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto crend() const noexcept -> const_reverse_iterator {
+        return const_reverse_iterator(cbegin());
+    }
+    
+    // Subviews
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto subspan(Index offset, Size count) const noexcept -> Array<T> {
+#if !defined(NDEBUG)
+        assert(offset >= 0 && static_cast<Size>(offset) <= len && "Offset out of bounds");
+        assert(static_cast<Size>(offset) + count <= len && "Count exceeds array bounds");
+#endif
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        return Array<T>(ptr + offset, count);
+    }
+    
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto first(Size count) const noexcept -> Array<T> {
+#if !defined(NDEBUG)
+        assert(count <= len && "Count exceeds array size");
+#endif
+        return Array<T>(ptr, count);
+    }
+    
+    [[nodiscard]] SCL_FORCE_INLINE constexpr auto last(Size count) const noexcept -> Array<T> {
+#if !defined(NDEBUG)
+        assert(count <= len && "Count exceeds array size");
+#endif
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        return Array<T>(ptr + (len - count), count);
+    }
+    
+    // Conversion to std::span
+    [[nodiscard]] constexpr auto as_span() const noexcept -> std::span<T> {
+        return std::span<T>(ptr, len);
+    }
 };
+
+// Static assertions for POD and trivial copyability
+static_assert(std::is_trivially_copyable_v<Array<Real>>);
+static_assert(std::is_trivially_copyable_v<Array<const Real>>);
+static_assert(std::is_trivially_copyable_v<Array<Index>>);
+static_assert(std::is_standard_layout_v<Array<Real>>);
 
 // =============================================================================
 // SECTION 3: ArrayLike Concept
@@ -105,6 +203,10 @@ concept ArrayLike = requires(const A& a, Index i) {
     { a[i] } -> std::convertible_to<const typename A::value_type&>;
     { a.begin() };
     { a.end() };
+    requires std::same_as<
+        std::remove_const_t<std::iter_value_t<decltype(a.begin())>>,
+        std::remove_const_t<typename A::value_type>
+    >;
 };
 
 static_assert(ArrayLike<Array<Real>>);
@@ -125,7 +227,7 @@ template <typename M>
 concept CSRLike = requires(const M& m, Index i) {
     typename M::ValueType;
     typename M::Tag;
-    requires M::is_csr == true;
+    requires M::Tag::is_csr == true;
     { m.rows() } -> std::convertible_to<Index>;
     { m.cols() } -> std::convertible_to<Index>;
     { m.nnz() } -> std::convertible_to<Index>;
@@ -138,7 +240,7 @@ template <typename M>
 concept CSCLike = requires(const M& m, Index j) {
     typename M::ValueType;
     typename M::Tag;
-    requires M::is_csc == true;
+    requires M::Tag::is_csc == true;
     { m.rows() } -> std::convertible_to<Index>;
     { m.cols() } -> std::convertible_to<Index>;
     { m.nnz() } -> std::convertible_to<Index>;

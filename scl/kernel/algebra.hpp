@@ -9,10 +9,7 @@
 #include "scl/core/algo.hpp"
 #include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
-#include "scl/threading/scheduler.hpp"
 
-#include <atomic>
 #include <cstring>
 #include <cmath>
 #include <new>

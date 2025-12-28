@@ -4,7 +4,7 @@
 /// @brief Version Information
 
 #ifndef SCL_VERSION
-#define SCL_VERSION "0.3.0"
+#define SCL_VERSION "0.4.0"
 #endif
 
 #ifndef SCL_AUTHOR

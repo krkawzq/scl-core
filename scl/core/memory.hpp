@@ -10,32 +10,67 @@
 #include <cstdlib>
 #include <new>
 #include <utility>
+#include <memory>
 
 // =============================================================================
 // FILE: scl/core/memory.hpp
-// BRIEF: SCL Low-Level Memory Primitives
+// BRIEF: SCL Low-Level Memory Primitives - Modernized with Array<T>
 // =============================================================================
 
 namespace scl::memory {
+
+// Constants are defined in scl/config.hpp
 
 // =============================================================================
 // Aligned Memory Allocation
 // =============================================================================
 
+// Custom deleter for aligned memory - zero-overhead stateless deleter
 template <typename T>
-SCL_FORCE_INLINE T* aligned_alloc(size_t count, size_t alignment = 64) {
+struct AlignedDeleter {
+    std::size_t alignment_;
+
+    explicit AlignedDeleter(std::size_t alignment = DEFAULT_ALIGNMENT) noexcept
+        : alignment_(alignment) {}
+
+    void operator()(T* ptr) const noexcept {
+        if (SCL_UNLIKELY(!ptr)) return;
+
+        if constexpr (std::is_arithmetic_v<T>) {
+            operator delete[](ptr, std::align_val_t(alignment_));
+        } else {
+#if defined(_WIN32) || defined(_WIN64)
+            _aligned_free(ptr);
+#else
+            std::free(ptr);
+#endif
+        }
+    }
+};
+
+// Modernized: Returns unique_ptr with custom deleter
+// Intentional: unique_ptr<T[]> is the standard way to manage dynamic arrays
+template <typename T>
+// unique_ptr<T[]> is standard library type for managing dynamic arrays, not C-style array
+// NOLINTNEXTLINE(modernize-avoid-c-arrays)
+SCL_FORCE_INLINE auto aligned_alloc(Size count, std::size_t alignment = DEFAULT_ALIGNMENT) -> std::unique_ptr<T[], AlignedDeleter<T>> {
     static_assert(std::is_trivially_constructible_v<T>,
                   "aligned_alloc: Type must be trivially constructible");
 
-    if (SCL_UNLIKELY(count == 0)) { return nullptr; }
+    if (SCL_UNLIKELY(count == 0)) {
+        // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+        return std::unique_ptr<T[], AlignedDeleter<T>>(nullptr, AlignedDeleter<T>(alignment));
+    }
 
-    const size_t byte_size = count * sizeof(T);
+    const std::size_t byte_size = static_cast<std::size_t>(count) * sizeof(T);
+    T* raw_ptr = nullptr;
 
     if constexpr (std::is_arithmetic_v<T>) {
         try {
-            return new (std::align_val_t(alignment)) T[count]();
+            raw_ptr = new (std::align_val_t(alignment)) T[count]();
         } catch (...) {
-            return nullptr;
+            // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+            return std::unique_ptr<T[], AlignedDeleter<T>>(nullptr, AlignedDeleter<T>(alignment));
         }
     } else {
         void* ptr = nullptr;
@@ -49,18 +84,31 @@ SCL_FORCE_INLINE T* aligned_alloc(size_t count, size_t alignment = 64) {
 #endif
 
         if (SCL_LIKELY(ptr)) {
-            T* typed_ptr = static_cast<T*>(ptr);
-            for (size_t i = 0; i < count; ++i) {
-                new (typed_ptr + i) T();
+            raw_ptr = static_cast<T*>(ptr);
+            for (Size i = 0; i < count; ++i) {
+                new (raw_ptr + i) T();
             }
+        } else {
+            // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+            return std::unique_ptr<T[], AlignedDeleter<T>>(nullptr, AlignedDeleter<T>(alignment));
         }
-
-        return static_cast<T*>(ptr);
     }
+
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    return std::unique_ptr<T[], AlignedDeleter<T>>(raw_ptr, AlignedDeleter<T>(alignment));
 }
 
+// Legacy function for backward compatibility - deprecated, use unique_ptr version
 template <typename T>
-SCL_FORCE_INLINE void aligned_free(T* ptr, size_t alignment = 64) {
+[[deprecated("Use aligned_alloc returning unique_ptr instead")]]
+SCL_FORCE_INLINE auto aligned_alloc_raw(Size count, std::size_t alignment = DEFAULT_ALIGNMENT) -> T* {
+    auto ptr = aligned_alloc<T>(count, alignment);
+    return ptr.release();
+}
+
+// Legacy function for backward compatibility
+template <typename T>
+SCL_FORCE_INLINE void aligned_free(T* ptr, std::size_t alignment = DEFAULT_ALIGNMENT) {
     if (SCL_UNLIKELY(!ptr)) return;
 
     if constexpr (std::is_arithmetic_v<T>) {
@@ -74,99 +122,106 @@ SCL_FORCE_INLINE void aligned_free(T* ptr, size_t alignment = 64) {
     }
 }
 
+// Modernized RAII wrapper using unique_ptr internally
+// Intentional: unique_ptr<T[]> is the standard way to manage dynamic arrays
 template <typename T>
 struct AlignedBuffer {
-    AlignedBuffer(size_t count, size_t alignment = 64)
-        : ptr_(aligned_alloc<T>(count, alignment)), count_(count), alignment_(alignment) {}
+    AlignedBuffer(Size count, std::size_t alignment = DEFAULT_ALIGNMENT)
+        : ptr_(aligned_alloc<T>(count, alignment)), count_(count) {}
 
-    ~AlignedBuffer() {
-        aligned_free(ptr_, alignment_);
-    }
+    // Destructor: unique_ptr automatically handles cleanup
+    ~AlignedBuffer() = default;
 
     // Non-copyable
     AlignedBuffer(const AlignedBuffer&) = delete;
-    AlignedBuffer& operator=(const AlignedBuffer&) = delete;
+    auto operator=(const AlignedBuffer&) -> AlignedBuffer& = delete;
 
-    // Movable
-    AlignedBuffer(AlignedBuffer&& other) noexcept
-        : ptr_(other.ptr_), count_(other.count_), alignment_(other.alignment_) {
-        other.ptr_ = nullptr;
-        other.count_ = 0;
-        other.alignment_ = 64;
+    // Movable - default move semantics work with unique_ptr
+    AlignedBuffer(AlignedBuffer&&) noexcept = default;
+    auto operator=(AlignedBuffer&&) noexcept -> AlignedBuffer& = default;
+
+    // Modernized: Return Array view instead of raw pointer
+    [[nodiscard]] auto array() noexcept -> Array<T> { 
+        return Array<T>(ptr_.get(), count_); 
+    }
+    
+    [[nodiscard]] auto array() const noexcept -> Array<const T> { 
+        return Array<const T>(ptr_.get(), count_); 
     }
 
-    AlignedBuffer& operator=(AlignedBuffer&& other) noexcept {
-        if (this != &other) {
-            aligned_free(ptr_, alignment_);
-            ptr_ = other.ptr_;
-            count_ = other.count_;
-            alignment_ = other.alignment_;
-            other.ptr_ = nullptr;
-            other.count_ = 0;
-            other.alignment_ = 64;
-        }
-        return *this;
+    // Legacy accessors for backward compatibility
+    auto get() noexcept -> T* { return ptr_.get(); }
+    auto get() const noexcept -> const T* { return ptr_.get(); }
+
+    [[nodiscard]] auto size() const noexcept -> Size { return count_; }
+
+    auto operator[](Size i) noexcept -> T& { 
+        return ptr_[i]; 
+    }
+    
+    auto operator[](Size i) const noexcept -> const T& { 
+        return ptr_[i]; 
     }
 
-    T* get() noexcept { return ptr_; }
-    const T* get() const noexcept { return ptr_; }
-
-    size_t size() const noexcept { return count_; }
-
-    T& operator[](size_t i) noexcept { return ptr_[i]; }
-    const T& operator[](size_t i) const noexcept { return ptr_[i]; }
-
-    Array<T> span() noexcept { return Array<T>(ptr_, count_); }
-    Array<const T> span() const noexcept { return Array<const T>(ptr_, count_); }
+    // Legacy span() method - deprecated, use array() instead
+    [[deprecated("Use array() instead")]]
+    auto span() noexcept -> Array<T> { return array(); }
+    
+    [[deprecated("Use array() instead")]]
+    auto span() const noexcept -> Array<const T> { return array(); }
 
     explicit operator bool() const noexcept { return ptr_ != nullptr; }
 
-    T* ptr_;
-    size_t count_;
-    size_t alignment_;
+private:
+    // unique_ptr<T[]> is standard library type for managing dynamic arrays, not C-style array
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::unique_ptr<T[], AlignedDeleter<T>> ptr_;
+    Size count_;
 };
 
 // =============================================================================
 // Initialization (Fill / Zero)
 // =============================================================================
 
+// Modernized: Accept Array<T> instead of raw pointer
 template <typename T>
-SCL_FORCE_INLINE void fill(Array<T> span, T value) {
+SCL_FORCE_INLINE void fill(Array<T> arr, T value) {
     namespace s = scl::simd;
 
     using SimdTag = s::SimdTagFor<T>;
     const SimdTag d;
-    const size_t N = span.len;
-    const size_t lanes = s::Lanes(d);
+    const Size N = arr.size();
+    const Size lanes = static_cast<Size>(s::Lanes(d));
 
     const auto v_val = s::Set(d, value);
 
-    size_t i = 0;
+    Size i = 0;
 
     // 4-way unrolled SIMD loop
     for (; SCL_LIKELY(i + 4 * lanes <= N); i += 4 * lanes) {
-        s::Store(v_val, d, span.ptr + i);
-        s::Store(v_val, d, span.ptr + i + lanes);
-        s::Store(v_val, d, span.ptr + i + 2 * lanes);
-        s::Store(v_val, d, span.ptr + i + 3 * lanes);
+        s::Store(v_val, d, arr.data() + i);
+        s::Store(v_val, d, arr.data() + i + lanes);
+        s::Store(v_val, d, arr.data() + i + 2 * lanes);
+        s::Store(v_val, d, arr.data() + i + 3 * lanes);
     }
 
     for (; SCL_LIKELY(i + lanes <= N); i += lanes) {
-        s::Store(v_val, d, span.ptr + i);
+        s::Store(v_val, d, arr.data() + i);
     }
 
     // Scalar tail
     for (; i < N; ++i) {
-        span[i] = value;
+        arr[i] = value;
     }
 }
 
+// Modernized: Accept Array<T> instead of raw pointer
 template <typename T>
-SCL_FORCE_INLINE void zero(Array<T> span) {
+SCL_FORCE_INLINE void zero(Array<T> arr) {
     if constexpr (std::is_trivial_v<T>) {
-        std::memset(span.ptr, 0, span.len * sizeof(T));
+        std::memset(arr.data(), 0, arr.size() * sizeof(T));
     } else {
-        fill(span, T(0));
+        fill(arr, T(0));
     }
 }
 
@@ -174,77 +229,80 @@ SCL_FORCE_INLINE void zero(Array<T> span) {
 // Data Movement
 // =============================================================================
 
-// Unsafe copy: assumes NO overlap (memcpy)
+// Modernized: Accept Array<const T> and Array<T> instead of raw pointers
 template <typename T>
 SCL_FORCE_INLINE void copy_fast(Array<const T> src, Array<T> dst) {
-    SCL_ASSERT(src.len == dst.len, "copy_fast: Size mismatch");
+    SCL_ASSERT(src.size() == dst.size(), "copy_fast: Size mismatch");
     SCL_ASSERT(src.end() <= dst.begin() || dst.end() <= src.begin(),
                "copy_fast: Overlap detected! Use scl::memory::copy instead.");
 
     if constexpr (std::is_trivially_copyable_v<T>) {
-        std::memcpy(dst.ptr, src.ptr, src.len * sizeof(T));
+        std::memcpy(dst.data(), src.data(), src.size() * sizeof(T));
     } else {
-        for (size_t i = 0; i < src.len; ++i) {
+        for (Size i = 0; i < src.size(); ++i) {
             dst[i] = src[i];
         }
     }
 }
 
-// Safe copy: handles overlap correctly (memmove)
+// Modernized: Accept Array<const T> and Array<T> instead of raw pointers
 template <typename T>
 SCL_FORCE_INLINE void copy(Array<const T> src, Array<T> dst) {
-    SCL_ASSERT(src.len == dst.len, "copy: Size mismatch");
+    SCL_ASSERT(src.size() == dst.size(), "copy: Size mismatch");
 
-    if (SCL_UNLIKELY(src.ptr == dst.ptr)) return;
+    if (SCL_UNLIKELY(src.data() == dst.data())) return;
 
     if constexpr (std::is_trivially_copyable_v<T>) {
-        std::memmove(dst.ptr, src.ptr, src.len * sizeof(T));
+        std::memmove(dst.data(), src.data(), src.size() * sizeof(T));
     } else {
-        if (dst.ptr < src.ptr) {
+        if (dst.data() < src.data()) {
             // Copy forward
-            for (size_t i = 0; i < src.len; ++i) dst[i] = src[i];
+            for (Size i = 0; i < src.size(); ++i) {
+                dst[i] = src[i];
+            }
         } else {
             // Copy backward
-            for (size_t i = src.len; i > 0; --i) dst[i-1] = src[i-1];
+            for (Size i = src.size(); i > 0; --i) {
+                dst[i - 1] = src[i - 1];
+            }
         }
     }
 }
 
-// Stream copy: non-temporal, cache-bypassing
+// Modernized: Accept Array<const T> and Array<T> instead of raw pointers
 template <typename T>
 SCL_FORCE_INLINE void stream_copy(Array<const T> src, Array<T> dst) {
-    SCL_ASSERT(src.len == dst.len, "stream_copy: Size mismatch");
+    SCL_ASSERT(src.size() == dst.size(), "stream_copy: Size mismatch");
 
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<T>;
     const SimdTag d;
-    const size_t N = src.len;
-    const size_t lanes = s::Lanes(d);
-    constexpr size_t STREAM_ALIGN = 64;
+    const Size N = src.size();
+    const Size lanes = static_cast<Size>(s::Lanes(d));
 
     // Check alignment: non-temporal stores require 64-byte alignment
-    const uintptr_t src_align = reinterpret_cast<uintptr_t>(src.ptr) % STREAM_ALIGN;
-    const uintptr_t dst_align = reinterpret_cast<uintptr_t>(dst.ptr) % STREAM_ALIGN;
+    const std::uintptr_t src_align = reinterpret_cast<std::uintptr_t>(src.data()) % STREAM_ALIGNMENT;
+    const std::uintptr_t dst_align = reinterpret_cast<std::uintptr_t>(dst.data()) % STREAM_ALIGNMENT;
 
     if (SCL_UNLIKELY(src_align != 0 || dst_align != 0)) {
         copy_fast(src, dst);
         return;
     }
 
-    size_t i = 0;
+    Size i = 0;
 
     // 2-way unrolled stream loop
     for (; SCL_LIKELY(i + 2 * lanes <= N); i += 2 * lanes) {
-        auto v0 = s::Load(d, src.ptr + i);
-        auto v1 = s::Load(d, src.ptr + i + lanes);
+        auto v0 = s::Load(d, src.data() + i);
+        auto v1 = s::Load(d, src.data() + i + lanes);
 
-        s::Stream(v0, d, dst.ptr + i);
-        s::Stream(v1, d, dst.ptr + i + lanes);
+        s::Stream(v0, d, dst.data() + i);
+        s::Stream(v1, d, dst.data() + i + lanes);
     }
 
     for (; SCL_LIKELY(i + lanes <= N); i += lanes) {
-        auto v = s::Load(d, src.ptr + i);
-        s::Stream(v, d, dst.ptr + i);
+        auto v = s::Load(d, src.data() + i);
+        s::Stream(v, d, dst.data() + i);
     }
 
     // Scalar tail
@@ -259,37 +317,48 @@ SCL_FORCE_INLINE void stream_copy(Array<const T> src, Array<T> dst) {
 // Prefetch Utilities
 // =============================================================================
 
+// Modernized: Accept Array<const T> instead of raw pointer
 template <int Locality = 3, typename T>
-SCL_FORCE_INLINE void prefetch_range_read(const T* ptr, size_t bytes, size_t max_prefetches = 16) {
+SCL_FORCE_INLINE void prefetch_range_read(
+    Array<const T> arr,
+    Size max_prefetches = DEFAULT_MAX_PREFETCHES) {
     static_assert(Locality >= 0 && Locality <= 3, "Locality must be 0-3");
-    constexpr size_t CACHE_LINE = 64;
-    const char* p = reinterpret_cast<const char*>(ptr);
+    
+    const char* p = reinterpret_cast<const char*>(arr.data());
+    const Size bytes = arr.size() * sizeof(T);
     const char* end = p + bytes;
 
-    size_t count = 0;
-    for (; p < end && count < max_prefetches; p += CACHE_LINE, ++count) {
+    Size count = 0;
+    for (; p < end && count < max_prefetches; p += CACHE_LINE_SIZE, ++count) {
         SCL_PREFETCH_READ(p, Locality);
     }
 }
 
+// Modernized: Accept Array<T> instead of raw pointer
 template <int Locality = 3, typename T>
-SCL_FORCE_INLINE void prefetch_range_write(T* ptr, size_t bytes, size_t max_prefetches = 16) {
+SCL_FORCE_INLINE void prefetch_range_write(
+    Array<T> arr,
+    Size max_prefetches = DEFAULT_MAX_PREFETCHES) {
     static_assert(Locality >= 0 && Locality <= 3, "Locality must be 0-3");
-    constexpr size_t CACHE_LINE = 64;
-    char* p = reinterpret_cast<char*>(ptr);
+    
+    char* p = reinterpret_cast<char*>(arr.data());
+    const Size bytes = arr.size() * sizeof(T);
     char* end = p + bytes;
 
-    size_t count = 0;
-    for (; p < end && count < max_prefetches; p += CACHE_LINE, ++count) {
+    Size count = 0;
+    for (; p < end && count < max_prefetches; p += CACHE_LINE_SIZE, ++count) {
         SCL_PREFETCH_WRITE(p, Locality);
     }
 }
 
-template <typename T, size_t PREFETCH_DISTANCE = 8>
-SCL_FORCE_INLINE void prefetch_ahead(const T* data, size_t current_idx, size_t total_size) {
-    const size_t ahead_idx = current_idx + PREFETCH_DISTANCE;
-    if (SCL_LIKELY(ahead_idx < total_size)) {
-        SCL_PREFETCH_READ(data + ahead_idx, 0);
+// Modernized: Accept Array<const T> instead of raw pointer
+template <typename T, Size PREFETCH_DISTANCE = DEFAULT_PREFETCH_DISTANCE>
+SCL_FORCE_INLINE void prefetch_ahead(
+    Array<const T> arr,
+    Size current_idx) {
+    const Size ahead_idx = current_idx + PREFETCH_DISTANCE;
+    if (SCL_LIKELY(ahead_idx < arr.size())) {
+        SCL_PREFETCH_READ(arr.data() + ahead_idx, 0);
     }
 }
 
@@ -297,43 +366,45 @@ SCL_FORCE_INLINE void prefetch_ahead(const T* data, size_t current_idx, size_t t
 // Memory Comparison
 // =============================================================================
 
+// Modernized: Already uses Array<const T>
 template <typename T>
-SCL_FORCE_INLINE bool equal(Array<const T> a, Array<const T> b) {
-    if (SCL_UNLIKELY(a.len != b.len)) return false;
-    if (SCL_UNLIKELY(a.ptr == b.ptr)) return true;
-    if (SCL_UNLIKELY(a.len == 0)) return true;
+SCL_FORCE_INLINE auto equal(Array<const T> a, Array<const T> b) -> bool {
+    if (SCL_UNLIKELY(a.size() != b.size())) return false;
+    if (SCL_UNLIKELY(a.data() == b.data())) return true;
+    if (SCL_UNLIKELY(a.size() == 0)) return true;
 
     if constexpr (std::is_trivially_copyable_v<T>) {
-        return std::memcmp(a.ptr, b.ptr, a.len * sizeof(T)) == 0;
+        return std::memcmp(a.data(), b.data(), a.size() * sizeof(T)) == 0;
     } else {
-        for (size_t i = 0; i < a.len; ++i) {
+        for (Size i = 0; i < a.size(); ++i) {
             if (SCL_UNLIKELY(!(a[i] == b[i]))) return false;
         }
         return true;
     }
 }
 
+// Modernized: Already uses Array<const T>
 template <typename T>
-SCL_FORCE_INLINE int compare(Array<const T> a, Array<const T> b) {
+SCL_FORCE_INLINE auto compare(Array<const T> a, Array<const T> b) -> int {
     if constexpr (std::is_trivially_copyable_v<T> && std::is_arithmetic_v<T>) {
-        const size_t min_len = (a.len < b.len) ? a.len : b.len;
+        const Size min_len = (a.size() < b.size()) ? a.size() : b.size();
         if (min_len > 0) {
-            const int cmp = std::memcmp(a.ptr, b.ptr, min_len * sizeof(T));
+            const int cmp = std::memcmp(a.data(), b.data(), min_len * sizeof(T));
             if (cmp != 0) return (cmp < 0) ? -1 : 1;
         }
-        if (a.len < b.len) return -1;
-        if (a.len > b.len) return 1;
+        if (a.size() < b.size()) return -1;
+        if (a.size() > b.size()) return 1;
         return 0;
     } else {
-        const size_t min_len = (a.len < b.len) ? a.len : b.len;
+        const Size min_len = (a.size() < b.size()) ? a.size() : b.size();
 
-        for (size_t i = 0; i < min_len; ++i) {
+        for (Size i = 0; i < min_len; ++i) {
             if (a[i] < b[i]) return -1;
             if (a[i] > b[i]) return 1;
         }
 
-        if (a.len < b.len) return -1;
-        if (a.len > b.len) return 1;
+        if (a.size() < b.size()) return -1;
+        if (a.size() > b.size()) return 1;
         return 0;
     }
 }
@@ -349,11 +420,12 @@ SCL_FORCE_INLINE void swap(T& a, T& b) noexcept {
     b = static_cast<T&&>(tmp);
 }
 
+// Modernized: Accept Array<T> instead of raw pointers
 template <typename T>
 SCL_FORCE_INLINE void swap_ranges(Array<T> a, Array<T> b) {
-    SCL_ASSERT(a.len == b.len, "swap_ranges: Size mismatch");
+    SCL_ASSERT(a.size() == b.size(), "swap_ranges: Size mismatch");
 
-    if (SCL_UNLIKELY(a.ptr == b.ptr)) return;
+    if (SCL_UNLIKELY(a.data() == b.data())) return;
 
     SCL_ASSERT(a.end() <= b.begin() || b.end() <= a.begin(),
                "swap_ranges: Overlap detected!");
@@ -361,17 +433,17 @@ SCL_FORCE_INLINE void swap_ranges(Array<T> a, Array<T> b) {
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<T>;
     const SimdTag d;
-    const size_t N = a.len;
-    const size_t lanes = s::Lanes(d);
+    const Size N = a.size();
+    const Size lanes = static_cast<Size>(s::Lanes(d));
 
-    size_t i = 0;
+    Size i = 0;
 
     // SIMD swap: load both, store swapped
     for (; SCL_LIKELY(i + lanes <= N); i += lanes) {
-        auto va = s::Load(d, a.ptr + i);
-        auto vb = s::Load(d, b.ptr + i);
-        s::Store(vb, d, a.ptr + i);
-        s::Store(va, d, b.ptr + i);
+        auto va = s::Load(d, a.data() + i);
+        auto vb = s::Load(d, b.data() + i);
+        s::Store(vb, d, a.data() + i);
+        s::Store(va, d, b.data() + i);
     }
 
     // Scalar tail
@@ -384,12 +456,13 @@ SCL_FORCE_INLINE void swap_ranges(Array<T> a, Array<T> b) {
 // Reverse Operations
 // =============================================================================
 
+// Modernized: Accept Array<T> instead of raw pointer
 template <typename T>
-SCL_FORCE_INLINE void reverse(Array<T> span) {
-    if (SCL_UNLIKELY(span.len <= 1)) return;
+SCL_FORCE_INLINE void reverse(Array<T> arr) {
+    if (SCL_UNLIKELY(arr.size() <= 1)) return;
 
-    T* SCL_RESTRICT left = span.ptr;
-    T* SCL_RESTRICT right = span.ptr + span.len - 1;
+    T* SCL_RESTRICT left = arr.data();
+    T* SCL_RESTRICT right = arr.data() + arr.size() - 1;
 
     while (left < right) {
         swap(*left, *right);
@@ -398,12 +471,13 @@ SCL_FORCE_INLINE void reverse(Array<T> span) {
     }
 }
 
+// Modernized: Accept Array<const T> and Array<T> instead of raw pointers
 template <typename T>
 SCL_FORCE_INLINE void reverse_copy(Array<const T> src, Array<T> dst) {
-    SCL_ASSERT(src.len == dst.len, "reverse_copy: Size mismatch");
+    SCL_ASSERT(src.size() == dst.size(), "reverse_copy: Size mismatch");
 
-    const size_t N = src.len;
-    for (size_t i = 0; i < N; ++i) {
+    const Size N = src.size();
+    for (Size i = 0; i < N; ++i) {
         dst[i] = src[N - 1 - i];
     }
 }

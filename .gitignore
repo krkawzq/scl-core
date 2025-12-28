@@ -83,3 +83,9 @@ node_modules/
 
 task.json
 build*
+
+
+compile_commands.json
+
+.venv
+.clangd
