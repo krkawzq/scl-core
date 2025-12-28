@@ -3,59 +3,40 @@
 // BRIEF: C API implementation for sparse linear algebra operations
 // =============================================================================
 
-#include "algebra.h"
-#include "scl/core/type.hpp"
-#include "scl/core/sparse.hpp"
-#include "scl/core/error.hpp"
+#include "scl/binding/c_api/algebra.h"
+#include "scl/binding/c_api/core/internal.hpp"
 #include "scl/kernel/algebra.hpp"
+#include "scl/core/type.hpp"
+#include "scl/core/error.hpp"
 
-#include <cstring>
+#include <exception>
+
+extern "C" {
 
 // =============================================================================
-// Error Code Conversion Helper
+// Helper: Convert sparse handle to C++ matrix reference
 // =============================================================================
 
-namespace {
-    inline scl_error_t convert_error_code(scl::ErrorCode code) {
-        return static_cast<scl_error_t>(code);
+static scl_error_t get_sparse_matrix(
+    scl_sparse_t handle,
+    scl::binding::SparseWrapper*& wrapper
+) {
+    if (!handle) {
+        return SCL_ERROR_NULL_POINTER;
     }
-
-    inline scl_error_t catch_exception() {
-        try {
-            throw;
-        } catch (const scl::DimensionError&) {
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        } catch (const scl::ValueError&) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        } catch (const scl::TypeError&) {
-            return SCL_ERROR_TYPE_ERROR;
-        } catch (const scl::DomainError&) {
-            return SCL_ERROR_DOMAIN_ERROR;
-        } catch (const scl::InternalError&) {
-            return SCL_ERROR_INTERNAL;
-        } catch (const scl::IOError&) {
-            return SCL_ERROR_IO_ERROR;
-        } catch (const scl::NotImplementedError&) {
-            return SCL_ERROR_NOT_IMPLEMENTED;
-        } catch (const scl::Exception& e) {
-            return convert_error_code(e.code());
-        } catch (...) {
-            return SCL_ERROR_UNKNOWN;
-        }
+    wrapper = static_cast<scl::binding::SparseWrapper*>(handle);
+    if (!wrapper->valid()) {
+        return SCL_ERROR_INVALID_ARGUMENT;
     }
-
-    template <typename T>
-    inline scl::Sparse<T, true>* get_matrix(scl_sparse_matrix_t handle) {
-        return reinterpret_cast<scl::Sparse<T, true>*>(handle);
-    }
+    return SCL_OK;
 }
 
 // =============================================================================
 // SpMV: y = alpha * A * x + beta * y
 // =============================================================================
 
-extern "C" scl_error_t scl_spmv_f32_csr(
-    scl_sparse_matrix_t A,
+scl_error_t scl_algebra_spmv(
+    scl_sparse_t A,
     const scl_real_t* x,
     scl_size_t x_size,
     scl_real_t* y,
@@ -63,53 +44,74 @@ extern "C" scl_error_t scl_spmv_f32_csr(
     scl_real_t alpha,
     scl_real_t beta
 ) {
+    if (!A || !x || !y) {
+        return SCL_ERROR_NULL_POINTER;
+    }
+
     try {
-        auto* matrix = get_matrix<float>(A);
-        if (!matrix || !x || !y) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(A, wrapper);
+        if (err != SCL_OK) return err;
 
-        scl::Array<const float> x_arr(x, x_size);
-        scl::Array<float> y_arr(y, y_size);
+        wrapper->visit([&](auto& matrix) {
+            scl::Array<const scl::Real> x_arr(
+                reinterpret_cast<const scl::Real*>(x),
+                x_size
+            );
+            scl::Array<scl::Real> y_arr(
+                reinterpret_cast<scl::Real*>(y),
+                y_size
+            );
+            scl::kernel::algebra::spmv(
+                matrix, x_arr, y_arr,
+                static_cast<scl::Real>(alpha),
+                static_cast<scl::Real>(beta)
+            );
+        });
 
-        scl::kernel::algebra::spmv(*matrix, x_arr, y_arr, alpha, beta);
-        return SCL_ERROR_OK;
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_spmv_f64_csr(
-    scl_sparse_matrix_t A,
-    const double* x,
+scl_error_t scl_algebra_spmv_simple(
+    scl_sparse_t A,
+    const scl_real_t* x,
     scl_size_t x_size,
-    double* y,
-    scl_size_t y_size,
-    double alpha,
-    double beta
+    scl_real_t* y,
+    scl_size_t y_size
 ) {
-    try {
-        auto* matrix = get_matrix<double>(A);
-        if (!matrix || !x || !y) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    return scl_algebra_spmv(A, x, x_size, y, y_size, 1.0f, 0.0f);
+}
 
-        scl::Array<const double> x_arr(x, x_size);
-        scl::Array<double> y_arr(y, y_size);
+scl_error_t scl_algebra_spmv_scaled(
+    scl_sparse_t A,
+    const scl_real_t* x,
+    scl_size_t x_size,
+    scl_real_t* y,
+    scl_size_t y_size,
+    scl_real_t alpha
+) {
+    return scl_algebra_spmv(A, x, x_size, y, y_size, alpha, 0.0f);
+}
 
-        scl::kernel::algebra::spmv(*matrix, x_arr, y_arr, alpha, beta);
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
-    }
+scl_error_t scl_algebra_spmv_add(
+    scl_sparse_t A,
+    const scl_real_t* x,
+    scl_size_t x_size,
+    scl_real_t* y,
+    scl_size_t y_size
+) {
+    return scl_algebra_spmv(A, x, x_size, y, y_size, 1.0f, 1.0f);
 }
 
 // =============================================================================
-// SpMV Transpose: y = alpha * A^T * x + beta * y
+// Transposed SpMV
 // =============================================================================
 
-extern "C" scl_error_t scl_spmv_transpose_f32_csr(
-    scl_sparse_matrix_t A,
+scl_error_t scl_algebra_spmv_transpose(
+    scl_sparse_t A,
     const scl_real_t* x,
     scl_size_t x_size,
     scl_real_t* y,
@@ -117,99 +119,91 @@ extern "C" scl_error_t scl_spmv_transpose_f32_csr(
     scl_real_t alpha,
     scl_real_t beta
 ) {
+    if (!A || !x || !y) {
+        return SCL_ERROR_NULL_POINTER;
+    }
+
     try {
-        auto* matrix = get_matrix<float>(A);
-        if (!matrix || !x || !y) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(A, wrapper);
+        if (err != SCL_OK) return err;
 
-        scl::Array<const float> x_arr(x, x_size);
-        scl::Array<float> y_arr(y, y_size);
+        wrapper->visit([&](auto& matrix) {
+            scl::Array<const scl::Real> x_arr(
+                reinterpret_cast<const scl::Real*>(x),
+                x_size
+            );
+            scl::Array<scl::Real> y_arr(
+                reinterpret_cast<scl::Real*>(y),
+                y_size
+            );
+            scl::kernel::algebra::spmv_transpose(
+                matrix, x_arr, y_arr,
+                static_cast<scl::Real>(alpha),
+                static_cast<scl::Real>(beta)
+            );
+        });
 
-        scl::kernel::algebra::spmv_transpose(*matrix, x_arr, y_arr, alpha, beta);
-        return SCL_ERROR_OK;
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_spmv_transpose_f64_csr(
-    scl_sparse_matrix_t A,
-    const double* x,
+scl_error_t scl_algebra_spmv_transpose_simple(
+    scl_sparse_t A,
+    const scl_real_t* x,
     scl_size_t x_size,
-    double* y,
-    scl_size_t y_size,
-    double alpha,
-    double beta
+    scl_real_t* y,
+    scl_size_t y_size
 ) {
-    try {
-        auto* matrix = get_matrix<double>(A);
-        if (!matrix || !x || !y) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::Array<const double> x_arr(x, x_size);
-        scl::Array<double> y_arr(y, y_size);
-
-        scl::kernel::algebra::spmv_transpose(*matrix, x_arr, y_arr, alpha, beta);
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
-    }
+    return scl_algebra_spmv_transpose(A, x, x_size, y, y_size, 1.0f, 0.0f);
 }
 
 // =============================================================================
 // SpMM: Y = alpha * A * X + beta * Y
 // =============================================================================
 
-extern "C" scl_error_t scl_spmm_f32_csr(
-    scl_sparse_matrix_t A,
+scl_error_t scl_algebra_spmm(
+    scl_sparse_t A,
     const scl_real_t* X,
-    scl_size_t n_cols_X,
+    scl_index_t n_cols,
     scl_real_t* Y,
     scl_real_t alpha,
     scl_real_t beta
 ) {
-    try {
-        auto* matrix = get_matrix<float>(A);
-        if (!matrix || !X || !Y) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::kernel::algebra::spmm(*matrix, X, static_cast<scl::Index>(n_cols_X), Y, alpha, beta);
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
+    if (!A || !X || !Y) {
+        return SCL_ERROR_NULL_POINTER;
     }
-}
 
-extern "C" scl_error_t scl_spmm_f64_csr(
-    scl_sparse_matrix_t A,
-    const double* X,
-    scl_size_t n_cols_X,
-    double* Y,
-    double alpha,
-    double beta
-) {
     try {
-        auto* matrix = get_matrix<double>(A);
-        if (!matrix || !X || !Y) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(A, wrapper);
+        if (err != SCL_OK) return err;
 
-        scl::kernel::algebra::spmm(*matrix, X, static_cast<scl::Index>(n_cols_X), Y, alpha, beta);
-        return SCL_ERROR_OK;
+        wrapper->visit([&](auto& matrix) {
+            scl::kernel::algebra::spmm(
+                matrix,
+                reinterpret_cast<const scl::Real*>(X),
+                static_cast<scl::Index>(n_cols),
+                reinterpret_cast<scl::Real*>(Y),
+                static_cast<scl::Real>(alpha),
+                static_cast<scl::Real>(beta)
+            );
+        });
+
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
 // =============================================================================
-// Fused SpMV: y = alpha * A * x + beta * A * z + gamma * y
+// Fused SpMV
 // =============================================================================
 
-extern "C" scl_error_t scl_spmv_fused_linear_f32_csr(
-    scl_sparse_matrix_t A,
+scl_error_t scl_algebra_spmv_fused_linear(
+    scl_sparse_t A,
     const scl_real_t* x,
     scl_size_t x_size,
     const scl_real_t* z,
@@ -220,216 +214,157 @@ extern "C" scl_error_t scl_spmv_fused_linear_f32_csr(
     scl_real_t beta,
     scl_real_t gamma
 ) {
-    try {
-        auto* matrix = get_matrix<float>(A);
-        if (!matrix || !x || !z || !y) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::Array<const float> x_arr(x, x_size);
-        scl::Array<const float> z_arr(z, z_size);
-        scl::Array<float> y_arr(y, y_size);
-
-        scl::kernel::algebra::spmv_fused_linear(*matrix, x_arr, z_arr, y_arr, alpha, beta, gamma);
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
+    if (!A || !x || !z || !y) {
+        return SCL_ERROR_NULL_POINTER;
     }
-}
 
-extern "C" scl_error_t scl_spmv_fused_linear_f64_csr(
-    scl_sparse_matrix_t A,
-    const double* x,
-    scl_size_t x_size,
-    const double* z,
-    scl_size_t z_size,
-    double* y,
-    scl_size_t y_size,
-    double alpha,
-    double beta,
-    double gamma
-) {
     try {
-        auto* matrix = get_matrix<double>(A);
-        if (!matrix || !x || !z || !y) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(A, wrapper);
+        if (err != SCL_OK) return err;
 
-        scl::Array<const double> x_arr(x, x_size);
-        scl::Array<const double> z_arr(z, z_size);
-        scl::Array<double> y_arr(y, y_size);
+        wrapper->visit([&](auto& matrix) {
+            scl::Array<const scl::Real> x_arr(
+                reinterpret_cast<const scl::Real*>(x),
+                x_size
+            );
+            scl::Array<const scl::Real> z_arr(
+                reinterpret_cast<const scl::Real*>(z),
+                z_size
+            );
+            scl::Array<scl::Real> y_arr(
+                reinterpret_cast<scl::Real*>(y),
+                y_size
+            );
+            scl::kernel::algebra::spmv_fused_linear(
+                matrix, x_arr, z_arr, y_arr,
+                static_cast<scl::Real>(alpha),
+                static_cast<scl::Real>(beta),
+                static_cast<scl::Real>(gamma)
+            );
+        });
 
-        scl::kernel::algebra::spmv_fused_linear(*matrix, x_arr, z_arr, y_arr, alpha, beta, gamma);
-        return SCL_ERROR_OK;
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
 // =============================================================================
-// Row Norms
+// Row Operations
 // =============================================================================
 
-extern "C" scl_error_t scl_row_norms_f32_csr(
-    scl_sparse_matrix_t A,
+scl_error_t scl_algebra_row_norms(
+    scl_sparse_t A,
     scl_real_t* norms,
     scl_size_t norms_size
 ) {
-    try {
-        auto* matrix = get_matrix<float>(A);
-        if (!matrix || !norms) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    if (!A || !norms) {
+        return SCL_ERROR_NULL_POINTER;
+    }
 
-        scl::Array<float> norms_arr(norms, norms_size);
-        scl::kernel::algebra::row_norms(*matrix, norms_arr);
-        return SCL_ERROR_OK;
+    try {
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(A, wrapper);
+        if (err != SCL_OK) return err;
+
+        wrapper->visit([&](auto& matrix) {
+            scl::Array<scl::Real> norms_arr(
+                reinterpret_cast<scl::Real*>(norms),
+                norms_size
+            );
+            scl::kernel::algebra::row_norms(matrix, norms_arr);
+        });
+
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_row_norms_f64_csr(
-    scl_sparse_matrix_t A,
-    double* norms,
-    scl_size_t norms_size
-) {
-    try {
-        auto* matrix = get_matrix<double>(A);
-        if (!matrix || !norms) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::Array<double> norms_arr(norms, norms_size);
-        scl::kernel::algebra::row_norms(*matrix, norms_arr);
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
-    }
-}
-
-// =============================================================================
-// Row Sums
-// =============================================================================
-
-extern "C" scl_error_t scl_row_sums_f32_csr(
-    scl_sparse_matrix_t A,
+scl_error_t scl_algebra_row_sums(
+    scl_sparse_t A,
     scl_real_t* sums,
     scl_size_t sums_size
 ) {
-    try {
-        auto* matrix = get_matrix<float>(A);
-        if (!matrix || !sums) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    if (!A || !sums) {
+        return SCL_ERROR_NULL_POINTER;
+    }
 
-        scl::Array<float> sums_arr(sums, sums_size);
-        scl::kernel::algebra::row_sums(*matrix, sums_arr);
-        return SCL_ERROR_OK;
+    try {
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(A, wrapper);
+        if (err != SCL_OK) return err;
+
+        wrapper->visit([&](auto& matrix) {
+            scl::Array<scl::Real> sums_arr(
+                reinterpret_cast<scl::Real*>(sums),
+                sums_size
+            );
+            scl::kernel::algebra::row_sums(matrix, sums_arr);
+        });
+
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_row_sums_f64_csr(
-    scl_sparse_matrix_t A,
-    double* sums,
-    scl_size_t sums_size
-) {
-    try {
-        auto* matrix = get_matrix<double>(A);
-        if (!matrix || !sums) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::Array<double> sums_arr(sums, sums_size);
-        scl::kernel::algebra::row_sums(*matrix, sums_arr);
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
-    }
-}
-
-// =============================================================================
-// Extract Diagonal
-// =============================================================================
-
-extern "C" scl_error_t scl_extract_diagonal_f32_csr(
-    scl_sparse_matrix_t A,
+scl_error_t scl_algebra_extract_diagonal(
+    scl_sparse_t A,
     scl_real_t* diag,
     scl_size_t diag_size
 ) {
-    try {
-        auto* matrix = get_matrix<float>(A);
-        if (!matrix || !diag) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    if (!A || !diag) {
+        return SCL_ERROR_NULL_POINTER;
+    }
 
-        scl::Array<float> diag_arr(diag, diag_size);
-        scl::kernel::algebra::extract_diagonal(*matrix, diag_arr);
-        return SCL_ERROR_OK;
+    try {
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(A, wrapper);
+        if (err != SCL_OK) return err;
+
+        wrapper->visit([&](auto& matrix) {
+            scl::Array<scl::Real> diag_arr(
+                reinterpret_cast<scl::Real*>(diag),
+                diag_size
+            );
+            scl::kernel::algebra::extract_diagonal(matrix, diag_arr);
+        });
+
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_extract_diagonal_f64_csr(
-    scl_sparse_matrix_t A,
-    double* diag,
-    scl_size_t diag_size
-) {
-    try {
-        auto* matrix = get_matrix<double>(A);
-        if (!matrix || !diag) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::Array<double> diag_arr(diag, diag_size);
-        scl::kernel::algebra::extract_diagonal(*matrix, diag_arr);
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
-    }
-}
-
-// =============================================================================
-// Scale Rows
-// =============================================================================
-
-extern "C" scl_error_t scl_scale_rows_f32_csr(
-    scl_sparse_matrix_t A,
+scl_error_t scl_algebra_scale_rows(
+    scl_sparse_t A,
     const scl_real_t* scale_factors,
     scl_size_t scale_factors_size
 ) {
-    try {
-        auto* matrix = get_matrix<float>(A);
-        if (!matrix || !scale_factors) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    if (!A || !scale_factors) {
+        return SCL_ERROR_NULL_POINTER;
+    }
 
-        scl::Array<const float> scale_arr(scale_factors, scale_factors_size);
-        scl::kernel::algebra::scale_rows(*matrix, scale_arr);
-        return SCL_ERROR_OK;
+    try {
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(A, wrapper);
+        if (err != SCL_OK) return err;
+
+        wrapper->visit([&](auto& matrix) {
+            scl::Array<const scl::Real> scale_arr(
+                reinterpret_cast<const scl::Real*>(scale_factors),
+                scale_factors_size
+            );
+            scl::kernel::algebra::scale_rows(matrix, scale_arr);
+        });
+
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_scale_rows_f64_csr(
-    scl_sparse_matrix_t A,
-    const double* scale_factors,
-    scl_size_t scale_factors_size
-) {
-    try {
-        auto* matrix = get_matrix<double>(A);
-        if (!matrix || !scale_factors) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+} // extern "C"
 
-        scl::Array<const double> scale_arr(scale_factors, scale_factors_size);
-        scl::kernel::algebra::scale_rows(*matrix, scale_arr);
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
-    }
-}

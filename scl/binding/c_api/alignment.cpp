@@ -3,136 +3,111 @@
 // BRIEF: C API implementation for multi-modal data alignment
 // =============================================================================
 
-#include "alignment.h"
-#include "scl/core/type.hpp"
-#include "scl/core/sparse.hpp"
-#include "scl/core/error.hpp"
+#include "scl/binding/c_api/alignment.h"
+#include "scl/binding/c_api/core/internal.hpp"
 #include "scl/kernel/alignment.hpp"
+#include "scl/core/type.hpp"
+#include "scl/core/error.hpp"
 
-namespace {
-    inline scl_error_t catch_exception() {
-        try {
-            throw;
-        } catch (const scl::DimensionError&) {
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        } catch (const scl::ValueError&) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        } catch (const scl::Exception& e) {
-            return static_cast<scl_error_t>(e.code());
-        } catch (...) {
-            return SCL_ERROR_UNKNOWN;
-        }
-    }
+#include <exception>
 
-    template <typename T>
-    inline scl::Sparse<T, true>* get_matrix(scl_sparse_matrix_t handle) {
-        return reinterpret_cast<scl::Sparse<T, true>*>(handle);
+extern "C" {
+
+static scl_error_t get_sparse_matrix(
+    scl_sparse_t handle,
+    scl::binding::SparseWrapper*& wrapper
+) {
+    if (!handle) {
+        return SCL_ERROR_NULL_POINTER;
     }
+    wrapper = static_cast<scl::binding::SparseWrapper*>(handle);
+    if (!wrapper->valid()) {
+        return SCL_ERROR_INVALID_ARGUMENT;
+    }
+    return SCL_OK;
 }
 
-extern "C" scl_error_t scl_mnn_pairs_f32_csr(
-    scl_sparse_matrix_t data1,
-    scl_sparse_matrix_t data2,
+scl_error_t scl_alignment_mnn_pairs(
+    scl_sparse_t data1,
+    scl_sparse_t data2,
     scl_index_t k,
     scl_index_t* mnn_cell1,
     scl_index_t* mnn_cell2,
-    scl_size_t max_pairs,
     scl_size_t* n_pairs
 ) {
-    try {
-        auto* m1 = get_matrix<float>(data1);
-        auto* m2 = get_matrix<float>(data2);
-        if (!m1 || !m2 || !mnn_cell1 || !mnn_cell2 || !n_pairs) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    if (!data1 || !data2 || !mnn_cell1 || !mnn_cell2 || !n_pairs) {
+        return SCL_ERROR_NULL_POINTER;
+    }
 
-        scl::Size n_pairs_val = 0;
-        scl::kernel::alignment::mnn_pairs(*m1, *m2, k, mnn_cell1, mnn_cell2, n_pairs_val);
-        *n_pairs = n_pairs_val;
-        return SCL_ERROR_OK;
+    try {
+        scl::binding::SparseWrapper* wrapper1;
+        scl::binding::SparseWrapper* wrapper2;
+        scl_error_t err1 = get_sparse_matrix(data1, wrapper1);
+        scl_error_t err2 = get_sparse_matrix(data2, wrapper2);
+        if (err1 != SCL_OK) return err1;
+        if (err2 != SCL_OK) return err2;
+
+        scl::Size n_pairs_result = 0;
+        wrapper1->visit([&](auto& m1) {
+            wrapper2->visit([&](auto& m2) {
+                scl::kernel::alignment::mnn_pairs(
+                    m1, m2,
+                    static_cast<scl::Index>(k),
+                    reinterpret_cast<scl::Index*>(mnn_cell1),
+                    reinterpret_cast<scl::Index*>(mnn_cell2),
+                    n_pairs_result
+                );
+            });
+        });
+        *n_pairs = static_cast<scl_size_t>(n_pairs_result);
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_mnn_pairs_f64_csr(
-    scl_sparse_matrix_t data1,
-    scl_sparse_matrix_t data2,
-    scl_index_t k,
-    scl_index_t* mnn_cell1,
-    scl_index_t* mnn_cell2,
-    scl_size_t max_pairs,
-    scl_size_t* n_pairs
-) {
-    try {
-        auto* m1 = get_matrix<double>(data1);
-        auto* m2 = get_matrix<double>(data2);
-        if (!m1 || !m2 || !mnn_cell1 || !mnn_cell2 || !n_pairs) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::Size n_pairs_val = 0;
-        scl::kernel::alignment::mnn_pairs(*m1, *m2, k, mnn_cell1, mnn_cell2, n_pairs_val);
-        *n_pairs = n_pairs_val;
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
-    }
-}
-
-extern "C" scl_error_t scl_find_anchors_f32_csr(
-    scl_sparse_matrix_t data1,
-    scl_sparse_matrix_t data2,
+scl_error_t scl_alignment_find_anchors(
+    scl_sparse_t data1,
+    scl_sparse_t data2,
     scl_index_t k,
     scl_index_t* anchor_cell1,
     scl_index_t* anchor_cell2,
     scl_real_t* anchor_scores,
-    scl_size_t max_anchors,
     scl_size_t* n_anchors
 ) {
-    try {
-        auto* m1 = get_matrix<float>(data1);
-        auto* m2 = get_matrix<float>(data2);
-        if (!m1 || !m2 || !anchor_cell1 || !anchor_cell2 || !anchor_scores || !n_anchors) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    if (!data1 || !data2 || !anchor_cell1 || !anchor_cell2 || !anchor_scores || !n_anchors) {
+        return SCL_ERROR_NULL_POINTER;
+    }
 
-        scl::Size n_anchors_val = 0;
-        scl::kernel::alignment::find_anchors(*m1, *m2, k, anchor_cell1, anchor_cell2, anchor_scores, n_anchors_val);
-        *n_anchors = n_anchors_val;
-        return SCL_ERROR_OK;
+    try {
+        scl::binding::SparseWrapper* wrapper1;
+        scl::binding::SparseWrapper* wrapper2;
+        scl_error_t err1 = get_sparse_matrix(data1, wrapper1);
+        scl_error_t err2 = get_sparse_matrix(data2, wrapper2);
+        if (err1 != SCL_OK) return err1;
+        if (err2 != SCL_OK) return err2;
+
+        scl::Size n_anchors_result = 0;
+        wrapper1->visit([&](auto& m1) {
+            wrapper2->visit([&](auto& m2) {
+                scl::kernel::alignment::find_anchors(
+                    m1, m2,
+                    static_cast<scl::Index>(k),
+                    reinterpret_cast<scl::Index*>(anchor_cell1),
+                    reinterpret_cast<scl::Index*>(anchor_cell2),
+                    reinterpret_cast<scl::Real*>(anchor_scores),
+                    n_anchors_result
+                );
+            });
+        });
+        *n_anchors = static_cast<scl_size_t>(n_anchors_result);
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_find_anchors_f64_csr(
-    scl_sparse_matrix_t data1,
-    scl_sparse_matrix_t data2,
-    scl_index_t k,
-    scl_index_t* anchor_cell1,
-    scl_index_t* anchor_cell2,
-    double* anchor_scores,
-    scl_size_t max_anchors,
-    scl_size_t* n_anchors
-) {
-    try {
-        auto* m1 = get_matrix<double>(data1);
-        auto* m2 = get_matrix<double>(data2);
-        if (!m1 || !m2 || !anchor_cell1 || !anchor_cell2 || !anchor_scores || !n_anchors) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::Size n_anchors_val = 0;
-        scl::kernel::alignment::find_anchors(*m1, *m2, k, anchor_cell1, anchor_cell2, anchor_scores, n_anchors_val);
-        *n_anchors = n_anchors_val;
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
-    }
-}
-
-extern "C" scl_error_t scl_transfer_labels(
+scl_error_t scl_alignment_transfer_labels(
     const scl_index_t* anchor_cell1,
     const scl_index_t* anchor_cell2,
     const scl_real_t* anchor_weights,
@@ -143,106 +118,243 @@ extern "C" scl_error_t scl_transfer_labels(
     scl_index_t* target_labels,
     scl_real_t* transfer_confidence
 ) {
+    if (!anchor_cell1 || !anchor_cell2 || !anchor_weights || !source_labels ||
+        !target_labels || !transfer_confidence) {
+        return SCL_ERROR_NULL_POINTER;
+    }
+
     try {
-        if (!anchor_cell1 || !anchor_cell2 || !anchor_weights || !source_labels || !target_labels || !transfer_confidence) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::Array<const scl::Index> source_arr(source_labels, n_source);
-        scl::Array<scl::Index> target_arr(target_labels, n_target);
-        scl::Array<scl::Real> conf_arr(transfer_confidence, n_target);
-
         scl::kernel::alignment::transfer_labels(
-            anchor_cell1, anchor_cell2, anchor_weights, n_anchors,
-            source_arr, n_target, target_arr, conf_arr
+            reinterpret_cast<const scl::Index*>(anchor_cell1),
+            reinterpret_cast<const scl::Index*>(anchor_cell2),
+            reinterpret_cast<const scl::Real*>(anchor_weights),
+            static_cast<scl::Size>(n_anchors),
+            scl::Array<const scl::Index>(
+                reinterpret_cast<const scl::Index*>(source_labels),
+                static_cast<scl::Size>(n_source)
+            ),
+            static_cast<scl::Size>(n_target),
+            scl::Array<scl::Index>(
+                reinterpret_cast<scl::Index*>(target_labels),
+                static_cast<scl::Size>(n_target)
+            ),
+            scl::Array<scl::Real>(
+                reinterpret_cast<scl::Real*>(transfer_confidence),
+                static_cast<scl::Size>(n_target)
+            )
         );
-        return SCL_ERROR_OK;
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_integration_score_f32_csr(
-    scl_sparse_matrix_t integrated_data,
+scl_error_t scl_alignment_integration_score(
+    scl_sparse_t integrated_data,
     const scl_index_t* batch_labels,
     scl_size_t n_cells,
-    scl_sparse_matrix_t neighbors,
+    scl_sparse_t neighbors,
     scl_real_t* score
 ) {
-    try {
-        auto* data = get_matrix<float>(integrated_data);
-        auto* neigh = get_matrix<scl::Index>(neighbors);
-        if (!data || !neigh || !batch_labels || !score) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    if (!integrated_data || !batch_labels || !neighbors || !score) {
+        return SCL_ERROR_NULL_POINTER;
+    }
 
-        scl::Array<const scl::Index> batch_arr(batch_labels, n_cells);
-        *score = scl::kernel::alignment::integration_score(*data, batch_arr, *neigh);
-        return SCL_ERROR_OK;
+    try {
+        scl::binding::SparseWrapper* wrapper_data;
+        scl::binding::SparseWrapper* wrapper_neighbors;
+        scl_error_t err1 = get_sparse_matrix(integrated_data, wrapper_data);
+        scl_error_t err2 = get_sparse_matrix(neighbors, wrapper_neighbors);
+        if (err1 != SCL_OK) return err1;
+        if (err2 != SCL_OK) return err2;
+
+        scl::Real score_result = scl::Real(0);
+        wrapper_data->visit([&](auto& data) {
+            wrapper_neighbors->visit([&](auto& neigh) {
+                score_result = scl::kernel::alignment::integration_score(
+                    data,
+                    scl::Array<const scl::Index>(
+                        reinterpret_cast<const scl::Index*>(batch_labels),
+                        static_cast<scl::Size>(n_cells)
+                    ),
+                    neigh
+                );
+            });
+        });
+        *score = static_cast<scl_real_t>(score_result);
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_integration_score_f64_csr(
-    scl_sparse_matrix_t integrated_data,
+scl_error_t scl_alignment_batch_mixing(
     const scl_index_t* batch_labels,
     scl_size_t n_cells,
-    scl_sparse_matrix_t neighbors,
-    double* score
-) {
-    try {
-        auto* data = get_matrix<double>(integrated_data);
-        auto* neigh = get_matrix<scl::Index>(neighbors);
-        if (!data || !neigh || !batch_labels || !score) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-
-        scl::Array<const scl::Index> batch_arr(batch_labels, n_cells);
-        *score = scl::kernel::alignment::integration_score(*data, batch_arr, *neigh);
-        return SCL_ERROR_OK;
-    } catch (...) {
-        return catch_exception();
-    }
-}
-
-extern "C" scl_error_t scl_batch_mixing(
-    const scl_index_t* batch_labels,
-    scl_size_t n_cells,
-    scl_sparse_matrix_t neighbors,
+    scl_sparse_t neighbors,
     scl_real_t* mixing_scores
 ) {
-    try {
-        auto* neigh = get_matrix<scl::Index>(neighbors);
-        if (!neigh || !batch_labels || !mixing_scores) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    if (!batch_labels || !neighbors || !mixing_scores) {
+        return SCL_ERROR_NULL_POINTER;
+    }
 
-        scl::Array<const scl::Index> batch_arr(batch_labels, n_cells);
-        scl::Array<scl::Real> scores_arr(mixing_scores, n_cells);
-        scl::kernel::alignment::batch_mixing(batch_arr, *neigh, scores_arr);
-        return SCL_ERROR_OK;
+    try {
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(neighbors, wrapper);
+        if (err != SCL_OK) return err;
+
+        wrapper->visit([&](auto& neigh) {
+            scl::kernel::alignment::batch_mixing(
+                scl::Array<const scl::Index>(
+                    reinterpret_cast<const scl::Index*>(batch_labels),
+                    static_cast<scl::Size>(n_cells)
+                ),
+                neigh,
+                scl::Array<scl::Real>(
+                    reinterpret_cast<scl::Real*>(mixing_scores),
+                    static_cast<scl::Size>(n_cells)
+                )
+            );
+        });
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
 
-extern "C" scl_error_t scl_kbet_score(
-    scl_sparse_matrix_t neighbors,
+scl_error_t scl_alignment_compute_correction_vectors(
+    scl_sparse_t data1,
+    scl_sparse_t data2,
+    const scl_index_t* mnn_cell1,
+    const scl_index_t* mnn_cell2,
+    scl_size_t n_pairs,
+    scl_real_t* correction_vectors,
+    scl_size_t n_features
+) {
+    if (!data1 || !data2 || !mnn_cell1 || !mnn_cell2 || !correction_vectors) {
+        return SCL_ERROR_NULL_POINTER;
+    }
+
+    try {
+        scl::binding::SparseWrapper* wrapper1;
+        scl::binding::SparseWrapper* wrapper2;
+        scl_error_t err1 = get_sparse_matrix(data1, wrapper1);
+        scl_error_t err2 = get_sparse_matrix(data2, wrapper2);
+        if (err1 != SCL_OK) return err1;
+        if (err2 != SCL_OK) return err2;
+
+        wrapper1->visit([&](auto& m1) {
+            wrapper2->visit([&](auto& m2) {
+                scl::kernel::alignment::compute_correction_vectors(
+                    m1, m2,
+                    reinterpret_cast<const scl::Index*>(mnn_cell1),
+                    reinterpret_cast<const scl::Index*>(mnn_cell2),
+                    static_cast<scl::Size>(n_pairs),
+                    reinterpret_cast<scl::Real*>(correction_vectors),
+                    static_cast<scl::Size>(n_features)
+                );
+            });
+        });
+        return SCL_OK;
+    } catch (...) {
+        return scl::binding::handle_exception();
+    }
+}
+
+scl_error_t scl_alignment_smooth_correction_vectors(
+    scl_sparse_t data2,
+    scl_real_t* correction_vectors,
+    scl_size_t n_features,
+    scl_real_t sigma
+) {
+    if (!data2 || !correction_vectors) {
+        return SCL_ERROR_NULL_POINTER;
+    }
+
+    try {
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(data2, wrapper);
+        if (err != SCL_OK) return err;
+
+        wrapper->visit([&](auto& m) {
+            scl::kernel::alignment::smooth_correction_vectors(
+                m,
+                reinterpret_cast<scl::Real*>(correction_vectors),
+                static_cast<scl::Size>(n_features),
+                static_cast<scl::Real>(sigma)
+            );
+        });
+        return SCL_OK;
+    } catch (...) {
+        return scl::binding::handle_exception();
+    }
+}
+
+scl_error_t scl_alignment_cca_projection(
+    scl_sparse_t data1,
+    scl_sparse_t data2,
+    scl_size_t n_components,
+    scl_real_t* projection1,
+    scl_real_t* projection2
+) {
+    if (!data1 || !data2 || !projection1 || !projection2) {
+        return SCL_ERROR_NULL_POINTER;
+    }
+
+    try {
+        scl::binding::SparseWrapper* wrapper1;
+        scl::binding::SparseWrapper* wrapper2;
+        scl_error_t err1 = get_sparse_matrix(data1, wrapper1);
+        scl_error_t err2 = get_sparse_matrix(data2, wrapper2);
+        if (err1 != SCL_OK) return err1;
+        if (err2 != SCL_OK) return err2;
+
+        wrapper1->visit([&](auto& m1) {
+            wrapper2->visit([&](auto& m2) {
+                scl::kernel::alignment::cca_projection(
+                    m1, m2,
+                    static_cast<scl::Size>(n_components),
+                    reinterpret_cast<scl::Real*>(projection1),
+                    reinterpret_cast<scl::Real*>(projection2)
+                );
+            });
+        });
+        return SCL_OK;
+    } catch (...) {
+        return scl::binding::handle_exception();
+    }
+}
+
+scl_error_t scl_alignment_kbet_score(
+    scl_sparse_t neighbors,
     const scl_index_t* batch_labels,
     scl_size_t n_cells,
     scl_real_t* score
 ) {
-    try {
-        auto* neigh = get_matrix<scl::Index>(neighbors);
-        if (!neigh || !batch_labels || !score) {
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    if (!neighbors || !batch_labels || !score) {
+        return SCL_ERROR_NULL_POINTER;
+    }
 
-        scl::Array<const scl::Index> batch_arr(batch_labels, n_cells);
-        *score = scl::kernel::alignment::kbet_score(*neigh, batch_arr);
-        return SCL_ERROR_OK;
+    try {
+        scl::binding::SparseWrapper* wrapper;
+        scl_error_t err = get_sparse_matrix(neighbors, wrapper);
+        if (err != SCL_OK) return err;
+
+        scl::Real score_result = scl::Real(0);
+        wrapper->visit([&](auto& neigh) {
+            score_result = scl::kernel::alignment::kbet_score(
+                neigh,
+                scl::Array<const scl::Index>(
+                    reinterpret_cast<const scl::Index*>(batch_labels),
+                    static_cast<scl::Size>(n_cells)
+                )
+            );
+        });
+        *score = static_cast<scl_real_t>(score_result);
+        return SCL_OK;
     } catch (...) {
-        return catch_exception();
+        return scl::binding::handle_exception();
     }
 }
+
+} // extern "C"
