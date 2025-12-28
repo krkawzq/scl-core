@@ -11,6 +11,7 @@
 #include <memory>
 #include <type_traits>
 #include <cstring>
+#include <concepts>
 
 // =============================================================================
 // FILE: scl/core/sort.hpp
@@ -19,16 +20,34 @@
 
 namespace scl::sort {
 
+using namespace scl::sort::config;
+
+// =============================================================================
+// Concepts
+// =============================================================================
+
+template <typename T>
+concept TotallyOrdered = std::totally_ordered<T>;
+
+template <typename T>
+concept Copyable = std::copyable<T>;
+
+template <typename T>
+concept Movable = std::movable<T>;
+
+template <typename Cmp, typename T>
+concept Comparator = std::predicate<Cmp, T, T>;
+
 // =============================================================================
 // Core Sorting Wrappers
 // =============================================================================
 
-template <typename T>
+template <TotallyOrdered T>
 SCL_FORCE_INLINE void sort(Array<T> data) {
     hwy::HWY_NAMESPACE::VQSortStatic(data.ptr, data.len, hwy::SortAscending());
 }
 
-template <typename T>
+template <TotallyOrdered T>
 SCL_FORCE_INLINE void sort_descending(Array<T> data) {
     hwy::HWY_NAMESPACE::VQSortStatic(data.ptr, data.len, hwy::SortDescending());
 }
@@ -39,30 +58,29 @@ SCL_FORCE_INLINE void sort_descending(Array<T> data) {
 
 namespace detail {
 
-    constexpr size_t STACK_BUFFER_THRESHOLD = 8192;
-
-    template <size_t Size> struct RawType;
-    template <> struct RawType<1> { using type = uint8_t; };
-    template <> struct RawType<2> { using type = uint16_t; };
-    template <> struct RawType<4> { using type = uint32_t; };
-    template <> struct RawType<8> { using type = uint64_t; };
+    template <std::size_t Size> struct RawType;
+    template <> struct RawType<1> { using type = std::uint8_t; };
+    template <> struct RawType<2> { using type = std::uint16_t; };
+    template <> struct RawType<4> { using type = std::uint32_t; };
+    template <> struct RawType<8> { using type = std::uint64_t; };
 #if defined(__SIZEOF_INT128__)
     template <> struct RawType<16> { using type = __uint128_t; };
 #endif
 
-    // SIMD pack: separate arrays -> interleaved buffer
     template <typename Key, typename Value, typename RawT = typename RawType<sizeof(Key)>::type>
-    SCL_FORCE_INLINE void pack_interleaved(const Key* SCL_RESTRICT keys,
-                                            const Value* SCL_RESTRICT values,
-                                            void* SCL_RESTRICT dest,
-                                            size_t size) {
+    SCL_FORCE_INLINE void pack_interleaved(
+        const Key* SCL_RESTRICT keys,
+        const Value* SCL_RESTRICT values,
+        void* SCL_RESTRICT dest,
+        Size size
+    ) {
         const hwy::HWY_NAMESPACE::ScalableTag<RawT> d;
         auto* k_ptr = reinterpret_cast<const RawT*>(keys);
         auto* v_ptr = reinterpret_cast<const RawT*>(values);
         auto* d_ptr = reinterpret_cast<RawT*>(dest);
 
-        const size_t N = hwy::HWY_NAMESPACE::Lanes(d);
-        size_t i = 0;
+        const Size N = hwy::HWY_NAMESPACE::Lanes(d);
+        Size i = 0;
 
         if (SCL_LIKELY(size >= 2 * N)) {
             SCL_PREFETCH_READ(k_ptr + N, 2);
@@ -86,19 +104,20 @@ namespace detail {
         }
     }
 
-    // SIMD unpack: interleaved buffer -> separate arrays
     template <typename Key, typename Value, typename RawT = typename RawType<sizeof(Key)>::type>
-    SCL_FORCE_INLINE void unpack_interleaved(const void* SCL_RESTRICT src,
-                                              Key* SCL_RESTRICT keys,
-                                              Value* SCL_RESTRICT values,
-                                              size_t size) {
+    SCL_FORCE_INLINE void unpack_interleaved(
+        const void* SCL_RESTRICT src,
+        Key* SCL_RESTRICT keys,
+        Value* SCL_RESTRICT values,
+        Size size
+    ) {
         const hwy::HWY_NAMESPACE::ScalableTag<RawT> d;
         auto* s_ptr = reinterpret_cast<const RawT*>(src);
         auto* k_ptr = reinterpret_cast<RawT*>(keys);
         auto* v_ptr = reinterpret_cast<RawT*>(values);
 
-        const size_t N = hwy::HWY_NAMESPACE::Lanes(d);
-        size_t i = 0;
+        const Size N = hwy::HWY_NAMESPACE::Lanes(d);
+        Size i = 0;
 
         if (SCL_LIKELY(size >= 2 * N)) {
             SCL_PREFETCH_READ(s_ptr + 2 * N, 2);
@@ -122,12 +141,11 @@ namespace detail {
         }
     }
 
-    // Insertion sort for small arrays
-    template <typename Pair, typename Comp>
-    SCL_FORCE_INLINE void insertion_sort(Pair* data, size_t n, Comp comp) {
-        for (size_t i = 1; i < n; ++i) {
+    template <typename Pair, Comparator<Pair> Comp>
+    SCL_FORCE_INLINE void insertion_sort(Pair* data, Size n, Comp comp) {
+        for (Size i = 1; i < n; ++i) {
             Pair tmp = data[i];
-            size_t j = i;
+            Size j = i;
             while (j > 0 && comp(tmp, data[j - 1])) {
                 data[j] = data[j - 1];
                 --j;
@@ -136,10 +154,9 @@ namespace detail {
         }
     }
 
-    // Partition step for quicksort
-    template <typename Pair, typename Comp>
-    SCL_FORCE_INLINE size_t partition(Pair* data, size_t low, size_t high, Comp comp) {
-        size_t mid = low + (high - low) / 2;
+    template <typename Pair, Comparator<Pair> Comp>
+    SCL_FORCE_INLINE Size partition(Pair* data, Size low, Size high, Comp comp) {
+        Size mid = low + (high - low) / 2;
         if (comp(data[mid], data[low])) std::swap(data[mid], data[low]);
         if (comp(data[high], data[low])) std::swap(data[high], data[low]);
         if (comp(data[high], data[mid])) std::swap(data[high], data[mid]);
@@ -147,8 +164,8 @@ namespace detail {
         Pair pivot = data[mid];
         std::swap(data[mid], data[high - 1]);
 
-        size_t i = low;
-        size_t j = high - 1;
+        Size i = low;
+        Size j = high - 1;
 
         while (true) {
             while (comp(data[++i], pivot)) {}
@@ -161,11 +178,8 @@ namespace detail {
         return i;
     }
 
-    // Introsort implementation
-    template <typename Pair, typename Comp>
-    void introsort_impl(Pair* data, size_t low, size_t high, int depth_limit, Comp comp) {
-        constexpr size_t INSERTION_THRESHOLD = 16;
-
+    template <typename Pair, Comparator<Pair> Comp>
+    void introsort_impl(Pair* data, Size low, Size high, int depth_limit, Comp comp) {
         while (high - low > INSERTION_THRESHOLD) {
             if (depth_limit == 0) {
                 std::make_heap(data + low, data + high + 1, comp);
@@ -174,7 +188,7 @@ namespace detail {
             }
 
             --depth_limit;
-            size_t pivot = partition(data, low, high, comp);
+            Size pivot = partition(data, low, high, comp);
 
             if (pivot - low < high - pivot) {
                 introsort_impl(data, low, pivot - 1, depth_limit, comp);
@@ -186,44 +200,40 @@ namespace detail {
         }
     }
 
-    // Optimized introsort for pairs
-    template <typename Pair, typename Comp>
-    SCL_FORCE_INLINE void sort_pairs_impl(Pair* data, size_t n, Comp comp) {
+    template <typename Pair, Comparator<Pair> Comp>
+    SCL_FORCE_INLINE void sort_pairs_impl(Pair* data, Size n, Comp comp) {
         if (SCL_UNLIKELY(n <= 1)) return;
-
-        constexpr size_t INSERTION_THRESHOLD = 16;
 
         if (n <= INSERTION_THRESHOLD) {
             insertion_sort(data, n, comp);
             return;
         }
 
-        int depth_limit = 2 * (sizeof(size_t) * 8 - __builtin_clzl(n));
+        auto depth_limit = static_cast<int>(2 * (sizeof(Size) * 8 - SCL_CLZ(n)));
         introsort_impl(data, 0, n - 1, depth_limit, comp);
 
         insertion_sort(data, n, comp);
     }
 
-    // Smart buffer manager: stack for small, heap for large
     template <typename T>
     struct BufferManager {
         T* ptr;
         bool on_heap;
 
-        explicit BufferManager(size_t n) {
-            size_t bytes = n * sizeof(T);
+        explicit BufferManager(Size n) {
+            Size bytes = n * sizeof(T);
             if (bytes <= STACK_BUFFER_THRESHOLD) {
-                ptr = static_cast<T*>(alloca(bytes));
+                ptr = static_cast<T*>(SCL_ALLOCA(bytes));
                 on_heap = false;
             } else {
-                ptr = static_cast<T*>(aligned_alloc(SCL_ALIGNMENT, bytes));
+                ptr = static_cast<T*>(scl::aligned_alloc_impl(SCL_ALIGNMENT, bytes));
                 on_heap = true;
             }
         }
 
         ~BufferManager() {
             if (on_heap) {
-                free(ptr);
+                scl::aligned_free_impl(ptr);
             }
         }
 
@@ -231,6 +241,8 @@ namespace detail {
 
         BufferManager(const BufferManager&) = delete;
         BufferManager& operator=(const BufferManager&) = delete;
+        BufferManager(BufferManager&&) = delete;
+        BufferManager& operator=(BufferManager&&) = delete;
     };
 
 } // namespace detail
@@ -239,7 +251,7 @@ namespace detail {
 // Public Key-Value Sorting API
 // =============================================================================
 
-template <typename Key, typename Value>
+template <Copyable Key, Copyable Value>
 SCL_FORCE_INLINE void sort_pairs(Array<Key> keys, Array<Value> values) {
 #ifndef NDEBUG
     SCL_ASSERT(keys.len == values.len, "Sort keys and values must have same size");
@@ -249,67 +261,32 @@ SCL_FORCE_INLINE void sort_pairs(Array<Key> keys, Array<Value> values) {
 
     struct alignas(SCL_ALIGNMENT) Pair { Key k; Value v; };
 
-    const size_t n = keys.len;
-    const size_t buffer_bytes = n * sizeof(Pair);
+    const Size n = keys.len;
+    detail::BufferManager<Pair> buffer(n);
 
-    if (buffer_bytes <= detail::STACK_BUFFER_THRESHOLD) {
-        Pair* buffer = static_cast<Pair*>(alloca(buffer_bytes));
-
-        // Pack
-        if constexpr (sizeof(Key) == sizeof(Value)) {
-            detail::pack_interleaved(keys.ptr, values.ptr, buffer, n);
-        } else {
-            for (size_t i = 0; i < n; ++i) {
-                buffer[i] = {keys.ptr[i], values.ptr[i]};
-            }
-        }
-
-        // Sort
-        detail::sort_pairs_impl(buffer, n, [](const Pair& a, const Pair& b) {
-            return a.k < b.k;
-        });
-
-        // Unpack
-        if constexpr (sizeof(Key) == sizeof(Value)) {
-            detail::unpack_interleaved(buffer, keys.ptr, values.ptr, n);
-        } else {
-            for (size_t i = 0; i < n; ++i) {
-                keys.ptr[i] = buffer[i].k;
-                values.ptr[i] = buffer[i].v;
-            }
-        }
+    if constexpr (sizeof(Key) == sizeof(Value)) {
+        detail::pack_interleaved(keys.ptr, values.ptr, buffer.data(), n);
     } else {
-        Pair* buffer = static_cast<Pair*>(aligned_alloc(SCL_ALIGNMENT, buffer_bytes));
-
-        // Pack
-        if constexpr (sizeof(Key) == sizeof(Value)) {
-            detail::pack_interleaved(keys.ptr, values.ptr, buffer, n);
-        } else {
-            for (size_t i = 0; i < n; ++i) {
-                buffer[i] = {keys.ptr[i], values.ptr[i]};
-            }
+        for (Size i = 0; i < n; ++i) {
+            buffer.data()[i] = {keys.ptr[i], values.ptr[i]};
         }
+    }
 
-        // Sort
-        detail::sort_pairs_impl(buffer, n, [](const Pair& a, const Pair& b) {
-            return a.k < b.k;
-        });
+    detail::sort_pairs_impl(buffer.data(), n, [](const Pair& a, const Pair& b) {
+        return a.k < b.k;
+    });
 
-        // Unpack
-        if constexpr (sizeof(Key) == sizeof(Value)) {
-            detail::unpack_interleaved(buffer, keys.ptr, values.ptr, n);
-        } else {
-            for (size_t i = 0; i < n; ++i) {
-                keys.ptr[i] = buffer[i].k;
-                values.ptr[i] = buffer[i].v;
-            }
+    if constexpr (sizeof(Key) == sizeof(Value)) {
+        detail::unpack_interleaved(buffer.data(), keys.ptr, values.ptr, n);
+    } else {
+        for (Size i = 0; i < n; ++i) {
+            keys.ptr[i] = buffer.data()[i].k;
+            values.ptr[i] = buffer.data()[i].v;
         }
-
-        free(buffer);
     }
 }
 
-template <typename Key, typename Value>
+template <Copyable Key, Copyable Value>
 SCL_FORCE_INLINE void sort_pairs_descending(Array<Key> keys, Array<Value> values) {
 #ifndef NDEBUG
     SCL_ASSERT(keys.len == values.len, "Sort keys and values must have same size");
@@ -319,63 +296,28 @@ SCL_FORCE_INLINE void sort_pairs_descending(Array<Key> keys, Array<Value> values
 
     struct alignas(SCL_ALIGNMENT) Pair { Key k; Value v; };
 
-    const size_t n = keys.len;
-    const size_t buffer_bytes = n * sizeof(Pair);
+    const Size n = keys.len;
+    detail::BufferManager<Pair> buffer(n);
 
-    if (buffer_bytes <= detail::STACK_BUFFER_THRESHOLD) {
-        Pair* buffer = static_cast<Pair*>(alloca(buffer_bytes));
-
-        // Pack
-        if constexpr (sizeof(Key) == sizeof(Value)) {
-            detail::pack_interleaved(keys.ptr, values.ptr, buffer, n);
-        } else {
-            for (size_t i = 0; i < n; ++i) {
-                buffer[i] = {keys.ptr[i], values.ptr[i]};
-            }
-        }
-
-        // Sort (Descending)
-        detail::sort_pairs_impl(buffer, n, [](const Pair& a, const Pair& b) {
-            return a.k > b.k;
-        });
-
-        // Unpack
-        if constexpr (sizeof(Key) == sizeof(Value)) {
-            detail::unpack_interleaved(buffer, keys.ptr, values.ptr, n);
-        } else {
-            for (size_t i = 0; i < n; ++i) {
-                keys.ptr[i] = buffer[i].k;
-                values.ptr[i] = buffer[i].v;
-            }
-        }
+    if constexpr (sizeof(Key) == sizeof(Value)) {
+        detail::pack_interleaved(keys.ptr, values.ptr, buffer.data(), n);
     } else {
-        Pair* buffer = static_cast<Pair*>(aligned_alloc(SCL_ALIGNMENT, buffer_bytes));
-
-        // Pack
-        if constexpr (sizeof(Key) == sizeof(Value)) {
-            detail::pack_interleaved(keys.ptr, values.ptr, buffer, n);
-        } else {
-            for (size_t i = 0; i < n; ++i) {
-                buffer[i] = {keys.ptr[i], values.ptr[i]};
-            }
+        for (Size i = 0; i < n; ++i) {
+            buffer.data()[i] = {keys.ptr[i], values.ptr[i]};
         }
+    }
 
-        // Sort (Descending)
-        detail::sort_pairs_impl(buffer, n, [](const Pair& a, const Pair& b) {
-            return a.k > b.k;
-        });
+    detail::sort_pairs_impl(buffer.data(), n, [](const Pair& a, const Pair& b) {
+        return a.k > b.k;
+    });
 
-        // Unpack
-        if constexpr (sizeof(Key) == sizeof(Value)) {
-            detail::unpack_interleaved(buffer, keys.ptr, values.ptr, n);
-        } else {
-            for (size_t i = 0; i < n; ++i) {
-                keys.ptr[i] = buffer[i].k;
-                values.ptr[i] = buffer[i].v;
-            }
+    if constexpr (sizeof(Key) == sizeof(Value)) {
+        detail::unpack_interleaved(buffer.data(), keys.ptr, values.ptr, n);
+    } else {
+        for (Size i = 0; i < n; ++i) {
+            keys.ptr[i] = buffer.data()[i].k;
+            values.ptr[i] = buffer.data()[i].v;
         }
-
-        free(buffer);
     }
 }
 

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "scl/config.hpp"
 #include "scl/core/type.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/core/error.hpp"
@@ -22,8 +21,8 @@ namespace detail {
         namespace s = scl::simd;
 
         const s::IndexTag d;
-        const size_t N = indices.len;
-        const size_t lanes = s::lanes();
+        const Size N = indices.len;
+        const Size lanes = s::Lanes(d);
 
         const auto v_step_1 = s::Set(d, static_cast<scl::Index>(lanes));
         const auto v_step_4 = s::Set(d, static_cast<scl::Index>(4 * lanes));
@@ -33,7 +32,7 @@ namespace detail {
         auto v2 = s::Add(v1, v_step_1);
         auto v3 = s::Add(v2, v_step_1);
 
-        size_t i = 0;
+        Size i = 0;
 
         for (; i + 4 * lanes <= N; i += 4 * lanes) {
             s::Store(v0, d, indices.ptr + i);
@@ -55,7 +54,9 @@ namespace detail {
         }
 
         for (; i < N; ++i) {
-            indices[i] = static_cast<scl::Index>(i);
+            // Safe: i is in range [0, N) where N = indices.len
+            // NOLINTNEXTLINE
+            indices[i] = static_cast<scl::Index>(static_cast<std::ptrdiff_t>(i));
         }
     }
 }
