@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // =============================================================================
 // FILE: scl/config.hpp
 // BRIEF: SCL Core Configuration Header
@@ -139,3 +141,52 @@
     #error "SCL Configuration Error: Invalid SCL_INDEX_PRECISION value. " \
            "Must be 0 (int16), 1 (int32), or 2 (int64)."
 #endif
+
+// =============================================================================
+// Memory Configuration
+// =============================================================================
+
+#include <cstddef>
+
+namespace scl::memory {
+    // Memory alignment constants
+    inline constexpr std::size_t DEFAULT_ALIGNMENT = 64;  // Default alignment for AVX-512
+    inline constexpr std::size_t STREAM_ALIGNMENT = 64;   // Alignment for non-temporal stores
+    inline constexpr std::size_t CACHE_LINE_SIZE = 64;    // Cache line size in bytes
+    
+    // Prefetch configuration
+    inline constexpr std::size_t DEFAULT_PREFETCH_DISTANCE = 8;  // Default prefetch ahead distance
+    inline constexpr std::size_t DEFAULT_MAX_PREFETCHES = 16;    // Default maximum prefetch count
+}
+
+// =============================================================================
+// Registry Configuration
+// =============================================================================
+
+namespace scl::registry {
+    // Sharded reference counting configuration
+    inline constexpr std::size_t MAX_SHARDS = 16;              // Maximum number of shards for lock-free ref counting
+    inline constexpr std::int32_t BORROW_THRESHOLD = 8;        // Threshold for borrowing from base count
+    inline constexpr std::size_t DEFAULT_NUM_SHARDS = 4;       // Default number of shards for ShardedRefCount
+    inline constexpr std::int32_t DEFAULT_INITIAL_REF_COUNT = 1;  // Default initial reference count
+    
+    // Concurrent hash table configuration
+    inline constexpr std::size_t INITIAL_CAPACITY = 256;       // Initial capacity for ConcurrentFlatMap
+    inline constexpr double MAX_LOAD_FACTOR = 0.7;             // Maximum load factor before rehashing
+    inline constexpr std::size_t SLOTS_PER_STRIPE = 16;        // Slots per mutex stripe for fine-grained locking
+    
+    // Shard alignment
+    inline constexpr std::size_t CACHE_LINE_SIZE = 64;         // Cache line size for shard alignment
+}
+
+// =============================================================================
+// Sort Configuration
+// =============================================================================
+
+namespace scl::sort::config {
+    // Buffer management
+    inline constexpr std::size_t STACK_BUFFER_THRESHOLD = 8192;  // Use stack allocation for buffers <= 8KB
+    
+    // Algorithm thresholds
+    inline constexpr std::size_t INSERTION_THRESHOLD = 16;      // Use insertion sort for small arrays
+}
