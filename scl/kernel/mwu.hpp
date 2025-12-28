@@ -250,7 +250,8 @@ void mwu_test(
     Array<const int32_t> group_ids,
     Array<Real> out_u_stats,
     Array<Real> out_p_values,
-    Array<Real> out_log2_fc
+    Array<Real> out_log2_fc,
+    Array<Real> out_auroc = Array<Real>()  // Optional AUROC output
 ) {
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
@@ -355,6 +356,13 @@ void mwu_test(
         );
 
         detail::compute_u_and_pvalue(R1, tie_sum, c, out_u_stats[p], out_p_values[p]);
+
+        // Optionally compute AUROC
+        if (out_auroc.ptr != nullptr) {
+            double U = static_cast<double>(out_u_stats[p]);
+            double auroc_val = (c.n1d * c.n2d > 0.0) ? (U / (c.n1d * c.n2d)) : 0.5;
+            out_auroc[p] = static_cast<Real>(auroc_val);
+        }
     });
 }
 
