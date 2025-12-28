@@ -12,39 +12,6 @@
 using namespace scl;
 using namespace scl::binding;
 
-// =============================================================================
-// Dense Matrix Wrapper (Internal)
-// =============================================================================
-
-namespace {
-
-struct DenseMatrixWrapper {
-    Real* data;
-    Index rows;
-    Index cols;
-    Index stride;
-    bool owns_data;
-    
-    DenseMatrixWrapper() 
-        : data(nullptr), rows(0), cols(0), stride(0), owns_data(true) {}
-    
-    ~DenseMatrixWrapper() {
-        if (owns_data && data) {
-            auto& reg = get_registry();
-            reg.unregister_ptr(data);
-        }
-    }
-    
-    bool valid() const {
-        return data != nullptr && rows > 0 && cols > 0;
-    }
-};
-
-} // anonymous namespace
-
-// Update the opaque handle definition
-struct scl_dense_matrix : DenseMatrixWrapper {};
-
 extern "C" {
 
 // =============================================================================

@@ -90,17 +90,14 @@ load_config() {
     DEFAULT_DIFFICULTY=${DEFAULT_DIFFICULTY:-"normal"}
     
     # 默认难度模型配置
-    EASY_MODEL=${EASY_MODEL:-"claude-3-5-haiku-20241022"}
+    EASY_MODEL=${EASY_MODEL:-"claude-haiku-4-5-20251001"}
     EASY_THINK=${EASY_THINK:-false}
-    EASY_MAX_TOKENS=${EASY_MAX_TOKENS:-4096}
     
-    NORMAL_MODEL=${NORMAL_MODEL:-"claude-sonnet-4-20250514"}
+    NORMAL_MODEL=${NORMAL_MODEL:-"claude-sonnet-4-5-20250929"}
     NORMAL_THINK=${NORMAL_THINK:-false}
-    NORMAL_MAX_TOKENS=${NORMAL_MAX_TOKENS:-8192}
     
-    HARD_MODEL=${HARD_MODEL:-"claude-sonnet-4-20250514"}
+    HARD_MODEL=${HARD_MODEL:-"claude-opus-4-5-20251101"}
     HARD_THINK=${HARD_THINK:-true}
-    HARD_MAX_TOKENS=${HARD_MAX_TOKENS:-16384}
     
     # 从文件加载（如果存在）
     if [[ -f "$config_file" ]]; then
@@ -164,31 +161,13 @@ get_think_for_difficulty() {
     esac
 }
 
-# 获取难度对应的最大tokens
-get_max_tokens_for_difficulty() {
-    local difficulty=$1
-    
-    case "$difficulty" in
-        easy)
-            echo "$EASY_MAX_TOKENS"
-            ;;
-        hard)
-            echo "$HARD_MAX_TOKENS"
-            ;;
-        *)
-            echo "$NORMAL_MAX_TOKENS"
-            ;;
-    esac
-}
-
 # 构建Claude命令
 build_claude_cmd() {
     local difficulty=$1
-    local model think max_tokens
+    local model think
     
     model=$(get_model_for_difficulty "$difficulty")
     think=$(get_think_for_difficulty "$difficulty")
-    max_tokens=$(get_max_tokens_for_difficulty "$difficulty")
     
     local cmd="claude"
     
@@ -199,9 +178,6 @@ build_claude_cmd() {
     if [[ "$think" == "true" ]]; then
         cmd+=" --thinking"
     fi
-    
-    # 添加最大tokens参数
-    cmd+=" --max-tokens $max_tokens"
     
     # 添加prompt参数
     cmd+=" -p"
@@ -215,9 +191,9 @@ print_difficulty_config() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  难度配置:"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    printf "  ${GREEN}Easy${NC}:   %-30s think=%-5s tokens=%s\n" "$EASY_MODEL" "$EASY_THINK" "$EASY_MAX_TOKENS"
-    printf "  ${YELLOW}Normal${NC}: %-30s think=%-5s tokens=%s\n" "$NORMAL_MODEL" "$NORMAL_THINK" "$NORMAL_MAX_TOKENS"
-    printf "  ${RED}Hard${NC}:   %-30s think=%-5s tokens=%s\n" "$HARD_MODEL" "$HARD_THINK" "$HARD_MAX_TOKENS"
+    printf "  ${GREEN}Easy${NC}:   %-35s think=%s\n" "$EASY_MODEL" "$EASY_THINK"
+    printf "  ${YELLOW}Normal${NC}: %-35s think=%s\n" "$NORMAL_MODEL" "$NORMAL_THINK"
+    printf "  ${RED}Hard${NC}:   %-35s think=%s\n" "$HARD_MODEL" "$HARD_THINK"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 }

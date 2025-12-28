@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <atomic>
+#include <algorithm>
 
 // =============================================================================
 // FILE: scl/kernel/alignment.hpp
@@ -103,14 +104,16 @@ void find_cross_knn(
 
     k = scl::algo::min2(k, static_cast<Index>(n2));
 
-    // Create workspace pool for thread-local buffers
-    scl::threading::DualWorkspacePool<Real, Index> pool;
-    pool.init(scl::threading::Scheduler::get_num_threads(), n2, n2);
+    // Create workspace pools for thread-local buffers
+    scl::threading::WorkspacePool<Real> dists_pool;
+    scl::threading::WorkspacePool<Index> indices_pool;
+    dists_pool.init(scl::threading::Scheduler::get_num_threads(), n2);
+    indices_pool.init(scl::threading::Scheduler::get_num_threads(), n2);
 
     // Parallel over points in data1
     scl::threading::parallel_for(Size(0), n1, [&](size_t i, size_t thread_rank) {
-        Real* all_dists = pool.get_first(thread_rank);
-        Index* all_indices = pool.get_second(thread_rank);
+        Real* all_dists = dists_pool.get(thread_rank);
+        Index* all_indices = indices_pool.get(thread_rank);
 
         // Compute distances to all points in data2
         for (Size j = 0; j < n2; ++j) {
@@ -119,12 +122,14 @@ void find_cross_knn(
             all_indices[j] = static_cast<Index>(j);
         }
 
-        // Partial sort to find k smallest using VQSort
-        scl::algo::partial_sort(
-            Array<Real>(all_dists, n2),
-            Array<Index>(all_indices, n2),
-            static_cast<Size>(k)
-        );
+        // Partial sort indices by distance
+        // Initialize indices
+        for (Size j = 0; j < n2; ++j) {
+            all_indices[j] = static_cast<Index>(j);
+        }
+        // Sort indices by distance (k smallest)
+        std::partial_sort(all_indices, all_indices + k, all_indices + n2,
+            [&](Index a, Index b) { return all_dists[a] < all_dists[b]; });
 
         // Store k nearest neighbors
         for (Index ki = 0; ki < k; ++ki) {
@@ -387,12 +392,12 @@ Real integration_score(
         scl::algo::zero(batch_counts, static_cast<Size>(n_batches));
 
         // Count batches in neighborhood
-        const Index row_start = neighbors.row_indices_unsafe()[i];
-        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
-        Size n_neighbors = static_cast<Size>(row_end - row_start);
+        auto row_idxs = neighbors.row_indices_unsafe(i);
+        Index row_len = neighbors.row_length_unsafe(i);
+        Size n_neighbors = static_cast<Size>(row_len);
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = neighbors.col_indices_unsafe()[j];
+        for (Index j = 0; j < row_len; ++j) {
+            Index neighbor = row_idxs.ptr[j];
             ++batch_counts[batch_labels.ptr[neighbor]];
         }
 
@@ -455,14 +460,14 @@ void batch_mixing(
         scl::algo::zero(batch_counts, static_cast<Size>(n_batches));
 
         // Count batches in neighborhood
-        const Index row_start = neighbors.row_indices_unsafe()[i];
-        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
-        Size n_neighbors = static_cast<Size>(row_end - row_start);
+        auto row_idxs = neighbors.row_indices_unsafe(i);
+        Index row_len = neighbors.row_length_unsafe(i);
+        Size n_neighbors = static_cast<Size>(row_len);
 
         Index my_batch = batch_labels.ptr[i];
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = neighbors.col_indices_unsafe()[j];
+        for (Index j = 0; j < row_len; ++j) {
+            Index neighbor = row_idxs.ptr[j];
             ++batch_counts[batch_labels.ptr[neighbor]];
         }
 
@@ -526,18 +531,20 @@ void compute_correction_vectors(
             cell2_dense[f] = Real(0.0);
         }
 
-        const Index start1 = data1.row_indices_unsafe()[cell1];
-        const Index end1 = data1.row_indices_unsafe()[cell1 + 1];
-        for (Index j = start1; j < end1; ++j) {
-            Index col = data1.col_indices_unsafe()[j];
-            cell1_dense[col] = static_cast<Real>(data1.values()[j]);
+        auto row1_vals = data1.row_values_unsafe(cell1);
+        auto row1_idxs = data1.row_indices_unsafe(cell1);
+        Index row1_len = data1.row_length_unsafe(cell1);
+        for (Index j = 0; j < row1_len; ++j) {
+            Index col = row1_idxs.ptr[j];
+            cell1_dense[col] = static_cast<Real>(row1_vals.ptr[j]);
         }
 
-        const Index start2 = data2.row_indices_unsafe()[cell2];
-        const Index end2 = data2.row_indices_unsafe()[cell2 + 1];
-        for (Index j = start2; j < end2; ++j) {
-            Index col = data2.col_indices_unsafe()[j];
-            cell2_dense[col] = static_cast<Real>(data2.values()[j]);
+        auto row2_vals = data2.row_values_unsafe(cell2);
+        auto row2_idxs = data2.row_indices_unsafe(cell2);
+        Index row2_len = data2.row_length_unsafe(cell2);
+        for (Index j = 0; j < row2_len; ++j) {
+            Index col = row2_idxs.ptr[j];
+            cell2_dense[col] = static_cast<Real>(row2_vals.ptr[j]);
         }
 
         // Add correction vector (cell1 - cell2)
@@ -664,12 +671,13 @@ void cca_projection(
             projection1[i * n_components + c] = Real(0.0);
         }
 
-        const Index start = data1.row_indices_unsafe()[i];
-        const Index end = data1.row_indices_unsafe()[i + 1];
+        auto row_vals = data1.row_values_unsafe(i);
+        auto row_idxs = data1.row_indices_unsafe(i);
+        Index row_len = data1.row_length_unsafe(i);
 
-        for (Index j = start; j < end; ++j) {
-            Index col = data1.col_indices_unsafe()[j];
-            Real val = static_cast<Real>(data1.values()[j]);
+        for (Index j = 0; j < row_len; ++j) {
+            Index col = row_idxs.ptr[j];
+            Real val = static_cast<Real>(row_vals.ptr[j]);
             for (Size c = 0; c < n_components; ++c) {
                 projection1[i * n_components + c] += val * proj_matrix1[col * n_components + c];
             }
@@ -682,12 +690,13 @@ void cca_projection(
             projection2[i * n_components + c] = Real(0.0);
         }
 
-        const Index start = data2.row_indices_unsafe()[i];
-        const Index end = data2.row_indices_unsafe()[i + 1];
+        auto row_vals = data2.row_values_unsafe(i);
+        auto row_idxs = data2.row_indices_unsafe(i);
+        Index row_len = data2.row_length_unsafe(i);
 
-        for (Index j = start; j < end; ++j) {
-            Index col = data2.col_indices_unsafe()[j];
-            Real val = static_cast<Real>(data2.values()[j]);
+        for (Index j = 0; j < row_len; ++j) {
+            Index col = row_idxs.ptr[j];
+            Real val = static_cast<Real>(row_vals.ptr[j]);
             for (Size c = 0; c < n_components; ++c) {
                 projection2[i * n_components + c] += val * proj_matrix2[col * n_components + c];
             }

@@ -178,19 +178,16 @@ RETRY_COUNT=1
 # ============================================================
 
 # Easy: 简单任务
-EASY_MODEL="claude-3-5-haiku-20241022"
+EASY_MODEL="claude-haiku-4-5-20251001"
 EASY_THINK=false
-EASY_MAX_TOKENS=4096
 
 # Normal: 常规任务
-NORMAL_MODEL="claude-sonnet-4-20250514"
+NORMAL_MODEL="claude-sonnet-4-5-20250929"
 NORMAL_THINK=false
-NORMAL_MAX_TOKENS=8192
 
 # Hard: 复杂任务 - 启用深度思考
-HARD_MODEL="claude-sonnet-4-20250514"
+HARD_MODEL="claude-opus-4-5-20251101"
 HARD_THINK=true
-HARD_MAX_TOKENS=16384
 
 # 默认难度级别
 DEFAULT_DIFFICULTY="normal"

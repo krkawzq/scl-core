@@ -34,16 +34,20 @@ while true; do
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  最近状态更新:"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    tail -5 "$STATE_DIR/status" 2>/dev/null | while IFS=: read -r tid status ts msg; do
-        local icon
-        case "$status" in
-            completed) icon="${GREEN}✓${NC}" ;;
-            failed)    icon="${RED}✗${NC}" ;;
-            running)   icon="${YELLOW}⋯${NC}" ;;
-            *)         icon="○" ;;
-        esac
-        printf "  %b Task %s: %s (%s)\n" "$icon" "$tid" "$msg" "$ts"
-    done
+    if [[ -f "$STATE_DIR/status" && -s "$STATE_DIR/status" ]]; then
+        tail -5 "$STATE_DIR/status" 2>/dev/null | while IFS=: read -r tid status ts msg; do
+            icon=""
+            case "$status" in
+                completed) icon="${GREEN}✓${NC}" ;;
+                failed)    icon="${RED}✗${NC}" ;;
+                running)   icon="${YELLOW}⋯${NC}" ;;
+                *)         icon="○" ;;
+            esac
+            printf "  %b Task %s: %s (%s)\n" "$icon" "$tid" "$msg" "$ts"
+        done
+    else
+        echo "  (暂无状态更新)"
+    fi
     
     echo ""
     echo "刷新时间: $(date '+%H:%M:%S') | 按 Ctrl+C 退出"

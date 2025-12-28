@@ -13,6 +13,7 @@
 
 #include <cstring>
 #include <atomic>
+#include <cmath>
 
 // =============================================================================
 // FILE: scl/kernel/components.hpp
@@ -125,18 +126,22 @@ public:
     Size n;
 
     explicit ParallelUnionFind(Size size) : n(size) {
-        parent = static_cast<std::atomic<Index>*>(
+        parent = reinterpret_cast<std::atomic<Index>*>(
             scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT));
-        rank = static_cast<std::atomic<Index>*>(
+        rank = reinterpret_cast<std::atomic<Index>*>(
             scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT));
 
         for (Size i = 0; i < n; ++i) {
-            parent[i].store(static_cast<Index>(i), std::memory_order_relaxed);
-            rank[i].store(0, std::memory_order_relaxed);
+            new (&parent[i]) std::atomic<Index>(static_cast<Index>(i));
+            new (&rank[i]) std::atomic<Index>(0);
         }
     }
 
     ~ParallelUnionFind() {
+        for (Size i = 0; i < n; ++i) {
+            parent[i].~atomic();
+            rank[i].~atomic();
+        }
         scl::memory::aligned_free(reinterpret_cast<Index*>(parent), SCL_ALIGNMENT);
         scl::memory::aligned_free(reinterpret_cast<Index*>(rank), SCL_ALIGNMENT);
     }

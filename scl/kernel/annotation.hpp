@@ -519,12 +519,12 @@ inline Index count_cell_types(
 // Reference Mapping (KNN-based Transfer)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR_Query, bool IsCSR_Ref, bool IsCSR_Neighbors>
 void reference_mapping(
-    const Sparse<T, IsCSR>& query_expression,
-    const Sparse<T, IsCSR>& reference_expression,
+    const Sparse<T, IsCSR_Query>& query_expression,
+    const Sparse<T, IsCSR_Ref>& reference_expression,
     Array<const Index> reference_labels,
-    const Sparse<Index, IsCSR>& query_to_ref_neighbors,
+    const Sparse<Index, IsCSR_Neighbors>& query_to_ref_neighbors,
     Index n_query,
     Index n_ref,
     Index n_types,
@@ -631,10 +631,10 @@ void reference_mapping(
 // Correlation-Based Assignment (SingleR-style)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR_Query, bool IsCSR_Ref>
 void correlation_assignment(
-    const Sparse<T, IsCSR>& query_expression,
-    const Sparse<T, IsCSR>& reference_profiles,  // n_types x n_genes
+    const Sparse<T, IsCSR_Query>& query_expression,
+    const Sparse<T, IsCSR_Ref>& reference_profiles,  // n_types x n_genes
     Index n_query,
     Index n_types,
     Index n_genes,
@@ -800,7 +800,8 @@ void build_reference_profiles(
             if (SCL_LIKELY(type_counts[t] > 0)) {
                 Real inv = Real(1) / static_cast<Real>(type_counts[t]);
                 Real* profile = profiles + static_cast<Size>(t) * n_genes;
-                scl::vectorize::scale(Array<Real>(profile, static_cast<Size>(n_genes)), inv);
+                scl::vectorize::scale(Array<const Real>(profile, static_cast<Size>(n_genes)), 
+                                     Array<Real>(profile, static_cast<Size>(n_genes)), inv);
             }
         });
     } else {
@@ -808,7 +809,8 @@ void build_reference_profiles(
             if (SCL_LIKELY(type_counts[t] > 0)) {
                 Real inv = Real(1) / static_cast<Real>(type_counts[t]);
                 Real* profile = profiles + static_cast<Size>(t) * n_genes;
-                scl::vectorize::scale(Array<Real>(profile, static_cast<Size>(n_genes)), inv);
+                scl::vectorize::scale(Array<const Real>(profile, static_cast<Size>(n_genes)), 
+                                     Array<Real>(profile, static_cast<Size>(n_genes)), inv);
             }
         }
     }
@@ -1214,36 +1216,95 @@ void detect_novel_types_by_distance(
                 }
             }
 
-        // Compute distance to assigned profile (cosine distance) - SIMD optimized
-        const Real* profile = reference_profiles + static_cast<Size>(assigned) * n_genes;
+            // Compute distance to assigned profile (cosine distance) - SIMD optimized
+            const Real* profile = reference_profiles + static_cast<Size>(assigned) * n_genes;
 
-        // SIMD-friendly dot product and norm computation
-        Real dot = scl::vectorize::dot(
-            Array<const Real>(query_dense, static_cast<Size>(n_genes)),
-            Array<const Real>(profile, static_cast<Size>(n_genes))
-        );
-        Real norm_q = std::sqrt(scl::vectorize::sum_squared(
-            Array<const Real>(query_dense, static_cast<Size>(n_genes))
-        ));
-        Real norm_p = std::sqrt(scl::vectorize::sum_squared(
-            Array<const Real>(profile, static_cast<Size>(n_genes))
-        ));
+            // SIMD-friendly dot product and norm computation
+            Real dot = scl::vectorize::dot(
+                Array<const Real>(query_dense, static_cast<Size>(n_genes)),
+                Array<const Real>(profile, static_cast<Size>(n_genes))
+            );
+            Real norm_q = std::sqrt(scl::vectorize::sum_squared(
+                Array<const Real>(query_dense, static_cast<Size>(n_genes))
+            ));
+            Real norm_p = std::sqrt(scl::vectorize::sum_squared(
+                Array<const Real>(profile, static_cast<Size>(n_genes))
+            ));
 
-        Real cosine_sim = Real(0);
-        if (SCL_LIKELY(norm_q > config::EPSILON && norm_p > config::EPSILON)) {
-            cosine_sim = dot / (norm_q * norm_p);
+            Real cosine_sim = Real(0);
+            if (SCL_LIKELY(norm_q > config::EPSILON && norm_p > config::EPSILON)) {
+                cosine_sim = dot / (norm_q * norm_p);
+            }
+
+            Real cosine_dist = Real(1) - cosine_sim;
+
+            is_novel[q] = cosine_dist > distance_threshold;
+
+            if (distance_to_assigned.ptr != nullptr) {
+                distance_to_assigned[q] = cosine_dist;
+            }
+        });
+    } else {
+        // Serial version for small datasets
+        Real* query_dense = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+        for (Index q = 0; q < n_query; ++q) {
+            Index assigned = assigned_labels[q];
+
+            if (SCL_UNLIKELY(assigned < 0 || assigned >= n_types)) {
+                is_novel[q] = true;
+                if (distance_to_assigned.ptr != nullptr) {
+                    distance_to_assigned[q] = Real(1);
+                }
+                continue;
+            }
+
+            // Extract query expression
+            scl::algo::zero(query_dense, static_cast<Size>(n_genes));
+
+            if (IsCSR) {
+                auto indices = query_expression.row_indices_unsafe(q);
+                auto values = query_expression.row_values_unsafe(q);
+                Index len = query_expression.row_length_unsafe(q);
+
+                for (Index k = 0; k < len; ++k) {
+                    Index g = indices[k];
+                    if (SCL_LIKELY(g < n_genes)) {
+                        query_dense[g] = static_cast<Real>(values[k]);
+                    }
+                }
+            }
+
+            // Compute distance to assigned profile
+            const Real* profile = reference_profiles + static_cast<Size>(assigned) * n_genes;
+
+            Real dot = scl::vectorize::dot(
+                Array<const Real>(query_dense, static_cast<Size>(n_genes)),
+                Array<const Real>(profile, static_cast<Size>(n_genes))
+            );
+            Real norm_q = std::sqrt(scl::vectorize::sum_squared(
+                Array<const Real>(query_dense, static_cast<Size>(n_genes))
+            ));
+            Real norm_p = std::sqrt(scl::vectorize::sum_squared(
+                Array<const Real>(profile, static_cast<Size>(n_genes))
+            ));
+
+            Real cosine_sim = Real(0);
+            if (SCL_LIKELY(norm_q > config::EPSILON && norm_p > config::EPSILON)) {
+                cosine_sim = dot / (norm_q * norm_p);
+            }
+
+            Real cosine_dist = Real(1) - cosine_sim;
+
+            is_novel[q] = cosine_dist > distance_threshold;
+
+            if (distance_to_assigned.ptr != nullptr) {
+                distance_to_assigned[q] = cosine_dist;
+            }
         }
 
-        Real cosine_dist = Real(1) - cosine_sim;
-
-        is_novel[q] = cosine_dist > distance_threshold;
-
-        if (distance_to_assigned.ptr != nullptr) {
-            distance_to_assigned[q] = cosine_dist;
-        }
+        scl::memory::aligned_free(query_dense, SCL_ALIGNMENT);
     }
-
-    scl::memory::aligned_free(query_dense, SCL_ALIGNMENT);
 }
 
 // =============================================================================

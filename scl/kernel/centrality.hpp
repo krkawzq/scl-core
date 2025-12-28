@@ -297,8 +297,7 @@ SCL_HOT void parallel_distribute(
 
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         // Use atomic accumulation for parallel distribution
-        std::atomic<int64_t>* atomic_scores = static_cast<std::atomic<int64_t>*>(
-            scl::memory::aligned_alloc<int64_t>(n, SCL_ALIGNMENT));
+        std::atomic<int64_t>* atomic_scores = scl::memory::aligned_alloc<std::atomic<int64_t>>(n, SCL_ALIGNMENT);
 
         // Initialize
         for (Size i = 0; i < n; ++i) {
@@ -751,7 +750,7 @@ void hits(
 
         if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
             // Parallel with atomics
-            std::atomic<int64_t>* atomic_auth = static_cast<std::atomic<int64_t>*>(
+            std::atomic<int64_t>* atomic_auth = reinterpret_cast<std::atomic<int64_t>*>(
                 scl::memory::aligned_alloc<int64_t>(N, SCL_ALIGNMENT));
 
             for (Size i = 0; i < N; ++i) {

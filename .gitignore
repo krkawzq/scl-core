@@ -80,3 +80,6 @@ node_modules/
 .parallel_fix_state/
 .claude.lock*
 .claude_logs/
+
+task.json
+build*

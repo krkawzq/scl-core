@@ -448,12 +448,14 @@ void differential_abundance(
     }
 
     // Wilcoxon test for each cluster (parallel with WorkspacePool)
-    scl::threading::DualWorkspacePool<Real> pool;
-    pool.init(scl::threading::Scheduler::get_num_threads(), n_cond0, n_cond1);
+    scl::threading::WorkspacePool<Real> pool0;
+    scl::threading::WorkspacePool<Real> pool1;
+    pool0.init(scl::threading::Scheduler::get_num_threads(), n_cond0);
+    pool1.init(scl::threading::Scheduler::get_num_threads(), n_cond1);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](size_t c, size_t thread_rank) {
-        Real* group0 = pool.get_first(thread_rank);
-        Real* group1 = pool.get_second(thread_rank);
+        Real* group0 = pool0.get(thread_rank);
+        Real* group1 = pool1.get(thread_rank);
 
         Size idx0 = 0, idx1 = 0;
         Real sum0 = Real(0.0), sum1 = Real(0.0);

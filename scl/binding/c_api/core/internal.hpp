@@ -85,6 +85,32 @@ struct SparseWrapper {
 };
 
 // =============================================================================
+// Internal Wrapper for Dense Matrix
+// =============================================================================
+
+struct DenseMatrixWrapper {
+    Real* data;
+    Index rows;
+    Index cols;
+    Index stride;
+    bool owns_data;
+
+    DenseMatrixWrapper()
+        : data(nullptr), rows(0), cols(0), stride(0), owns_data(true) {}
+
+    ~DenseMatrixWrapper() {
+        if (owns_data && data) {
+            auto& reg = get_registry();
+            reg.unregister_ptr(data);
+        }
+    }
+
+    bool valid() const {
+        return data != nullptr && rows > 0 && cols > 0;
+    }
+};
+
+// =============================================================================
 // Thread-Local Error State
 // =============================================================================
 
@@ -107,7 +133,5 @@ scl_error_t handle_exception();
 // The opaque handle points to this wrapper
 struct scl_sparse_matrix : scl::binding::SparseWrapper {};
 
-// Dense matrix wrapper (placeholder for now)
-struct scl_dense_matrix {
-    // Will be implemented in Phase 5
-};
+// The opaque handle points to the dense matrix wrapper
+struct scl_dense_matrix : scl::binding::DenseMatrixWrapper {};

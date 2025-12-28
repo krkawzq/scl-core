@@ -464,7 +464,7 @@ SCL_HOT void extract_all_gene_expressions(
 
     scl::algo::zero(gene_expr, G * N);
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         // Parallel over cells
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
@@ -472,9 +472,9 @@ SCL_HOT void extract_all_gene_expressions(
             const Index len = X.row_length_unsafe(static_cast<Index>(c));
 
             for (Index k = 0; k < len; ++k) {
-                Index gene = indices[k];
+                Index gene = indices.ptr[k];
                 if (gene < n_genes) {
-                    gene_expr[static_cast<Size>(gene) * N + c] = static_cast<Real>(values[k]);
+                    gene_expr[static_cast<Size>(gene) * N + c] = static_cast<Real>(values.ptr[k]);
                 }
             }
         });
@@ -487,9 +487,9 @@ SCL_HOT void extract_all_gene_expressions(
 
             Real* row = gene_expr + g * N;
             for (Index k = 0; k < len; ++k) {
-                Index c = indices[k];
+                Index c = indices.ptr[k];
                 if (c < n_cells) {
-                    row[c] = static_cast<Real>(values[k]);
+                    row[c] = static_cast<Real>(values.ptr[k]);
                 }
             }
         });
@@ -1122,15 +1122,15 @@ void module_eigengene(
     scl::threading::parallel_for(Size(0), M, [&](size_t m) {
         Index gene = module_gene_idx[m];
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             for (Index c = 0; c < n_cells; ++c) {
                 auto indices = expression.row_indices_unsafe(c);
                 auto values = expression.row_values_unsafe(c);
                 const Index len = expression.row_length_unsafe(c);
 
                 for (Index k = 0; k < len; ++k) {
-                    if (indices[k] == gene) {
-                        module_expr[static_cast<Size>(c) * M + m] = static_cast<Real>(values[k]);
+                    if (indices.ptr[k] == gene) {
+                        module_expr[static_cast<Size>(c) * M + m] = static_cast<Real>(values.ptr[k]);
                         break;
                     }
                 }
@@ -1141,9 +1141,9 @@ void module_eigengene(
             const Index len = expression.col_length_unsafe(gene);
 
             for (Index k = 0; k < len; ++k) {
-                Index c = indices[k];
+                Index c = indices.ptr[k];
                 if (c < n_cells) {
-                    module_expr[static_cast<Size>(c) * M + m] = static_cast<Real>(values[k]);
+                    module_expr[static_cast<Size>(c) * M + m] = static_cast<Real>(values.ptr[k]);
                 }
             }
         }

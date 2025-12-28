@@ -79,18 +79,36 @@ parse_args() {
 # 提取错误文件列表
 extract_error_files() {
     local log_file=$1
+    local project_root
+    project_root="$(pwd)"
     
     # 提取带有 error: 的文件
     grep -oE '[a-zA-Z0-9_/.-]+\.(hpp|cpp|h|cc):[0-9]+:[0-9]+: error:' "$log_file" 2>/dev/null | \
-        cut -d: -f1 | sort -u
+        cut -d: -f1 | \
+        while read -r file; do
+            # 如果是绝对路径，尝试转换为相对路径
+            if [[ "$file" == "$project_root"/* ]]; then
+                echo "${file#$project_root/}"
+            # 如果已经是相对路径且在项目内
+            elif [[ "$file" == scl/* || "$file" == src/* || "$file" == include/* || "$file" == tests/* ]]; then
+                echo "$file"
+            fi
+            # 其他路径（系统头文件）忽略
+        done | \
+        sort -u
 }
 
 # 统计每个文件的错误数
 count_errors_per_file() {
     local log_file=$1
     local file=$2
+    local project_root
+    project_root="$(pwd)"
     
-    grep -c "^${file}:" "$log_file" 2>/dev/null || echo 0
+    # 尝试匹配相对路径或绝对路径
+    local count
+    count=$(grep -cE "(^${file}:|${project_root}/${file}:)" "$log_file" 2>/dev/null || true)
+    echo "${count:-0}"
 }
 
 # 检测错误类型
@@ -141,9 +159,13 @@ detect_error_type() {
 get_error_lines() {
     local log_file=$1
     local file=$2
+    local project_root
+    project_root="$(pwd)"
     
-    grep -oE "^${file}:[0-9]+" "$log_file" 2>/dev/null | \
-        cut -d: -f2 | sort -nu | head -10 | tr '\n' ',' | sed 's/,$//'
+    # 匹配相对路径或绝对路径
+    grep -oE "(^${file}:|${project_root}/${file}:)[0-9]+" "$log_file" 2>/dev/null | \
+        sed -E "s|.*${file}:||" | \
+        sort -nu | head -10 | tr '\n' ',' | sed 's/,$//'
 }
 
 # 生成任务描述
@@ -293,8 +315,39 @@ output_text() {
 
 # 主函数
 main() {
-    local log_file
-    log_file=$(parse_args "$@")
+    # 先解析参数设置全局变量
+    local log_file=""
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -o|--output)
+                OUTPUT_FILE="$2"
+                shift 2
+                ;;
+            -f|--format)
+                OUTPUT_FORMAT="$2"
+                shift 2
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -*)
+                log_error "未知选项: $1"
+                show_help
+                exit 1
+                ;;
+            *)
+                log_file="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    if [[ -z "$log_file" ]]; then
+        log_error "请指定编译日志文件"
+        show_help
+        exit 1
+    fi
     
     if [[ ! -f "$log_file" ]]; then
         log_error "文件不存在: $log_file"

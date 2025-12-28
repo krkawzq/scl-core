@@ -72,15 +72,12 @@ MAX_PARALLEL=6              # 最大并行任务数
 
 EASY_MODEL="claude-haiku-4-5-20251001"
 EASY_THINK=false
-EASY_MAX_TOKENS=16384
 
 NORMAL_MODEL="claude-sonnet-4-5-20250929"
 NORMAL_THINK=false
-NORMAL_MAX_TOKENS=16384
 
 HARD_MODEL="claude-opus-4-5-20251101"
 HARD_THINK=true             # 启用深度思考
-HARD_MAX_TOKENS=32768
 ```
 
 ## 任务文件格式

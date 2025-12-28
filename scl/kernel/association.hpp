@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <atomic>
+#include <algorithm>
 
 // =============================================================================
 // FILE: scl/kernel/association.hpp
@@ -233,10 +234,10 @@ SCL_FORCE_INLINE Real spearman_correlation(
 // Gene-Peak Correlation
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <typename T, bool IsCSR_RNA, bool IsCSR_ATAC>
 void gene_peak_correlation(
-    const Sparse<T, IsCSR>& rna_expression,
-    const Sparse<T, IsCSR>& atac_accessibility,
+    const Sparse<T, IsCSR_RNA>& rna_expression,
+    const Sparse<T, IsCSR_ATAC>& atac_accessibility,
     Index* gene_indices,
     Index* peak_indices,
     Real* correlations,
@@ -406,14 +407,16 @@ void multimodal_neighbors(
     weight1 /= total_weight;
     weight2 /= total_weight;
 
-    // Create workspace pool for thread-local buffers
-    scl::threading::DualWorkspacePool<Real, Index> pool;
-    pool.init(scl::threading::Scheduler::get_num_threads(), n_cells, n_cells);
+    // Create workspace pools for thread-local buffers
+    scl::threading::WorkspacePool<Real> dists_pool;
+    scl::threading::WorkspacePool<Index> indices_pool;
+    dists_pool.init(scl::threading::Scheduler::get_num_threads(), n_cells);
+    indices_pool.init(scl::threading::Scheduler::get_num_threads(), n_cells);
 
     // Parallel over cells
     scl::threading::parallel_for(Size(0), n_cells, [&](size_t i, size_t thread_rank) {
-        Real* all_dists = pool.get_first(thread_rank);
-        Index* all_indices = pool.get_second(thread_rank);
+        Real* all_dists = dists_pool.get(thread_rank);
+        Index* all_indices = indices_pool.get(thread_rank);
 
         // Compute distances from cell i to all others
         for (Size j = 0; j < n_cells; ++j) {
@@ -460,36 +463,39 @@ void multimodal_neighbors(
 
             // Distance in modality 2
             Real dist2 = Real(0.0);
-            const Index start2_i = modality2.row_indices_unsafe()[i];
-            const Index end2_i = modality2.row_indices_unsafe()[i + 1];
-            const Index start2_j = modality2.row_indices_unsafe()[j];
-            const Index end2_j = modality2.row_indices_unsafe()[j + 1];
+            auto row2_i_vals = modality2.row_values_unsafe(i);
+            auto row2_i_idxs = modality2.row_indices_unsafe(i);
+            Index row2_i_len = modality2.row_length_unsafe(i);
+            
+            auto row2_j_vals = modality2.row_values_unsafe(j);
+            auto row2_j_idxs = modality2.row_indices_unsafe(j);
+            Index row2_j_len = modality2.row_length_unsafe(j);
 
-            Index i2 = start2_i, j2 = start2_j;
-            while (i2 < end2_i && j2 < end2_j) {
-                Index col_i = modality2.col_indices_unsafe()[i2];
-                Index col_j = modality2.col_indices_unsafe()[j2];
+            Index i2 = 0, j2 = 0;
+            while (i2 < row2_i_len && j2 < row2_j_len) {
+                Index col_i = row2_i_idxs.ptr[i2];
+                Index col_j = row2_j_idxs.ptr[j2];
                 if (col_i == col_j) {
-                    Real diff = static_cast<Real>(modality2.values()[i2]) -
-                               static_cast<Real>(modality2.values()[j2]);
+                    Real diff = static_cast<Real>(row2_i_vals.ptr[i2]) -
+                               static_cast<Real>(row2_j_vals.ptr[j2]);
                     dist2 += diff * diff;
                     ++i2; ++j2;
                 } else if (col_i < col_j) {
-                    Real val = static_cast<Real>(modality2.values()[i2]);
+                    Real val = static_cast<Real>(row2_i_vals.ptr[i2]);
                     dist2 += val * val;
                     ++i2;
                 } else {
-                    Real val = static_cast<Real>(modality2.values()[j2]);
+                    Real val = static_cast<Real>(row2_j_vals.ptr[j2]);
                     dist2 += val * val;
                     ++j2;
                 }
             }
-            while (i2 < end2_i) {
-                Real val = static_cast<Real>(modality2.values()[i2++]);
+            while (i2 < row2_i_len) {
+                Real val = static_cast<Real>(row2_i_vals.ptr[i2++]);
                 dist2 += val * val;
             }
-            while (j2 < end2_j) {
-                Real val = static_cast<Real>(modality2.values()[j2++]);
+            while (j2 < row2_j_len) {
+                Real val = static_cast<Real>(row2_j_vals.ptr[j2++]);
                 dist2 += val * val;
             }
 
@@ -498,12 +504,14 @@ void multimodal_neighbors(
             all_indices[j] = static_cast<Index>(j);
         }
 
-        // Find k nearest using VQSort-based partial sort
-        scl::algo::partial_sort(
-            Array<Real>(all_dists, n_cells),
-            Array<Index>(all_indices, n_cells),
-            static_cast<Size>(k)
-        );
+        // Find k nearest by sorting indices by distance
+        // Initialize indices
+        for (Size j = 0; j < n_cells; ++j) {
+            all_indices[j] = static_cast<Index>(j);
+        }
+        // Sort indices by distance (k smallest)
+        std::partial_sort(all_indices, all_indices + k, all_indices + n_cells,
+            [&](Index a, Index b) { return all_dists[a] < all_dists[b]; });
 
         for (Index ki = 0; ki < k; ++ki) {
             neighbor_indices[i * k + ki] = all_indices[ki];

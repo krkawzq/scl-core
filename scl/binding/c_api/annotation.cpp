@@ -6,6 +6,7 @@
 #include "scl/binding/c_api/annotation.h"
 #include "scl/binding/c_api/core/internal.hpp"
 #include "scl/kernel/annotation.hpp"
+#include "scl/kernel/propagation.hpp"
 #include "scl/core/type.hpp"
 #include "scl/core/error.hpp"
 
@@ -339,7 +340,7 @@ scl_error_t scl_annotation_label_propagation(
         if (err != SCL_OK) return err;
 
         wrapper->visit([&](auto& graph) {
-            scl::kernel::annotation::label_propagation(
+            scl::kernel::propagation::label_propagation(
                 graph,
                 scl::Array<const scl::Index>(
                     reinterpret_cast<const scl::Index*>(initial_labels),
