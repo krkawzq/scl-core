@@ -21,6 +21,7 @@
 #   - Build tools (make, ninja)
 #   - Threading backend (OpenMP or TBB)
 #   - HDF5 (optional, for .h5ad support)
+#   - Eigen3 (for testing reference implementation)
 #   - Git
 #
 # =============================================================================
@@ -210,6 +211,25 @@ install_hdf5() {
     print_success "HDF5 installed"
 }
 
+install_test_deps() {
+    print_info "Installing testing dependencies..."
+    
+    case "$PKG_MGR" in
+        apt)
+            $INSTALL_CMD libeigen3-dev
+            ;;
+        dnf|yum)
+            $INSTALL_CMD eigen3-devel
+            ;;
+        pacman)
+            $INSTALL_CMD eigen
+            ;;
+    esac
+    
+    print_success "Testing dependencies installed (Eigen3)"
+    print_info "Catch2 will be fetched by CMake (header-only)"
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -232,6 +252,15 @@ main() {
         install_hdf5
     else
         print_warning "Skipping HDF5"
+    fi
+    
+    # Install test dependencies
+    read -p "Install testing dependencies (Eigen3)? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        install_test_deps
+    else
+        print_warning "Skipping test dependencies"
     fi
     
     # Install threading backend

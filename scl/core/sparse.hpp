@@ -7,6 +7,7 @@
 #include "scl/core/algo.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <numeric>
 #include <span>
@@ -1140,10 +1141,18 @@ struct Sparse {
     [[nodiscard]] TransposeType transpose() const {
         if (!valid()) return {};
 
-        const Index new_pdim = secondary_dim();
-
+        // Transposed dimensions
+        const Index new_rows = IsCSR ? cols_ : rows_;
+        const Index new_cols = IsCSR ? rows_ : cols_;
+        
+        // For CSR->CSC: new primary_dim = new cols = original rows
+        // For CSC->CSR: new primary_dim = new rows = original cols
+        // TransposeType has opposite IsCSR, so its primary_dim is:
+        const Index new_primary_dim = !IsCSR ? new_rows : new_cols;
+        
         // Count nnz per new primary dimension
-        std::vector<Index> new_nnzs(new_pdim, 0);
+        // We're counting over original secondary_dim indices
+        std::vector<Index> new_nnzs(new_primary_dim, 0);
         
         for (Index i = 0; i < primary_dim(); ++i) {
             auto indices = primary_indices(i);
@@ -1154,15 +1163,15 @@ struct Sparse {
 
         // Create transposed matrix
         TransposeType result = TransposeType::create(
-            IsCSR ? cols_ : rows_,
-            IsCSR ? rows_ : cols_,
+            new_rows,
+            new_cols,
             new_nnzs,
             BlockStrategy::adaptive());
             
         if (!result.valid()) return {};
 
         // Fill transposed data with prefetching
-        std::vector<Index> insert_pos(new_pdim, 0);
+        std::vector<Index> insert_pos(new_primary_dim, 0);
         
         for (Index i = 0; i < primary_dim(); ++i) {
             // Prefetch next row if available
@@ -1828,7 +1837,11 @@ private:
                 // Each alias starts with ref_count=1 (one owner: this Sparse instance)
                 for (Index i = row_start; i < row_end; ++i) {
                     if (len[i] > 0) {
-                        reg.create_alias(dp[i], data_buf);
+                        bool alias_ok = reg.create_alias(dp[i], data_buf);
+                        if (!alias_ok) {
+                            cleanup_partial_impl(dp, ip, primary_dim, reg);
+                            return false;
+                        }
                     }
                 }
             } else {
@@ -1851,7 +1864,11 @@ private:
                 // Each alias starts with ref_count=1 (one owner: this Sparse instance)
                 for (Index i = row_start; i < row_end; ++i) {
                     if (len[i] > 0) {
-                        reg.create_alias(ip[i], idx_buf);
+                        bool alias_ok = reg.create_alias(ip[i], idx_buf);
+                        if (!alias_ok) {
+                            cleanup_partial_impl(dp, ip, primary_dim, reg);
+                            return false;
+                        }
                     }
                 }
             } else {

@@ -1,0 +1,62 @@
+{# c_api_function.md.j2 - C API Function Documentation Template #}
+## {{ func.name }}
+
+{% if func.since %}<Badge type="version">{{ func.since }}</Badge> {% endif %}{% if func.status == 'stable' %}<Badge type="status" color="green">Stable</Badge>{% elif func.status == 'beta' %}<Badge type="status" color="yellow">Beta</Badge>{% elif func.status == 'experimental' %}<Badge type="status" color="red">Experimental</Badge>{% elif func.status == 'deprecated' %}<Badge type="status" color="red">Deprecated</Badge>{% endif %}
+
+{{ func.brief }}{% if func.formula %}
+
+$${{ func.formula }}$${% endif %}
+
+{% if func.status == 'deprecated' and func.deprecated_use %}
+<Deprecated since="{{ func.since }}" use="{{ func.deprecated_use }}">
+This function is deprecated and will be removed in a future version.
+</Deprecated>
+
+{% endif %}
+<ApiSignature return-type="{{ func.return_type }}" name="{{ func.name }}">
+{% for param in func.params %}
+  {% if 'const ' in param.type %}<span class="keyword">const</span> {% endif %}<span class="type">{{ param.type | replace('const ', '') }}</span> <span class="param-name">{{ param.name }}</span>{% if not loop.last %},{% endif %}
+
+{% endfor %}
+</ApiSignature>
+
+### Parameters
+
+<ParamTable :params="[
+{% for param in func.params %}
+  { name: '{{ param.name }}', type: '{{ param.type }}', dir: '{{ param.direction }}', description: '{{ param.description }}'{% if param.nullable %}, required: false{% endif %}{% if param.default %}, default: '{{ param.default }}'{% endif %} }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+]" />
+
+### Returns
+
+`{{ func.return_type }}` — `SCL_OK` on success, error code otherwise.
+
+### Errors
+
+| Code | Condition |
+|------|-----------|
+{% for err in func.errors %}
+| `{{ err.code }}` | {{ err.condition }} |
+{% endfor %}
+
+### Thread Safety
+
+{% if func.thread_safety == 'safe' %}<Badge color="green">Thread Safe</Badge> This function is safe to call from multiple threads.{% elif func.thread_safety == 'unsafe' %}<Badge color="red">Not Thread Safe</Badge> This function modifies data in-place and must not be called concurrently on the same data.{% else %}<Badge color="yellow">Conditionally Safe</Badge> {{ func.thread_safety_note }}{% endif %}
+
+{% if func.time_complexity or func.space_complexity %}
+### Complexity
+
+{% if func.time_complexity %}<Badge type="complexity">Time: {{ func.time_complexity }}</Badge> {% endif %}{% if func.space_complexity %}<Badge type="complexity">Space: {{ func.space_complexity }}</Badge>{% endif %}
+
+{% endif %}
+{% if func.notes %}
+### Notes
+
+{% for note in func.notes %}
+- {{ note }}
+{% endfor %}
+
+{% endif %}
+<SourceLink file="{{ func.source_file }}" :line="{{ func.source_line }}" />

@@ -2,21 +2,53 @@ import DefaultTheme from 'vitepress/theme'
 import type { Theme } from 'vitepress'
 import './style.css'
 
-// Import custom components
-import ApiSignature from '../components/ApiSignature.vue'
-import ParamTable from '../components/ParamTable.vue'
-import AlgoCard from '../components/AlgoCard.vue'
-import ComplexityBadge from '../components/ComplexityBadge.vue'
-import SourceLink from '../components/SourceLink.vue'
+// Base components
+import Badge from '../components/base/Badge.vue'
+import Callout from '../components/base/Callout.vue'
+import CodeTabs from '../components/base/CodeTabs.vue'
+
+// API components
+import ApiSignature from '../components/api/ApiSignature.vue'
+import ParamTable from '../components/api/ParamTable.vue'
+import SupportMatrix from '../components/api/SupportMatrix.vue'
+
+// Content components
+import AlgoCard from '../components/content/AlgoCard.vue'
+import Steps from '../components/content/Steps.vue'
+import Step from '../components/content/Step.vue'
+
+// Navigation components
+import SeeAlso from '../components/nav/SeeAlso.vue'
+
+// Meta components
+import SourceLink from '../components/meta/SourceLink.vue'
+import Since from '../components/meta/Since.vue'
+import Deprecated from '../components/meta/Deprecated.vue'
 
 export default {
   extends: DefaultTheme,
   enhanceApp({ app }) {
-    // Register global components
+    // Base
+    app.component('Badge', Badge)
+    app.component('Callout', Callout)
+    app.component('CodeTabs', CodeTabs)
+
+    // API
     app.component('ApiSignature', ApiSignature)
     app.component('ParamTable', ParamTable)
+    app.component('SupportMatrix', SupportMatrix)
+
+    // Content
     app.component('AlgoCard', AlgoCard)
-    app.component('ComplexityBadge', ComplexityBadge)
+    app.component('Steps', Steps)
+    app.component('Step', Step)
+
+    // Navigation
+    app.component('SeeAlso', SeeAlso)
+
+    // Meta
     app.component('SourceLink', SourceLink)
+    app.component('Since', Since)
+    app.component('Deprecated', Deprecated)
   }
 } satisfies Theme

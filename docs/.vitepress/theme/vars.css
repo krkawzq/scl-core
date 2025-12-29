@@ -1,0 +1,143 @@
+/* =============================================================================
+ * SCL Core Documentation - CSS Variables
+ * Style: Academic (Scanpy-inspired)
+ * ============================================================================= */
+
+:root {
+  /* Primary colors */
+  --scl-primary: #2563eb;
+  --scl-primary-soft: rgba(37, 99, 235, 0.1);
+  --scl-primary-hover: #1d4ed8;
+
+  /* Type colors (code highlighting) */
+  --scl-type-primitive: #0ea5e9;   /* int, float, bool */
+  --scl-type-container: #10b981;   /* span, vector */
+  --scl-type-template: #f59e0b;    /* T, Alloc */
+  --scl-type-custom: #8b5cf6;      /* custom types */
+  --scl-type-keyword: #ec4899;     /* const, auto */
+
+  /* Direction markers */
+  --scl-dir-in: #22c55e;
+  --scl-dir-in-bg: rgba(34, 197, 94, 0.1);
+  --scl-dir-out: #f59e0b;
+  --scl-dir-out-bg: rgba(245, 158, 11, 0.1);
+  --scl-dir-inout: #8b5cf6;
+  --scl-dir-inout-bg: rgba(139, 92, 246, 0.1);
+
+  /* Callout colors */
+  --scl-callout-info-bg: #eff6ff;
+  --scl-callout-info-border: #3b82f6;
+  --scl-callout-info-text: #1e40af;
+
+  --scl-callout-tip-bg: #f0fdf4;
+  --scl-callout-tip-border: #22c55e;
+  --scl-callout-tip-text: #166534;
+
+  --scl-callout-warning-bg: #fffbeb;
+  --scl-callout-warning-border: #f59e0b;
+  --scl-callout-warning-text: #92400e;
+
+  --scl-callout-danger-bg: #fef2f2;
+  --scl-callout-danger-border: #ef4444;
+  --scl-callout-danger-text: #991b1b;
+
+  --scl-callout-note-bg: #f5f5f5;
+  --scl-callout-note-border: #737373;
+  --scl-callout-note-text: #404040;
+
+  /* Support matrix */
+  --scl-support-yes: #22c55e;
+  --scl-support-partial: #f59e0b;
+  --scl-support-no: #ef4444;
+
+  /* Badge colors */
+  --scl-badge-default-bg: #f3f4f6;
+  --scl-badge-default-text: #374151;
+  --scl-badge-green-bg: #dcfce7;
+  --scl-badge-green-text: #166534;
+  --scl-badge-yellow-bg: #fef9c3;
+  --scl-badge-yellow-text: #854d0e;
+  --scl-badge-red-bg: #fee2e2;
+  --scl-badge-red-text: #991b1b;
+  --scl-badge-blue-bg: #dbeafe;
+  --scl-badge-blue-text: #1e40af;
+  --scl-badge-purple-bg: #f3e8ff;
+  --scl-badge-purple-text: #6b21a8;
+
+  /* Card */
+  --scl-card-bg: #fafafa;
+  --scl-card-border: #e5e7eb;
+  --scl-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --scl-card-hover-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
+
+  /* Border radius */
+  --scl-radius-sm: 4px;
+  --scl-radius-md: 6px;
+  --scl-radius-lg: 8px;
+
+  /* Spacing */
+  --scl-space-1: 4px;
+  --scl-space-2: 8px;
+  --scl-space-3: 12px;
+  --scl-space-4: 16px;
+  --scl-space-5: 20px;
+  --scl-space-6: 24px;
+  --scl-space-8: 32px;
+
+  /* Typography */
+  --scl-font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  --scl-text-xs: 12px;
+  --scl-text-sm: 14px;
+  --scl-text-base: 16px;
+}
+
+/* Dark mode */
+.dark {
+  --scl-primary: #60a5fa;
+  --scl-primary-soft: rgba(96, 165, 250, 0.1);
+  --scl-primary-hover: #93c5fd;
+
+  --scl-type-primitive: #38bdf8;
+  --scl-type-container: #34d399;
+  --scl-type-template: #fbbf24;
+  --scl-type-custom: #a78bfa;
+  --scl-type-keyword: #f472b6;
+
+  --scl-callout-info-bg: rgba(59, 130, 246, 0.15);
+  --scl-callout-info-border: #60a5fa;
+  --scl-callout-info-text: #93c5fd;
+
+  --scl-callout-tip-bg: rgba(34, 197, 94, 0.15);
+  --scl-callout-tip-border: #4ade80;
+  --scl-callout-tip-text: #86efac;
+
+  --scl-callout-warning-bg: rgba(245, 158, 11, 0.15);
+  --scl-callout-warning-border: #fbbf24;
+  --scl-callout-warning-text: #fde68a;
+
+  --scl-callout-danger-bg: rgba(239, 68, 68, 0.15);
+  --scl-callout-danger-border: #f87171;
+  --scl-callout-danger-text: #fca5a5;
+
+  --scl-callout-note-bg: rgba(115, 115, 115, 0.15);
+  --scl-callout-note-border: #a3a3a3;
+  --scl-callout-note-text: #d4d4d4;
+
+  --scl-badge-default-bg: #374151;
+  --scl-badge-default-text: #d1d5db;
+  --scl-badge-green-bg: rgba(34, 197, 94, 0.2);
+  --scl-badge-green-text: #86efac;
+  --scl-badge-yellow-bg: rgba(234, 179, 8, 0.2);
+  --scl-badge-yellow-text: #fde68a;
+  --scl-badge-red-bg: rgba(239, 68, 68, 0.2);
+  --scl-badge-red-text: #fca5a5;
+  --scl-badge-blue-bg: rgba(59, 130, 246, 0.2);
+  --scl-badge-blue-text: #93c5fd;
+  --scl-badge-purple-bg: rgba(139, 92, 246, 0.2);
+  --scl-badge-purple-text: #c4b5fd;
+
+  --scl-card-bg: #1f2937;
+  --scl-card-border: #374151;
+  --scl-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --scl-card-hover-shadow: 0 4px 6px rgba(0, 0, 0, 0.4);
+}

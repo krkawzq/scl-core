@@ -1,0 +1,36 @@
+{# c_api_module.md.j2 - C API Module Documentation Template #}
+---
+title: scl_{{ module.name }}
+description: {{ module.description }}
+---
+
+# scl_{{ module.name }}
+
+{{ module.description }}
+
+## Overview
+
+<SupportMatrix :features="[
+{% for func in module.functions %}
+  { name: '{{ func.name }}', numpy: true, sparse: true, dask: false, gpu: false }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+]" />
+
+---
+
+{% for func in module.functions %}
+{% include 'c_api_function.md.j2' %}
+
+---
+
+{% endfor %}
+
+## See Also
+
+<SeeAlso :links="[
+{% for related in module.related_modules %}
+  { href: '/api/c-api/{{ related }}', text: 'scl_{{ related }}' }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+]" />

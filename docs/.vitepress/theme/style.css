@@ -1,197 +1,627 @@
-/* Custom theme variables */
+/* =============================================================================
+ * SCL Core Documentation - Main Styles
+ * ============================================================================= */
+
+@import './vars.css';
+
+/* Override VitePress brand colors */
 :root {
-  --vp-c-brand-1: #5b8def;
-  --vp-c-brand-2: #3a6bc9;
-  --vp-c-brand-3: #2952a3;
-  --vp-c-brand-soft: rgba(91, 141, 239, 0.14);
-
-  /* API documentation colors */
-  --api-bg: var(--vp-c-bg-soft);
-  --api-border: var(--vp-c-divider);
-  --api-type-color: #5b8def;
-  --api-param-in: #22c55e;
-  --api-param-out: #f59e0b;
-  --api-param-inout: #8b5cf6;
+  --vp-c-brand-1: var(--scl-primary);
+  --vp-c-brand-2: var(--scl-primary-hover);
+  --vp-c-brand-3: #1e40af;
+  --vp-c-brand-soft: var(--scl-primary-soft);
 }
 
-.dark {
-  --api-type-color: #7aa2f7;
-  --api-param-in: #4ade80;
-  --api-param-out: #fbbf24;
-  --api-param-inout: #a78bfa;
+/* =============================================================================
+ * Badge Component
+ * ============================================================================= */
+
+.scl-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--scl-radius-sm);
+  font-size: var(--scl-text-xs);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
-/* API Signature component */
-.api-signature {
-  background: var(--api-bg);
-  border: 1px solid var(--api-border);
-  border-radius: 8px;
-  padding: 16px;
-  margin: 16px 0;
-  overflow-x: auto;
+.scl-badge--default {
+  background: var(--scl-badge-default-bg);
+  color: var(--scl-badge-default-text);
 }
 
-.api-signature pre {
-  margin: 0;
-  background: transparent;
+.scl-badge--green {
+  background: var(--scl-badge-green-bg);
+  color: var(--scl-badge-green-text);
 }
 
-.api-signature code {
-  font-family: var(--vp-font-family-mono);
-  font-size: 14px;
+.scl-badge--yellow {
+  background: var(--scl-badge-yellow-bg);
+  color: var(--scl-badge-yellow-text);
+}
+
+.scl-badge--red {
+  background: var(--scl-badge-red-bg);
+  color: var(--scl-badge-red-text);
+}
+
+.scl-badge--blue {
+  background: var(--scl-badge-blue-bg);
+  color: var(--scl-badge-blue-text);
+}
+
+.scl-badge--purple {
+  background: var(--scl-badge-purple-bg);
+  color: var(--scl-badge-purple-text);
+}
+
+.scl-badge--mono {
+  font-family: var(--scl-font-mono);
+}
+
+/* =============================================================================
+ * Callout Component
+ * ============================================================================= */
+
+.scl-callout {
+  padding: var(--scl-space-4);
+  border-radius: var(--scl-radius-lg);
+  border-left: 4px solid;
+  margin: var(--scl-space-4) 0;
+}
+
+.scl-callout__header {
+  display: flex;
+  align-items: center;
+  gap: var(--scl-space-2);
+  font-weight: 600;
+  margin-bottom: var(--scl-space-2);
+}
+
+.scl-callout__icon {
+  font-size: 1.1em;
+}
+
+.scl-callout__content {
   line-height: 1.6;
 }
 
-.api-signature .type {
-  color: var(--api-type-color);
+.scl-callout__content p:last-child {
+  margin-bottom: 0;
 }
 
-.api-signature .fn-name {
+.scl-callout--info {
+  background: var(--scl-callout-info-bg);
+  border-color: var(--scl-callout-info-border);
+}
+.scl-callout--info .scl-callout__header {
+  color: var(--scl-callout-info-text);
+}
+
+.scl-callout--tip {
+  background: var(--scl-callout-tip-bg);
+  border-color: var(--scl-callout-tip-border);
+}
+.scl-callout--tip .scl-callout__header {
+  color: var(--scl-callout-tip-text);
+}
+
+.scl-callout--warning {
+  background: var(--scl-callout-warning-bg);
+  border-color: var(--scl-callout-warning-border);
+}
+.scl-callout--warning .scl-callout__header {
+  color: var(--scl-callout-warning-text);
+}
+
+.scl-callout--danger {
+  background: var(--scl-callout-danger-bg);
+  border-color: var(--scl-callout-danger-border);
+}
+.scl-callout--danger .scl-callout__header {
+  color: var(--scl-callout-danger-text);
+}
+
+.scl-callout--note {
+  background: var(--scl-callout-note-bg);
+  border-color: var(--scl-callout-note-border);
+}
+.scl-callout--note .scl-callout__header {
+  color: var(--scl-callout-note-text);
+}
+
+/* Collapsible callout */
+.scl-callout--collapsible .scl-callout__header {
+  cursor: pointer;
+  user-select: none;
+}
+
+.scl-callout--collapsible .scl-callout__toggle {
+  margin-left: auto;
+  transition: transform 0.2s;
+}
+
+.scl-callout--collapsed .scl-callout__toggle {
+  transform: rotate(-90deg);
+}
+
+.scl-callout--collapsed .scl-callout__content {
+  display: none;
+}
+
+/* =============================================================================
+ * CodeTabs Component
+ * ============================================================================= */
+
+.scl-code-tabs {
+  margin: var(--scl-space-4) 0;
+  border: 1px solid var(--scl-card-border);
+  border-radius: var(--scl-radius-lg);
+  overflow: hidden;
+}
+
+.scl-code-tabs__header {
+  display: flex;
+  background: var(--scl-card-bg);
+  border-bottom: 1px solid var(--scl-card-border);
+  overflow-x: auto;
+}
+
+.scl-code-tabs__tab {
+  padding: var(--scl-space-2) var(--scl-space-4);
+  font-size: var(--scl-text-sm);
+  font-weight: 500;
+  color: var(--vp-c-text-2);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.scl-code-tabs__tab:hover {
+  color: var(--vp-c-text-1);
+  background: var(--scl-primary-soft);
+}
+
+.scl-code-tabs__tab--active {
+  color: var(--scl-primary);
+  border-bottom-color: var(--scl-primary);
+}
+
+.scl-code-tabs__content {
+  padding: 0;
+}
+
+.scl-code-tabs__panel {
+  display: none;
+}
+
+.scl-code-tabs__panel--active {
+  display: block;
+}
+
+.scl-code-tabs__panel > div:first-child {
+  margin: 0;
+  border-radius: 0;
+  border: none;
+}
+
+/* =============================================================================
+ * API Signature Component (Enhanced)
+ * ============================================================================= */
+
+.scl-api-signature {
+  position: relative;
+  background: var(--scl-card-bg);
+  border: 1px solid var(--scl-card-border);
+  border-radius: var(--scl-radius-lg);
+  padding: var(--scl-space-4);
+  margin: var(--scl-space-4) 0;
+  overflow-x: auto;
+}
+
+.scl-api-signature__copy {
+  position: absolute;
+  top: var(--scl-space-2);
+  right: var(--scl-space-2);
+  padding: var(--scl-space-1) var(--scl-space-2);
+  font-size: var(--scl-text-xs);
+  color: var(--vp-c-text-3);
+  background: transparent;
+  border: 1px solid var(--scl-card-border);
+  border-radius: var(--scl-radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
+.scl-api-signature:hover .scl-api-signature__copy {
+  opacity: 1;
+}
+
+.scl-api-signature__copy:hover {
+  color: var(--vp-c-text-1);
+  border-color: var(--scl-primary);
+}
+
+.scl-api-signature__deprecated {
+  position: absolute;
+  top: var(--scl-space-2);
+  right: var(--scl-space-2);
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: white;
+  background: var(--scl-badge-red-text);
+  border-radius: var(--scl-radius-sm);
+}
+
+.scl-api-signature pre {
+  margin: 0;
+  background: transparent;
+  font-family: var(--scl-font-mono);
+  font-size: var(--scl-text-sm);
+  line-height: 1.6;
+}
+
+.scl-api-signature .template {
+  color: var(--vp-c-text-3);
+}
+
+.scl-api-signature .keyword {
+  color: var(--scl-type-keyword);
+}
+
+.scl-api-signature .type {
+  color: var(--scl-type-primitive);
+}
+
+.scl-api-signature .container-type {
+  color: var(--scl-type-container);
+}
+
+.scl-api-signature .template-type {
+  color: var(--scl-type-template);
+}
+
+.scl-api-signature .fn-name {
   color: var(--vp-c-text-1);
   font-weight: 600;
 }
 
-.api-signature .param-name {
+.scl-api-signature .param-name {
   color: var(--vp-c-text-2);
 }
 
-/* Parameter Table */
-.param-table {
+.scl-api-signature .default-value {
+  color: var(--vp-c-text-3);
+}
+
+/* =============================================================================
+ * Parameter Table Component (Enhanced)
+ * ============================================================================= */
+
+.scl-param-table {
   width: 100%;
   border-collapse: collapse;
-  margin: 16px 0;
-  font-size: 14px;
+  margin: var(--scl-space-4) 0;
+  font-size: var(--scl-text-sm);
 }
 
-.param-table th,
-.param-table td {
-  padding: 10px 12px;
+.scl-param-table th,
+.scl-param-table td {
+  padding: var(--scl-space-3);
   text-align: left;
-  border-bottom: 1px solid var(--api-border);
+  border-bottom: 1px solid var(--scl-card-border);
 }
 
-.param-table th {
-  background: var(--api-bg);
+.scl-param-table th {
+  background: var(--scl-card-bg);
   font-weight: 600;
   color: var(--vp-c-text-1);
+  font-size: var(--scl-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
-.param-table td:first-child {
-  font-family: var(--vp-font-family-mono);
+.scl-param-table__name {
+  font-family: var(--scl-font-mono);
   font-weight: 500;
 }
 
-.param-table .dir-badge {
+.scl-param-table__name .required {
+  color: var(--scl-support-no);
+  margin-left: 2px;
+}
+
+.scl-param-table__type {
+  font-family: var(--scl-font-mono);
+  color: var(--scl-type-primitive);
+}
+
+.scl-param-table__dir {
   display: inline-block;
   padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 11px;
+  border-radius: var(--scl-radius-sm);
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
 }
 
-.param-table .dir-in {
-  background: rgba(34, 197, 94, 0.15);
-  color: var(--api-param-in);
+.scl-param-table__dir--in {
+  background: var(--scl-dir-in-bg);
+  color: var(--scl-dir-in);
 }
 
-.param-table .dir-out {
-  background: rgba(245, 158, 11, 0.15);
-  color: var(--api-param-out);
+.scl-param-table__dir--out {
+  background: var(--scl-dir-out-bg);
+  color: var(--scl-dir-out);
 }
 
-.param-table .dir-inout {
-  background: rgba(139, 92, 246, 0.15);
-  color: var(--api-param-inout);
+.scl-param-table__dir--inout {
+  background: var(--scl-dir-inout-bg);
+  color: var(--scl-dir-inout);
 }
 
-/* Algorithm Card */
-.algo-card {
-  background: var(--api-bg);
-  border: 1px solid var(--api-border);
-  border-radius: 8px;
-  padding: 20px;
-  margin: 16px 0;
+.scl-param-table__default {
+  display: block;
+  margin-top: var(--scl-space-1);
+  font-size: var(--scl-text-xs);
+  color: var(--vp-c-text-3);
 }
 
-.algo-card-title {
-  font-size: 16px;
+.scl-param-table__default code {
+  font-family: var(--scl-font-mono);
+  background: var(--scl-card-bg);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+/* =============================================================================
+ * Support Matrix Component
+ * ============================================================================= */
+
+.scl-support-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--scl-space-4) 0;
+  font-size: var(--scl-text-sm);
+}
+
+.scl-support-matrix th,
+.scl-support-matrix td {
+  padding: var(--scl-space-2) var(--scl-space-3);
+  text-align: center;
+  border: 1px solid var(--scl-card-border);
+}
+
+.scl-support-matrix th {
+  background: var(--scl-card-bg);
   font-weight: 600;
-  margin-bottom: 12px;
-  color: var(--vp-c-text-1);
+  font-size: var(--scl-text-xs);
+}
+
+.scl-support-matrix th:first-child,
+.scl-support-matrix td:first-child {
+  text-align: left;
+  font-family: var(--scl-font-mono);
+}
+
+.scl-support-matrix__yes {
+  color: var(--scl-support-yes);
+}
+
+.scl-support-matrix__partial {
+  color: var(--scl-support-partial);
+}
+
+.scl-support-matrix__no {
+  color: var(--scl-support-no);
+}
+
+/* =============================================================================
+ * Algorithm Card Component (Enhanced)
+ * ============================================================================= */
+
+.scl-algo-card {
+  background: var(--scl-card-bg);
+  border: 1px solid var(--scl-card-border);
+  border-radius: var(--scl-radius-lg);
+  padding: var(--scl-space-5);
+  margin: var(--scl-space-4) 0;
+}
+
+.scl-algo-card__header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--scl-space-2);
+  margin-bottom: var(--scl-space-4);
 }
 
-.algo-card-title::before {
-  content: '📐';
+.scl-algo-card__icon {
+  font-size: 1.25em;
 }
 
-.algo-card-content {
+.scl-algo-card__title {
+  font-size: var(--scl-text-base);
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+  margin: 0;
+}
+
+.scl-algo-card__formula {
+  background: var(--vp-c-bg);
+  padding: var(--scl-space-3);
+  border-radius: var(--scl-radius-md);
+  margin-bottom: var(--scl-space-3);
+  overflow-x: auto;
+}
+
+.scl-algo-card__description {
   color: var(--vp-c-text-2);
   line-height: 1.7;
 }
 
-.algo-card-content .math {
-  margin: 12px 0;
-  padding: 12px;
-  background: var(--vp-c-bg);
-  border-radius: 4px;
-  overflow-x: auto;
+.scl-algo-card__complexity {
+  display: flex;
+  gap: var(--scl-space-2);
+  margin-top: var(--scl-space-3);
 }
 
-/* Complexity Badge */
-.complexity-badge {
+.scl-algo-card__references {
+  margin-top: var(--scl-space-3);
+  padding-top: var(--scl-space-3);
+  border-top: 1px solid var(--scl-card-border);
+  font-size: var(--scl-text-xs);
+  color: var(--vp-c-text-3);
+}
+
+/* =============================================================================
+ * Steps Component
+ * ============================================================================= */
+
+.scl-steps {
+  margin: var(--scl-space-4) 0;
+  padding-left: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.scl-step {
+  position: relative;
+  padding-left: 40px;
+  padding-bottom: var(--scl-space-4);
+}
+
+.scl-step::before {
+  content: counter(step);
+  counter-increment: step;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 28px;
+  height: 28px;
+  background: var(--scl-primary);
+  color: white;
+  border-radius: 50%;
+  font-size: var(--scl-text-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scl-step::after {
+  content: '';
+  position: absolute;
+  left: 13px;
+  top: 32px;
+  bottom: 0;
+  width: 2px;
+  background: var(--scl-card-border);
+}
+
+.scl-step:last-child::after {
+  display: none;
+}
+
+.scl-step__title {
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+  margin-bottom: var(--scl-space-2);
+}
+
+.scl-step__content {
+  color: var(--vp-c-text-2);
+  line-height: 1.6;
+}
+
+/* =============================================================================
+ * Source Link Component (Enhanced)
+ * ============================================================================= */
+
+.scl-source-link {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-family: var(--vp-font-family-mono);
-  background: var(--api-bg);
-  border: 1px solid var(--api-border);
-}
-
-.complexity-badge.time::before {
-  content: '⏱️';
-}
-
-.complexity-badge.space::before {
-  content: '💾';
-}
-
-/* Source Link */
-.source-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  gap: var(--scl-space-1);
+  font-size: var(--scl-text-xs);
+  font-family: var(--scl-font-mono);
   color: var(--vp-c-text-3);
   text-decoration: none;
   transition: color 0.2s;
 }
 
-.source-link:hover {
-  color: var(--vp-c-brand-1);
+.scl-source-link:hover {
+  color: var(--scl-primary);
 }
 
-.source-link::before {
-  content: '📄';
+.scl-source-link__icon {
+  width: 14px;
+  height: 14px;
 }
 
-/* Utility classes */
-.required {
-  color: #ef4444;
+/* =============================================================================
+ * See Also Component
+ * ============================================================================= */
+
+.scl-see-also {
+  margin: var(--scl-space-4) 0;
+  padding: var(--scl-space-3);
+  background: var(--scl-card-bg);
+  border-radius: var(--scl-radius-md);
 }
 
-.optional {
+.scl-see-also__title {
+  font-size: var(--scl-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   color: var(--vp-c-text-3);
-  font-style: italic;
+  margin-bottom: var(--scl-space-2);
 }
 
-.deprecated {
+.scl-see-also__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--scl-space-2);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.scl-see-also__item a {
+  display: inline-block;
+  padding: var(--scl-space-1) var(--scl-space-2);
+  font-size: var(--scl-text-sm);
+  color: var(--scl-primary);
+  background: var(--scl-primary-soft);
+  border-radius: var(--scl-radius-sm);
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.scl-see-also__item a:hover {
+  background: var(--scl-primary);
+  color: white;
+}
+
+/* =============================================================================
+ * Utility Classes
+ * ============================================================================= */
+
+.scl-mono {
+  font-family: var(--scl-font-mono);
+}
+
+.scl-required {
+  color: var(--scl-support-no);
+}
+
+.scl-deprecated {
   text-decoration: line-through;
   opacity: 0.6;
 }

@@ -1,0 +1,95 @@
+{
+  "batch 1": [
+    "algebra.h",
+    "alignment.h",
+    "annotation.h",
+    "association.h"
+  ],
+  "batch 2": [
+    "bbknn.h",
+    "centrality.h",
+    "clonotype.h",
+    "coexpression.h"
+  ],
+  "batch 3": [
+    "communication.h",
+    "comparison.h",
+    "components.h",
+    "correlation.h"
+  ],
+  "batch 4": [
+    "diffusion.h",
+    "doublet.h",
+    "enrichment.h",
+    "entropy.h"
+  ],
+  "batch 5": [
+    "feature.h",
+    "gnn.h",
+    "gram.h",
+    "grn.h"
+  ],
+  "batch 6": [
+    "group.h",
+    "hotspot.h",
+    "hvg.h",
+    "impute.h"
+  ],
+  "batch 7": [
+    "kernel.h",
+    "leiden.h",
+    "lineage.h",
+    "log1p.h"
+  ],
+  "batch 8": [
+    "louvain.h",
+    "markers.h",
+    "merge.h",
+    "metrics.h"
+  ],
+  "batch 9": [
+    "mmd.h",
+    "multiple_testing.h",
+    "mwu.h",
+    "neighbors.h"
+  ],
+  "batch 10": [
+    "niche.h",
+    "normalize.h",
+    "outlier.h",
+    "permutation.h"
+  ],
+  "batch 11": [
+    "projection.h",
+    "propagation.h",
+    "pseudotime.h",
+    "qc.h"
+  ],
+  "batch 12": [
+    "reorder.h",
+    "resample.h",
+    "sampling.h",
+    "scale.h"
+  ],
+  "batch 13": [
+    "scoring.h",
+    "slice.h",
+    "softmax.h",
+    "sparse_kernel.h"
+  ],
+  "batch 14": [
+    "sparse_opt.h",
+    "spatial.h",
+    "spatial_pattern.h",
+    "state.h"
+  ],
+  "batch 15": [
+    "subpopulation.h",
+    "tissue.h",
+    "transition.h",
+    "ttest.h"
+  ],
+  "batch 16": [
+    "velocity.h"
+  ]
+}

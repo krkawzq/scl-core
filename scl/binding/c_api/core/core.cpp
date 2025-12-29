@@ -43,7 +43,8 @@ thread_local std::array<char, ERROR_MESSAGE_BUFFER_SIZE> g_last_error_message = 
 // Set last error with code and message
 // Thread-safe via thread-local storage
 // noexcept guarantee: error reporting must never throw
-SCL_FORCE_INLINE void set_last_error(scl_error_t code, const char* message) noexcept {
+// NOTE: Not inline - must export symbols for Python bindings
+void set_last_error(scl_error_t code, const char* message) noexcept {
     g_last_error_code = code;
     
     if (SCL_LIKELY(message != nullptr)) [[likely]] {
@@ -58,8 +59,8 @@ SCL_FORCE_INLINE void set_last_error(scl_error_t code, const char* message) noex
 
 // Set last error with std::string_view (C++20)
 // Convenience overload for modern C++ code
-SCL_FORCE_INLINE void set_last_error(scl_error_t code, 
-                                     std::string_view message) noexcept {
+// NOTE: Not inline - must export symbols for Python bindings
+void set_last_error(scl_error_t code, std::string_view message) noexcept {
     g_last_error_code = code;
     
     const auto copy_len = std::min(message.size(), 
@@ -69,13 +70,15 @@ SCL_FORCE_INLINE void set_last_error(scl_error_t code,
 }
 
 // Clear error state
-SCL_FORCE_INLINE void clear_last_error() noexcept {
+// NOTE: Not inline - must export symbols for Python bindings
+void clear_last_error() noexcept {
     g_last_error_code = SCL_OK;
     g_last_error_message[0] = '\0';
 }
 
 // Get error message
-SCL_FORCE_INLINE auto get_last_error_message() noexcept -> const char* {
+// NOTE: Not inline - must export symbols for Python bindings
+auto get_last_error_message() noexcept -> const char* {
     if (SCL_LIKELY(g_last_error_message[0] != '\0')) [[likely]] {
         return g_last_error_message.data();
     }
@@ -83,7 +86,8 @@ SCL_FORCE_INLINE auto get_last_error_message() noexcept -> const char* {
 }
 
 // Get error code
-SCL_FORCE_INLINE auto get_last_error_code() noexcept -> scl_error_t {
+// NOTE: Not inline - must export symbols for Python bindings
+auto get_last_error_code() noexcept -> scl_error_t {
     return g_last_error_code;
 }
 

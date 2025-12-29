@@ -96,6 +96,39 @@ else()
     message(WARNING "HDF5 not found. Native h5ad support will be disabled.")
 endif()
 
+# --- 3.4 Eigen3 (For Testing Reference Implementation) ---
+find_package(Eigen3 3.4 QUIET)
+if(Eigen3_FOUND)
+    message(STATUS "Eigen3 found: ${Eigen3_VERSION}")
+else()
+    message(STATUS "Eigen3 not found, will fetch from GitHub")
+    FetchContent_Declare(
+        Eigen3
+        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+        GIT_TAG 3.4.0
+        GIT_SHALLOW TRUE
+    )
+    set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
+    set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(Eigen3)
+endif()
+
+# --- 3.5 Catch2 (For C API Testing) ---
+option(SCL_BUILD_TESTS "Build C API tests" ON)
+if(SCL_BUILD_TESTS)
+    find_package(Catch2 3 QUIET)
+    if(NOT Catch2_FOUND)
+        message(STATUS "Catch2 not found, will fetch from GitHub")
+        FetchContent_Declare(
+            Catch2
+            GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+            GIT_TAG v3.5.2
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(Catch2)
+    endif()
+endif()
+
 # -----------------------------------------------------------------------------
 # 4. Threading Backend Logic
 # -----------------------------------------------------------------------------
@@ -265,7 +298,20 @@ message(STATUS "==========================================")
 message(STATUS "")
 
 # -----------------------------------------------------------------------------
-# 10. Tooling Support (compile_commands.json)
+# 10. C API Tests
+# -----------------------------------------------------------------------------
+option(SCL_BUILD_TESTS "Build C API tests" ON)
+
+if(SCL_BUILD_TESTS)
+    message(STATUS "Configuring C API tests...")
+    enable_testing()
+    add_subdirectory(tests/c_api)
+else()
+    message(STATUS "Tests disabled (SCL_BUILD_TESTS=OFF)")
+endif()
+
+# -----------------------------------------------------------------------------
+# 11. Tooling Support (compile_commands.json)
 # -----------------------------------------------------------------------------
 if(CMAKE_EXPORT_COMPILE_COMMANDS)
     if(NOT WIN32)

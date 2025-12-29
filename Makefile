@@ -55,12 +55,25 @@ compile-cpp: setup-deps
 	@cd $(CMAKE_BUILD_DIR) && ninja -j$$(nproc 2>/dev/null || echo 4)
 	@cd $(CMAKE_BUILD_DIR) && cmake --install .
 
+compile-cpp-debug: setup-deps
+	@mkdir -p build/cmake_debug
+	@cd build/cmake_debug && cmake ../.. -G Ninja -DCMAKE_BUILD_TYPE=Debug
+	@cd build/cmake_debug && ninja -j$$(nproc 2>/dev/null || echo 4)
+	@cd build/cmake_debug && cmake --install .
+
 compile: compile-cpp
+
+compile-debug: compile-cpp-debug
 
 build: compile
 	@echo "Build completed"
 
+build-debug: compile-cpp-debug
+	@echo "Debug build completed"
+
 rebuild: clean build
+
+rebuild-debug: clean build-debug
 
 # =============================================================================
 # Code Quality & Formatting
