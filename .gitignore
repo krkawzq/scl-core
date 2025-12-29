@@ -1,5 +1,6 @@
 # Build directories
 build/
+build*
 _build/
 cmake-build-*/
 
@@ -11,29 +12,50 @@ install_manifest.txt
 *.cmake
 !CMakeLists.txt
 
-# Compile commands (optional - some projects commit this)
-# compile_commands.json
-
-# Compiled binaries
+# Compiled binaries and objects
 *.so
 *.dylib
 *.dll
 *.a
 *.lib
 *.exe
-
-# Note: libs/ directory is for third-party source code, not build artifacts
-
-# Object files
 *.o
 *.obj
 
-# IDE files
+# Test outputs and coverage
+*.gcov
+*.gcda
+*.gcno
+
+# Cache and lock files
+.cache/
+uv.lock
+.pytest_cache/
+.parallel_fix_state/
+.claude.lock*
+.claude_logs/
+forks/
+.claude
+task.json
+compile_commands.json
+
+# IDE/project files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.DS_Store
+Thumbs.db
+
+# Dependencies
+deps/
+third_party/
+node_modules/
+
+# Local vendor dependencies
+libs/*
+!libs/README.md
 
 # Python
 __pycache__/
@@ -42,57 +64,16 @@ __pycache__/
 *.pyd
 .Python
 *.egg-info/
-dist/
 *.egg
-
-# Dependencies (if not using FetchContent)
-deps/
-third_party/
-
-# Local vendor dependencies (optional, downloaded by setup script)
-libs/*
-!libs/README.md
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Test outputs
-*.gcov
-*.gcda
-*.gcno
-
-.cache/
-uv.lock
-.pytest_cache/
-
-
-forks/
-.claude
-
-
-scl_v*/
-
-
-node_modules/
-
-# Parallel fix state
-.parallel_fix_state/
-.claude.lock*
-.claude_logs/
-
-task.json
-build*
-
-
-compile_commands.json
-
+dist/
 .venv/
+
+# Misc project files
 claude.sh
 agent.lock
 
-
+# Project-specific
+scl_v*/
 python/scl/libs/*
-
-# auto generate binding files
 python/scl/_bindings/*
+

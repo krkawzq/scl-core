@@ -1,7 +1,8 @@
 """
 Python ctypes binding generator.
 
-Generates Python modules that wrap C API functions using ctypes.
+Generates Python modules using decorator-based function registration.
+Functions are registered once and can be used with any library variant.
 """
 
 from __future__ import annotations
@@ -19,49 +20,32 @@ from ..parser.c_types import (
     CTypedef,
     CType,
 )
-from ..types import TypeRegistry, CtypesMapper
 from ..config import CodegenConfig
 
 
 class PythonBindingGenerator(Generator):
     """
-    Generator for Python ctypes bindings.
+    Generator for Python ctypes bindings using decorator registration.
 
-    Produces Python modules that:
-    - Load the shared library via _loader
-    - Define function argtypes and restype
-    - Create Python wrapper functions with docstrings
-    - Define enum classes and struct wrappers
+    Produces clean Python modules that:
+    - Register functions via @register decorator
+    - Use string-based type specifications (resolved at runtime)
+    - Support all library variants with a single code definition
     """
 
     def __init__(self, config: CodegenConfig):
-        """
-        Initialize the generator.
-
-        Args:
-            config: Codegen configuration
-        """
+        """Initialize the generator."""
         super().__init__(config)
-
-        # Create type registry with configured precision
-        self.registry = TypeRegistry(
-            real_type=config.types.real_type,
-            index_type=config.types.index_type,
-        )
-        self.mapper = CtypesMapper(self.registry)
 
     def get_output_path(self, parsed: ParsedHeader) -> Path:
         """Get output path for Python binding module."""
-        # Determine relative path within c_api directory
         c_api_dir = self.config.c_api_dir_abs
         try:
             rel_path = parsed.path.relative_to(c_api_dir)
         except ValueError:
             rel_path = Path(parsed.path.name)
 
-        # Convert .h to .py
         py_path = rel_path.with_suffix(".py")
-
         return self.config.python_output_abs / py_path
 
     def generate(self, parsed: ParsedHeader) -> GeneratedFile:
@@ -69,7 +53,6 @@ class PythonBindingGenerator(Generator):
         output_path = self.get_output_path(parsed)
 
         # Determine relative import path for _loader
-        # Count directory depth from output to _bindings root
         try:
             rel_to_bindings = output_path.relative_to(self.config.python_output_abs)
             depth = len(rel_to_bindings.parts) - 1
@@ -81,10 +64,7 @@ class PythonBindingGenerator(Generator):
         else:
             loader_import = "._loader"
 
-        content = self._generate_module(
-            parsed=parsed,
-            loader_import=loader_import,
-        )
+        content = self._generate_module(parsed, loader_import)
 
         return GeneratedFile(
             path=output_path,
@@ -92,25 +72,16 @@ class PythonBindingGenerator(Generator):
             source=parsed.path,
         )
 
-    def _generate_module(
-        self,
-        parsed: ParsedHeader,
-        loader_import: str,
-    ) -> str:
+    def _generate_module(self, parsed: ParsedHeader, loader_import: str) -> str:
         """Generate complete module content."""
         lines = []
 
-        # Header comment
+        # Header
         lines.extend(self._generate_header(parsed))
         lines.append("")
 
         # Imports
         lines.extend(self._generate_imports(loader_import))
-        lines.append("")
-
-        # Library loading
-        lines.append("# Load the native library")
-        lines.append("_lib = get_library()")
         lines.append("")
         lines.append("")
 
@@ -124,7 +95,7 @@ class PythonBindingGenerator(Generator):
                 lines.extend(self._generate_enum(enum))
                 lines.append("")
 
-        # Structs (as opaque types or with fields)
+        # Structs
         structs_to_generate = [s for s in parsed.structs if not s.is_opaque]
         if structs_to_generate:
             lines.append("# " + "=" * 75)
@@ -138,7 +109,7 @@ class PythonBindingGenerator(Generator):
         # Functions
         if parsed.functions:
             lines.append("# " + "=" * 75)
-            lines.append("# Functions")
+            lines.append("# Function Registrations")
             lines.append("# " + "=" * 75)
             lines.append("")
             for func in parsed.functions:
@@ -155,7 +126,7 @@ class PythonBindingGenerator(Generator):
         return "\n".join(lines)
 
     def _generate_header(self, parsed: ParsedHeader) -> list[str]:
-        """Generate module header comment."""
+        """Generate module header."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return [
             '"""',
@@ -166,6 +137,12 @@ class PythonBindingGenerator(Generator):
             f"Generated at: {timestamp}",
             "",
             "DO NOT EDIT - This file is automatically generated.",
+            "",
+            "Usage:",
+            "    from scl._bindings._loader import lib_f64_i64 as lib",
+            f"    from scl._bindings import {parsed.module_name}  # Register functions",
+            "",
+            "    # Now use any function via lib.function_name(...)",
             '"""',
         ]
 
@@ -174,46 +151,12 @@ class PythonBindingGenerator(Generator):
         return [
             "from __future__ import annotations",
             "",
-            "from ctypes import (",
-            "    CFUNCTYPE,",
-            "    POINTER,",
-            "    Structure,",
-            "    c_bool,",
-            "    c_char,",
-            "    c_char_p,",
-            "    c_double,",
-            "    c_float,",
-            "    c_int,",
-            "    c_int8,",
-            "    c_int16,",
-            "    c_int32,",
-            "    c_int64,",
-            "    c_long,",
-            "    c_longlong,",
-            "    c_short,",
-            "    c_size_t,",
-            "    c_ssize_t,",
-            "    c_ubyte,",
-            "    c_uint,",
-            "    c_uint8,",
-            "    c_uint16,",
-            "    c_uint32,",
-            "    c_uint64,",
-            "    c_ulong,",
-            "    c_ulonglong,",
-            "    c_ushort,",
-            "    c_void_p,",
-            "    c_wchar_p,",
-            ")",
-            "from typing import Any, Optional",
-            "",
-            f"from {loader_import} import get_library",
+            f"from {loader_import} import register",
         ]
 
     def _generate_enum(self, enum: CEnum) -> list[str]:
         """Generate enum class definition."""
         lines = []
-
         class_name = self._to_python_class_name(enum.name)
 
         lines.append(f"class {class_name}:")
@@ -234,9 +177,11 @@ class PythonBindingGenerator(Generator):
     def _generate_struct(self, struct: CStruct) -> list[str]:
         """Generate struct class definition."""
         lines = []
-
         class_name = self._to_python_class_name(struct.name)
 
+        # For structs with fields, we need ctypes import
+        lines.append("from ctypes import Structure, POINTER, c_void_p")
+        lines.append("")
         lines.append(f"class {class_name}(Structure):")
         if struct.doc:
             lines.append(f'    """{struct.doc}"""')
@@ -244,8 +189,8 @@ class PythonBindingGenerator(Generator):
         if struct.fields:
             lines.append("    _fields_ = [")
             for field in struct.fields:
-                ctypes_type = self.mapper.map_type(str(field.type))
-                lines.append(f'        ("{field.name}", {ctypes_type}),')
+                # Use string type for now, may need resolution
+                lines.append(f'        ("{field.name}", c_void_p),  # {field.type}')
             lines.append("    ]")
         else:
             lines.append("    pass")
@@ -253,31 +198,45 @@ class PythonBindingGenerator(Generator):
         return lines
 
     def _generate_function(self, func: CFunction) -> list[str]:
-        """Generate function binding."""
+        """Generate function registration using decorator."""
         lines = []
 
-        # C signature as comment
-        c_sig = self._format_c_signature(func)
-        lines.append(f"# C: {c_sig}")
+        # Build argtypes list as strings
+        argtypes = [self._format_c_type(str(p.type)) for p in func.parameters]
+        argtypes_str = ", ".join(f'"{t}"' for t in argtypes)
+        
+        # Return type
+        restype = self._format_c_type(str(func.return_type))
 
-        # Set argtypes
-        argtypes = self._get_argtypes(func)
-        lines.append(f"_lib.{func.name}.argtypes = [{', '.join(argtypes)}]")
+        # Build docstring
+        doc_lines = []
+        if func.doc:
+            doc_lines.append(func.doc)
+            doc_lines.append("")
+        
+        doc_lines.append("Args:")
+        for param in func.parameters:
+            doc_lines.append(f"    {param.name}: {param.type}")
+        doc_lines.append("")
+        doc_lines.append("Returns:")
+        doc_lines.append(f"    {func.return_type}")
+        
+        doc_str = "\\n".join(doc_lines)
 
-        # Set restype
-        restype = self.mapper.map_return_type(str(func.return_type))
-        lines.append(f"_lib.{func.name}.restype = {restype}")
-
-        lines.append("")
-
-        # Python wrapper function
+        # Generate decorator and placeholder function
+        lines.append("@register(")
+        lines.append(f'    "{func.name}",')
+        lines.append(f"    argtypes=[{argtypes_str}],")
+        lines.append(f'    restype="{restype}",')
+        lines.append(f'    doc="{doc_str}",')
+        lines.append(")")
+        
+        # Generate parameter signature for documentation
         param_names = [p.name for p in func.parameters]
         params_str = ", ".join(param_names) if param_names else ""
-
+        
         lines.append(f"def {func.name}({params_str}):")
-
-        # Docstring
-        lines.append('    """')
+        lines.append(f'    """')
         if func.doc:
             lines.append(f"    {func.doc}")
             lines.append("")
@@ -287,11 +246,11 @@ class PythonBindingGenerator(Generator):
         lines.append("")
         lines.append("    Returns:")
         lines.append(f"        {func.return_type}")
+        lines.append("")
+        lines.append(f"    Note:")
+        lines.append(f"        Call via lib.{func.name}() where lib is a Library instance.")
         lines.append('    """')
-
-        # Function body
-        call_args = ", ".join(param_names)
-        lines.append(f"    return _lib.{func.name}({call_args})")
+        lines.append("    pass  # Implementation provided by native library")
 
         return lines
 
@@ -317,30 +276,15 @@ class PythonBindingGenerator(Generator):
 
         return lines
 
-    def _get_argtypes(self, func: CFunction) -> list[str]:
-        """Get ctypes argtypes for function parameters."""
-        return [
-            self.mapper.map_type(str(p.type))
-            for p in func.parameters
-        ]
-
-    def _format_c_signature(self, func: CFunction) -> str:
-        """Format C function signature for comment."""
-        params = ", ".join(
-            f"{p.type} {p.name}" for p in func.parameters
-        )
-        return f"{func.return_type} {func.name}({params})"
+    def _format_c_type(self, type_str: str) -> str:
+        """Format C type string for registration (keep as-is for runtime resolution)."""
+        return type_str.strip()
 
     def _to_python_class_name(self, name: str) -> str:
         """Convert C type name to Python class name."""
-        # Remove common prefixes
         if name.startswith("scl_"):
             name = name[4:]
-
-        # Remove _t suffix
         if name.endswith("_t"):
             name = name[:-2]
-
-        # Convert to PascalCase
         parts = name.split("_")
         return "".join(p.capitalize() for p in parts)

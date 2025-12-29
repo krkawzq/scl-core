@@ -5,6 +5,7 @@ Supports:
 - TOML configuration files
 - CLI argument overrides
 - Environment variable fallbacks
+- Multi-variant library configuration
 """
 
 from __future__ import annotations
@@ -24,6 +25,86 @@ else:
         tomllib = None
 
 
+# =============================================================================
+# Type Variants Configuration
+# =============================================================================
+
+# Supported real types: float16, float32, float64
+REAL_TYPES = ["float16", "float32", "float64"]
+
+# Supported index types: int16, int32, int64
+INDEX_TYPES = ["int16", "int32", "int64"]
+
+# Mapping from type name to ctypes type
+CTYPES_REAL_MAP = {
+    "float16": "c_uint16",  # No native float16 in ctypes, use uint16 for storage
+    "float32": "c_float",
+    "float64": "c_double",
+}
+
+CTYPES_INDEX_MAP = {
+    "int16": "c_int16",
+    "int32": "c_int32",
+    "int64": "c_int64",
+}
+
+# Mapping from type name to numpy dtype
+NUMPY_REAL_MAP = {
+    "float16": "np.float16",
+    "float32": "np.float32",
+    "float64": "np.float64",
+}
+
+NUMPY_INDEX_MAP = {
+    "int16": "np.int16",
+    "int32": "np.int32",
+    "int64": "np.int64",
+}
+
+
+@dataclass
+class LibraryVariant:
+    """Represents a single library variant."""
+    
+    real_type: str  # float16 | float32 | float64
+    index_type: str  # int16 | int32 | int64
+    
+    @property
+    def suffix(self) -> str:
+        """Get library suffix (e.g., 'f64_i64')."""
+        real_suffix = self.real_type.replace("float", "f")
+        index_suffix = self.index_type.replace("int", "i")
+        return f"{real_suffix}_{index_suffix}"
+    
+    @property
+    def ctypes_real(self) -> str:
+        """Get ctypes type for real values."""
+        return CTYPES_REAL_MAP[self.real_type]
+    
+    @property
+    def ctypes_index(self) -> str:
+        """Get ctypes type for index values."""
+        return CTYPES_INDEX_MAP[self.index_type]
+    
+    @property
+    def numpy_real(self) -> str:
+        """Get numpy dtype for real values."""
+        return NUMPY_REAL_MAP[self.real_type]
+    
+    @property
+    def numpy_index(self) -> str:
+        """Get numpy dtype for index values."""
+        return NUMPY_INDEX_MAP[self.index_type]
+    
+    def __hash__(self):
+        return hash((self.real_type, self.index_type))
+    
+    def __eq__(self, other):
+        if not isinstance(other, LibraryVariant):
+            return False
+        return self.real_type == other.real_type and self.index_type == other.index_type
+
+
 @dataclass
 class PathsConfig:
     """Path configuration."""
@@ -31,15 +112,36 @@ class PathsConfig:
     c_api_dir: Path = field(default_factory=lambda: Path("scl/binding/c_api"))
     python_output: Path = field(default_factory=lambda: Path("python/scl/_bindings"))
     docs_output: Path = field(default_factory=lambda: Path("docs/api/c-api"))
+    libs_dir: Path = field(default_factory=lambda: Path("python/scl/libs"))
     core_headers: list[str] = field(default_factory=lambda: ["core/core.h"])
 
 
 @dataclass
-class TypesConfig:
-    """Type configuration matching compile-time settings."""
-
-    real_type: str = "float64"   # float32 | float64
-    index_type: str = "int64"    # int16 | int32 | int64
+class VariantsConfig:
+    """Library variants configuration."""
+    
+    # List of enabled variants
+    variants: list[LibraryVariant] = field(default_factory=lambda: [
+        LibraryVariant("float32", "int32"),
+        LibraryVariant("float64", "int64"),
+        LibraryVariant("float32", "int64"),
+        LibraryVariant("float64", "int32"),
+    ])
+    
+    # Default variant to use
+    default_variant: str = "f64_i64"
+    
+    @property
+    def variant_suffixes(self) -> list[str]:
+        """Get list of variant suffixes."""
+        return [v.suffix for v in self.variants]
+    
+    def get_variant(self, suffix: str) -> Optional[LibraryVariant]:
+        """Get variant by suffix."""
+        for v in self.variants:
+            if v.suffix == suffix:
+                return v
+        return None
 
 
 @dataclass
@@ -57,7 +159,7 @@ class CodegenConfig:
 
     project_root: Path = field(default_factory=Path.cwd)
     paths: PathsConfig = field(default_factory=PathsConfig)
-    types: TypesConfig = field(default_factory=TypesConfig)
+    variants: VariantsConfig = field(default_factory=VariantsConfig)
     generation: GenerationConfig = field(default_factory=GenerationConfig)
 
     def __post_init__(self):
@@ -83,19 +185,35 @@ class CodegenConfig:
     def _from_dict(cls, data: dict, base_path: Path) -> "CodegenConfig":
         """Create config from dictionary."""
         paths_data = data.get("paths", {})
-        types_data = data.get("types", {})
+        variants_data = data.get("variants", {})
         gen_data = data.get("generation", {})
 
         paths = PathsConfig(
             c_api_dir=Path(paths_data.get("c_api_dir", "scl/binding/c_api")),
             python_output=Path(paths_data.get("python_output", "python/scl/_bindings")),
             docs_output=Path(paths_data.get("docs_output", "docs/api/c-api")),
+            libs_dir=Path(paths_data.get("libs_dir", "python/scl/libs")),
             core_headers=paths_data.get("core_headers", ["core/core.h"]),
         )
 
-        types = TypesConfig(
-            real_type=types_data.get("real_type", "float64"),
-            index_type=types_data.get("index_type", "int64"),
+        # Parse variants
+        variant_list = []
+        for v_str in variants_data.get("enabled", ["f32_i32", "f64_i64", "f32_i64", "f64_i32"]):
+            # Parse suffix like "f32_i64" to real_type and index_type
+            parts = v_str.split("_")
+            if len(parts) == 2:
+                real_type = parts[0].replace("f", "float")
+                index_type = parts[1].replace("i", "int")
+                variant_list.append(LibraryVariant(real_type, index_type))
+        
+        variants = VariantsConfig(
+            variants=variant_list if variant_list else [
+                LibraryVariant("float32", "int32"),
+                LibraryVariant("float64", "int64"),
+                LibraryVariant("float32", "int64"),
+                LibraryVariant("float64", "int32"),
+            ],
+            default_variant=variants_data.get("default", "f64_i64"),
         )
 
         generation = GenerationConfig(
@@ -107,7 +225,7 @@ class CodegenConfig:
         return cls(
             project_root=base_path,
             paths=paths,
-            types=types,
+            variants=variants,
             generation=generation,
         )
 
@@ -163,3 +281,8 @@ class CodegenConfig:
     def docs_output_abs(self) -> Path:
         """Absolute path to docs output directory."""
         return self.resolve_path(self.paths.docs_output)
+    
+    @property
+    def libs_dir_abs(self) -> Path:
+        """Absolute path to libs directory."""
+        return self.resolve_path(self.paths.libs_dir)
