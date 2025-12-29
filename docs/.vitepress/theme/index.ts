@@ -11,6 +11,7 @@ import CodeTabs from '../components/base/CodeTabs.vue'
 import ApiSignature from '../components/api/ApiSignature.vue'
 import ParamTable from '../components/api/ParamTable.vue'
 import SupportMatrix from '../components/api/SupportMatrix.vue'
+import ApiFunctionRenderer from '../components/api/ApiFunctionRenderer.vue'
 
 // Content components
 import AlgoCard from '../components/content/AlgoCard.vue'
@@ -19,6 +20,7 @@ import Step from '../components/content/Step.vue'
 
 // Navigation components
 import SeeAlso from '../components/nav/SeeAlso.vue'
+import ModuleNav from '../components/nav/ModuleNav.vue'
 
 // Meta components
 import SourceLink from '../components/meta/SourceLink.vue'
@@ -37,6 +39,7 @@ export default {
     app.component('ApiSignature', ApiSignature)
     app.component('ParamTable', ParamTable)
     app.component('SupportMatrix', SupportMatrix)
+    app.component('ApiFunctionRenderer', ApiFunctionRenderer)
 
     // Content
     app.component('AlgoCard', AlgoCard)
@@ -45,6 +48,7 @@ export default {
 
     // Navigation
     app.component('SeeAlso', SeeAlso)
+    app.component('ModuleNav', ModuleNav)
 
     // Meta
     app.component('SourceLink', SourceLink)

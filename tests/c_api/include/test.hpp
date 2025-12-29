@@ -7,27 +7,27 @@
 // Single include for all test utilities.
 //
 // Components:
-//   - core.hpp   : Test registration, runner, assertions, reporters
-//   - guard.hpp  : RAII wrappers for C API handles
-//   - oracle.hpp : Eigen reference implementation and verification
-//   - data.hpp   : Random and structured test data generators
+//   - core.hpp      : Test registration, runner, assertions, reporters
+//   - guard.hpp     : RAII wrappers for C API handles
+//   - oracle.hpp    : Eigen reference implementation and verification
+//   - data.hpp      : Random and structured test data generators
+//   - precision.hpp : Numerical precision comparison utilities
+//   - blas.hpp      : BLAS reference implementation (optional)
 //
 // Usage:
 //   #include "test.hpp"
 //
 //   SCL_TEST_BEGIN
 //
-//   SCL_TEST_UNIT(my_test) {
-//       auto mat = scl::test::fixture::medium_sparse();
-//       auto csr = scl::test::from_eigen_csr(mat);
+//   SCL_TEST_RETRY(my_test, 5) {  // Retry 5 times
+//       Random rng(42);
+//       auto mat = random_sparse_random_shape(10, 100, 0.01, 0.1, rng);
 //       
-//       scl::test::Sparse result;
-//       SCL_ASSERT_EQ(scl_sparse_transpose(csr.get(), result.ptr()), SCL_OK);
+//       // Test implementation...
 //       
-//       auto eigen_result = scl::test::to_eigen_csr(result);
-//       auto expected = scl::test::oracle::transpose_csr_to_csc(mat);
-//       
-//       SCL_ASSERT_TRUE(scl::test::matrices_equal(eigen_result, expected));
+//       // Compare with reference
+//       using precision::Tolerance;
+//       SCL_ASSERT_TRUE(matrices_equal(result, expected, Tolerance::normal()));
 //   }
 //
 //   SCL_TEST_END
@@ -44,5 +44,12 @@
 // Eigen reference implementation
 #include "oracle.hpp"
 
-// Test data generators
+// Test data generators (with random shapes)
 #include "data.hpp"
+
+// Numerical precision comparison
+#include "precision.hpp"
+
+// BLAS reference (optional, needs libblas)
+// Uncomment if BLAS is available:
+// #include "blas.hpp"

@@ -192,6 +192,26 @@ inline Sparse make_sparse_csr(
     return mat;
 }
 
+/// Create CSC sparse matrix
+inline Sparse make_sparse_csc(
+    scl_index_t rows, scl_index_t cols, scl_index_t nnz,
+    const scl_index_t* indptr,
+    const scl_index_t* indices,
+    const scl_real_t* data
+) {
+    Sparse mat;
+    scl_error_t err = scl_sparse_create(
+        mat.ptr(), rows, cols, nnz,
+        indptr, indices, data, SCL_FALSE  // CSC
+    );
+    if (err != SCL_OK) {
+        throw std::runtime_error(
+            std::string("Failed to create sparse matrix: ") + scl_get_last_error()
+        );
+    }
+    return mat;
+}
+
 /// Create sparse matrix with strategy
 inline Sparse make_sparse_csr_with_strategy(
     scl_index_t rows, scl_index_t cols, scl_index_t nnz,

@@ -90,6 +90,11 @@
 #include <utility>
 #include <vector>
 
+// SCL C API - need for scl_clear_error()
+extern "C" {
+#include "scl/binding/c_api/core/core.h"
+}
+
 #if defined(__unix__) || defined(__APPLE__)
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -2216,11 +2221,18 @@ private:
         
         reporter_->on_test_start(test);
         
+        // Clear error state before each test to prevent state pollution
+        // This ensures each test starts with a clean error state
+        scl_clear_error();
+        
         // Run with retries
         int max_retries = std::max(test.retry_count, cfg_.retry_count);
         
         for (int attempt = 0; attempt <= max_retries; ++attempt) {
             result.retry_attempt = attempt;
+            
+            // Clear error state before each retry attempt
+            scl_clear_error();
             
             auto t0 = std::chrono::steady_clock::now();
             
