@@ -1,6 +1,5 @@
 #pragma once
 
-#include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/math/approx/stats.hpp"
@@ -8,10 +7,12 @@
 #include <cmath>
 
 // =============================================================================
-// Approximate T-Test Statistics (Approximate)
+// FILE: scl/math/approx/ttest.hpp
+// BRIEF: Approximate T-Test Statistics
+// =============================================================================
+
 // Student's t and Welch's t with fast p-value approximation
 // DF > 30: normal approximation, DF <= 30: sigmoid heuristic
-// =============================================================================
 
 namespace scl::math::approx::ttest {
 

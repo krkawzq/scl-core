@@ -8,10 +8,12 @@
 #include <cmath>
 
 // =============================================================================
-// Mann-Whitney U Test Statistics (Precise Implementation)
+// FILE: scl/math/mwu.hpp
+// BRIEF: Mann-Whitney U Test Statistics (Precise Implementation)
+// =============================================================================
+
 // Uses normal approximation with tie correction for p-value computation
 // For approximate version, see scl/math/approx/mwu.hpp
-// =============================================================================
 
 namespace scl::math::mwu {
 

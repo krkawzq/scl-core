@@ -89,3 +89,5 @@ compile_commands.json
 
 .venv
 .clangd
+claude.sh
+agent.lock

@@ -5,7 +5,6 @@
 #include "scl/core/macros.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/scheduler.hpp"
 
 #include <cmath>
 #include <array>
@@ -39,8 +38,8 @@ SCL_FORCE_INLINE void solve_sym_3x3_static(
                a02 * (a01 * a12 - a11 * a02);
 
     // Regularization
-    if (std::abs(det) < 1e-12) det = 1e-12;
-    Real inv_det = 1.0 / det;
+    if (std::abs(det) < Real(1e-12)) det = Real(1e-12);
+    auto inv_det = Real(1.0) / det;
 
     x[0] = inv_det * (
         (a11 * a22 - a12 * a12) * b[0] +
@@ -70,9 +69,9 @@ SCL_FORCE_INLINE void solve_linear_system_generic(
 ) {
     // Forward elimination
     for (int i = 0; i < N; ++i) {
-        Real div = 1.0 / A[i][i];
+        auto div = 1.0 / A[i][i];
         for (int j = i + 1; j < N; ++j) {
-            Real factor = A[j][i] * div;
+            auto factor = A[j][i] * div;
             for (int k = i; k < N; ++k) {
                 A[j][k] -= factor * A[i][k];
             }
@@ -104,8 +103,8 @@ SCL_FORCE_INLINE Real poly_eval(const Real* coeffs, Real x) {
 // Tricube weight function for LOESS
 SCL_FORCE_INLINE Real tricube_weight(Real dist) {
     Real a = std::abs(dist);
-    if (a >= 1.0) return 0.0;
-    Real tmp = 1.0 - a * a * a;
+    if (a >= Real(1.0)) return Real(0.0);
+    Real tmp = Real(1.0) - a * a * a;
     return tmp * tmp * tmp;
 }
 
@@ -123,9 +122,9 @@ SCL_FORCE_INLINE void accumulate_matrices_deg2_simd(
     Real* sums
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
+    auto d = s::SimdTagFor<Real>();
     const size_t N = x.len;
-    const size_t lanes = s::lanes();
+    const size_t lanes = s::Lanes(d);
 
     auto v_s0 = s::Zero(d);
     auto v_s1 = s::Zero(d);
@@ -175,9 +174,9 @@ SCL_FORCE_INLINE void accumulate_matrices_deg2_simd(
 
     // Scalar tail
     for (; i < N; ++i) {
-        Real xi = x[i];
-        Real yi = y[i];
-        Real wi = has_weights ? w[i] : 1.0;
+        Real xi = x[static_cast<Index>(i)];
+        Real yi = y[static_cast<Index>(i)];
+        Real wi = has_weights ? w[static_cast<Index>(i)] : Real(1.0);
 
         Real xi2 = xi * xi;
         Real xi3 = xi2 * xi;
@@ -210,17 +209,21 @@ void poly_fit(
                   "PolyFit: coeffs buffer too small");
 
     if constexpr (DEGREE == 2) {
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Real sums[8] = {0};
-        accumulate_matrices_deg2_simd(x, y, weights, sums);
+        accumulate_matrices_deg2_simd(x, y, weights, std::data(sums));
 
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Real A_sym[6] = {
             sums[0], sums[1], sums[2],
             sums[2], sums[3], sums[4]
         };
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Real B[3] = { sums[5], sums[6], sums[7] };
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Real X[3];
 
-        detail::solve_sym_3x3_static(A_sym, B, X);
+        detail::solve_sym_3x3_static(std::data(A_sym), std::data(B), std::data(X));
 
         coeffs[0] = X[0];
         coeffs[1] = X[1];
@@ -228,7 +231,7 @@ void poly_fit(
 
         // Evaluate fitted values in parallel
         scl::threading::parallel_for(0, x.len, [&](size_t i) {
-            fitted[i] = detail::poly_eval<3>(X, x[i]);
+            fitted[static_cast<Index>(i)] = detail::poly_eval<3>(std::data(X), x[static_cast<Index>(i)]);
         });
     }
     else {
@@ -251,9 +254,9 @@ SCL_FORCE_INLINE void accumulate_loess_window_simd(
     Real* sums
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
+    auto d = s::SimdTagFor<Real>();
     const size_t N = x.len;
-    const size_t lanes = s::lanes();
+    const size_t lanes = s::Lanes(d);
 
     auto v_s0 = s::Zero(d);
     auto v_s1 = s::Zero(d);
@@ -266,7 +269,7 @@ SCL_FORCE_INLINE void accumulate_loess_window_simd(
     auto v_sy2 = s::Zero(d);
 
     const auto v_target = s::Set(d, target_x);
-    const auto v_inv_max = s::Set(d, (max_dist > 1e-9) ? (1.0 / max_dist) : 0.0);
+    const auto v_inv_max = s::Set(d, (max_dist > Real(1e-9)) ? (Real(1.0) / max_dist) : Real(0.0));
     const auto v_one = s::Set(d, 1.0);
 
     size_t i = 0;
@@ -313,14 +316,14 @@ SCL_FORCE_INLINE void accumulate_loess_window_simd(
     sums[7] = s::GetLane(s::SumOfLanes(d, v_sy2));
 
     // Scalar tail
-    Real inv_max = (max_dist > 1e-9) ? (1.0 / max_dist) : 0.0;
+    Real inv_max = (max_dist > Real(1e-9)) ? (Real(1.0) / max_dist) : Real(0.0);
     for (; i < N; ++i) {
-        Real xi = x[i];
+        Real xi = x[static_cast<Index>(i)];
         Real dist = std::abs(xi - target_x);
         if (dist >= max_dist) continue;
 
         Real norm = dist * inv_max;
-        Real t = 1.0 - norm * norm * norm;
+        Real t = Real(1.0) - norm * norm * norm;
         Real w = t * t * t;
 
         Real xi2 = xi * xi;
@@ -330,7 +333,7 @@ SCL_FORCE_INLINE void accumulate_loess_window_simd(
         sums[3] += xi2 * xi * w;
         sums[4] += xi2 * xi2 * w;
 
-        Real yw = y[i] * w;
+        Real yw = y[static_cast<Index>(i)] * w;
         sums[5] += yw;
         sums[6] += xi * yw;
         sums[7] += xi2 * yw;
@@ -352,10 +355,10 @@ void loess(
     SCL_CHECK_DIM(fitted.len == x.len, "LOESS: fitted buffer size mismatch");
 
     const Size n = x.len;
-    const Size k = static_cast<Size>(std::ceil(span * n));
+    const Size k = static_cast<Size>(std::ceil(span * static_cast<double>(n)));
 
     scl::threading::parallel_for(0, n, [&](size_t i) {
-        Real target_x = x[i];
+        Real target_x = x[static_cast<Index>(i)];
 
         // Find optimal window
         Size half_k = k / 2;
@@ -369,11 +372,11 @@ void loess(
 
         // Refine window to minimize max distance (exploit sorted X)
         while (true) {
-            Real d_left = std::abs(x[left] - target_x);
-            Real d_right = std::abs(x[right] - target_x);
+            Real d_left = std::abs(x[static_cast<Index>(left)] - target_x);
+            Real d_right = std::abs(x[static_cast<Index>(right)] - target_x);
 
             if (left > 0) {
-                Real d_new = std::abs(x[left - 1] - target_x);
+                Real d_new = std::abs(x[static_cast<Index>(left - 1)] - target_x);
                 if (d_new < d_right) {
                     left--;
                     right--;
@@ -382,7 +385,7 @@ void loess(
             }
 
             if (right < n - 1) {
-                Real d_new = std::abs(x[right + 1] - target_x);
+                Real d_new = std::abs(x[static_cast<Index>(right + 1)] - target_x);
                 if (d_new < d_left) {
                     left++;
                     right++;
@@ -394,8 +397,8 @@ void loess(
         }
 
         // Compute neighborhood radius
-        Real d_left = std::abs(x[left] - target_x);
-        Real d_right = std::abs(x[right] - target_x);
+        Real d_left = std::abs(x[static_cast<Index>(left)] - target_x);
+        Real d_right = std::abs(x[static_cast<Index>(right)] - target_x);
         Real max_dist = (d_left > d_right) ? d_left : d_right;
 
         if (max_dist < 1e-9) max_dist = 1e-9;
@@ -405,17 +408,20 @@ void loess(
         Array<const Real> x_win(x.ptr + left, (right - left + 1));
         Array<const Real> y_win(y.ptr + left, (right - left + 1));
 
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Real sums[8] = {0};
-        detail::accumulate_loess_window_simd(x_win, y_win, target_x, max_dist, sums);
+        detail::accumulate_loess_window_simd(x_win, y_win, target_x, max_dist, std::data(sums));
 
         // Solve local system
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Real A_sym[6] = { sums[0], sums[1], sums[2], sums[2], sums[3], sums[4] };
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Real B[3] = { sums[5], sums[6], sums[7] };
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Real X[3];
-        detail::solve_sym_3x3_static(A_sym, B, X);
-
+        detail::solve_sym_3x3_static(std::data(A_sym), std::data(B), std::data(X));
         // Evaluate at target
-        fitted[i] = detail::poly_eval<3>(X, target_x);
+        fitted[static_cast<Index>(i)] = detail::poly_eval<3>(std::data(X), target_x);
     });
 }
 

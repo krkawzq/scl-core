@@ -1,6 +1,5 @@
 #pragma once
 
-#include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/core/macros.hpp"
 
@@ -68,7 +67,9 @@ namespace s = scl::simd;
 // Lane-wise precise erfc via std::erfc
 template <class D, class V>
 SCL_FORCE_INLINE V erfc(D d, V x) {
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(64) double buffer_in[s::Lanes(d)];
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(64) double buffer_out[s::Lanes(d)];
 
     s::Store(x, d, buffer_in);
@@ -82,7 +83,9 @@ SCL_FORCE_INLINE V erfc(D d, V x) {
 
 template <class D, class V>
 SCL_FORCE_INLINE V erf(D d, V x) {
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(64) double buffer_in[s::Lanes(d)];
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(64) double buffer_out[s::Lanes(d)];
 
     s::Store(x, d, buffer_in);
@@ -124,7 +127,9 @@ SCL_FORCE_INLINE V normal_pdf(D d, V z) {
 
 template <class D, class V>
 SCL_FORCE_INLINE V normal_logcdf(D d, V z) {
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(64) double buffer_in[s::Lanes(d)];
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(64) double buffer_out[s::Lanes(d)];
 
     s::Store(z, d, buffer_in);
@@ -138,7 +143,9 @@ SCL_FORCE_INLINE V normal_logcdf(D d, V z) {
 
 template <class D, class V>
 SCL_FORCE_INLINE V normal_logsf(D d, V z) {
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(64) double buffer_in[s::Lanes(d)];
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(64) double buffer_out[s::Lanes(d)];
 
     s::Store(z, d, buffer_in);

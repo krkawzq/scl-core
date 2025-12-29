@@ -7,10 +7,12 @@
 #include <cmath>
 
 // =============================================================================
-// Approximate Statistical Distribution Functions
+// FILE: scl/math/approx/stats.hpp
+// BRIEF: Approximate Statistical Distribution Functions
+// =============================================================================
+
 // Abramowitz-Stegun approximation for erfc (~1e-7 precision)
 // For full precision, see scl/math/stats.hpp
-// =============================================================================
 
 namespace scl::math::approx {
 

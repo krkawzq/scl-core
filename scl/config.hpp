@@ -86,6 +86,9 @@
 // Feature Flags (Public API)
 // =============================================================================
 
+// Map backend selection macros (SCL_BACKEND_*) to feature flags (SCL_USE_*)
+// These macros are used throughout the codebase for conditional compilation
+// Note: Only one SCL_USE_* macro will be defined (set to 1) based on the selected backend
 #if defined(SCL_BACKEND_OPENMP)
     #define SCL_USE_OPENMP 1
 #elif defined(SCL_BACKEND_TBB)
@@ -157,6 +160,10 @@ namespace scl::memory {
     // Prefetch configuration
     inline constexpr std::size_t DEFAULT_PREFETCH_DISTANCE = 8;  // Default prefetch ahead distance
     inline constexpr std::size_t DEFAULT_MAX_PREFETCHES = 16;    // Default maximum prefetch count
+    
+    // Stream copy threshold: non-temporal stores only benefit arrays larger than L2 cache
+    // Smaller arrays should use regular memcpy to avoid cache bypass overhead
+    inline constexpr std::size_t STREAM_THRESHOLD = 256ULL * 1024ULL;  // 256KB threshold
 }
 
 // =============================================================================

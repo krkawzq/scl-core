@@ -1,6 +1,5 @@
 #pragma once
 
-#include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/math/approx/stats.hpp"
@@ -8,10 +7,12 @@
 #include <cmath>
 
 // =============================================================================
-// Approximate Mann-Whitney U Test Statistics (Approximate)
+// FILE: scl/math/approx/mwu.hpp
+// BRIEF: Approximate Mann-Whitney U Test Statistics
+// =============================================================================
+
 // Uses approximate erfc approximation and returns inverse SD for faster computation
 // For full precision, see scl/math/mwu.hpp
-// =============================================================================
 
 namespace scl::math::approx::mwu {
 
@@ -32,7 +33,7 @@ SCL_FORCE_INLINE void moments(
     const double denom = N * (N - 1.0);
     const double base = n1 * n2 / 12.0;
 
-    double var;
+    double var{};
     if (denom > 1e-9) {
         var = base * (N + 1.0 - tie_sum / denom);
     } else {
@@ -51,7 +52,7 @@ SCL_FORCE_INLINE void moments(
 SCL_FORCE_INLINE double p_value_two_sided(
     double U, double n1, double n2, double tie_sum, double cc = 0.5
 ) {
-    double mu, inv_sd;
+    double mu{}, inv_sd{};
     detail::moments(n1, n2, tie_sum, mu, inv_sd);
 
     if (inv_sd == 0.0) return 1.0;
@@ -64,7 +65,7 @@ SCL_FORCE_INLINE double p_value_two_sided(
 SCL_FORCE_INLINE double p_value_greater(
     double U, double n1, double n2, double tie_sum, double cc = 0.5
 ) {
-    double mu, inv_sd;
+    double mu{}, inv_sd{};
     detail::moments(n1, n2, tie_sum, mu, inv_sd);
 
     if (inv_sd == 0.0) return (U > mu) ? 0.0 : 1.0;
@@ -76,7 +77,7 @@ SCL_FORCE_INLINE double p_value_greater(
 SCL_FORCE_INLINE double p_value_less(
     double U, double n1, double n2, double tie_sum, double cc = 0.5
 ) {
-    double mu, inv_sd;
+    double mu{}, inv_sd{};
     detail::moments(n1, n2, tie_sum, mu, inv_sd);
 
     if (inv_sd == 0.0) return (U < mu) ? 0.0 : 1.0;
@@ -130,7 +131,7 @@ template <class D, class V>
 SCL_FORCE_INLINE V p_value_two_sided(
     D d, V U, V n1, V n2, V tie_sum, V cc
 ) {
-    V mu, inv_sd;
+    V mu{}, inv_sd{};
     moments(d, n1, n2, tie_sum, mu, inv_sd);
 
     auto abs_diff = s::Abs(s::Sub(U, mu));
@@ -146,7 +147,7 @@ template <class D, class V>
 SCL_FORCE_INLINE V p_value_greater(
     D d, V U, V n1, V n2, V tie_sum, V cc
 ) {
-    V mu, inv_sd;
+    V mu{}, inv_sd{};
     moments(d, n1, n2, tie_sum, mu, inv_sd);
 
     const auto zero = s::Zero(d);
@@ -165,7 +166,7 @@ template <class D, class V>
 SCL_FORCE_INLINE V p_value_less(
     D d, V U, V n1, V n2, V tie_sum, V cc
 ) {
-    V mu, inv_sd;
+    V mu{}, inv_sd{};
     moments(d, n1, n2, tie_sum, mu, inv_sd);
 
     const auto zero = s::Zero(d);
