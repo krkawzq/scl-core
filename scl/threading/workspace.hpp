@@ -4,7 +4,6 @@
 #include "scl/core/type.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/core/memory.hpp"
-#include "scl/threading/scheduler.hpp"
 
 #include <vector>
 #include <cstring>
@@ -94,8 +93,8 @@ public:
         std::memset(get(thread_rank), 0, capacity_ * sizeof(T));
     }
 
-    size_t capacity() const noexcept { return capacity_; }
-    size_t n_threads() const noexcept { return n_threads_; }
+    [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
+    [[nodiscard]] size_t n_threads() const noexcept { return n_threads_; }
 
 private:
     T* data_ = nullptr;
@@ -129,8 +128,8 @@ public:
         pool2_.zero(thread_rank);
     }
 
-    size_t capacity() const noexcept { return pool1_.capacity(); }
-    size_t n_threads() const noexcept { return pool1_.n_threads(); }
+    [[nodiscard]] size_t capacity() const noexcept { return pool1_.capacity(); }
+    [[nodiscard]] size_t n_threads() const noexcept { return pool1_.n_threads(); }
 
 private:
     WorkspacePool<T> pool1_;
@@ -163,7 +162,7 @@ public:
         SCL_FORCE_INLINE const T* begin() const noexcept { return data; }
         SCL_FORCE_INLINE const T* end() const noexcept { return data + size; }
 
-        SCL_FORCE_INLINE bool empty() const noexcept { return size == 0; }
+        [[nodiscard]] SCL_FORCE_INLINE bool empty() const noexcept { return size == 0; }
     };
 
     DynamicWorkspacePool() = default;
@@ -222,8 +221,8 @@ public:
         return buffers_[thread_rank];
     }
 
-    size_t n_threads() const noexcept { return n_threads_; }
-    size_t max_capacity() const noexcept { return max_capacity_; }
+    [[nodiscard]] size_t n_threads() const noexcept { return n_threads_; }
+    [[nodiscard]] size_t max_capacity() const noexcept { return max_capacity_; }
 
 private:
     T* data_ = nullptr;
@@ -277,12 +276,39 @@ public:
     HeapWorkspacePool(const HeapWorkspacePool&) = delete;
     HeapWorkspacePool& operator=(const HeapWorkspacePool&) = delete;
 
+    // Movable
+    HeapWorkspacePool(HeapWorkspacePool&& other) noexcept
+        : data_(other.data_)
+        , buffers_(std::move(other.buffers_))
+        , n_threads_(other.n_threads_)
+        , k_(other.k_) {
+        other.data_ = nullptr;
+        other.n_threads_ = 0;
+        other.k_ = 0;
+    }
+
+    HeapWorkspacePool& operator=(HeapWorkspacePool&& other) noexcept {
+        if (this != &other) {
+            if (data_) {
+                scl::memory::aligned_free(data_, SCL_ALIGNMENT);
+            }
+            data_ = other.data_;
+            buffers_ = std::move(other.buffers_);
+            n_threads_ = other.n_threads_;
+            k_ = other.k_;
+            other.data_ = nullptr;
+            other.n_threads_ = 0;
+            other.k_ = 0;
+        }
+        return *this;
+    }
+
     SCL_FORCE_INLINE HeapBuffer& get(size_t thread_rank) noexcept {
         return buffers_[thread_rank];
     }
 
-    size_t n_threads() const noexcept { return n_threads_; }
-    size_t k() const noexcept { return k_; }
+    [[nodiscard]] size_t n_threads() const noexcept { return n_threads_; }
+    [[nodiscard]] size_t k() const noexcept { return k_; }
 
 private:
     T* data_ = nullptr;
@@ -295,20 +321,70 @@ private:
 // Utility: Get current thread rank in parallel region
 // =============================================================================
 
+#if defined(SCL_USE_OPENMP)
+    #include <omp.h>
+#elif defined(SCL_USE_BS)
+    #include "BS_thread_pool.hpp"
+#elif defined(SCL_USE_TBB)
+    #include <tbb/task_arena.h>
+    #include <tbb/global_control.h>
+#endif
+
+// Forward declaration for BS backend detail namespace
+#if defined(SCL_USE_BS)
+namespace detail {
+    // Global singleton for BS::thread_pool
+    inline BS::thread_pool& get_workspace_pool() {
+        static BS::thread_pool pool;
+        return pool;
+    }
+}
+#endif
+
+// Get current thread rank (0-indexed ID within parallel region)
 SCL_FORCE_INLINE size_t get_thread_rank() noexcept {
 #if defined(SCL_USE_OPENMP)
     return static_cast<size_t>(omp_get_thread_num());
+#elif defined(SCL_USE_TBB)
+    return static_cast<size_t>(tbb::this_task_arena::current_thread_index());
 #else
-    // For BS thread pool or serial mode, caller must track rank
+    // For BS thread pool or serial mode, caller must track rank explicitly
     return 0;
 #endif
 }
 
+// Get number of threads in current parallel region (runtime value)
+// Returns actual thread count for current execution context
 SCL_FORCE_INLINE size_t get_num_threads_runtime() noexcept {
 #if defined(SCL_USE_OPENMP)
-    return static_cast<size_t>(omp_get_num_threads());
+    // OpenMP: Get actual thread count in current parallel region
+    // Returns 1 if called outside parallel region
+    int n = omp_get_num_threads();
+    return (n > 0) ? static_cast<size_t>(n) : 1;
+
+#elif defined(SCL_USE_TBB)
+    // TBB: Get max concurrency of current task arena
+    // Falls back to global control value if not in parallel context
+    int n = tbb::this_task_arena::max_concurrency();
+    if (n > 0) {
+        return static_cast<size_t>(n);
+    }
+    // Fallback to global control value
+    n = tbb::global_control::active_value(tbb::global_control::max_allowed_parallelism);
+    return (n > 0) ? static_cast<size_t>(n) : 1;
+
+#elif defined(SCL_USE_BS)
+    // BS: Get thread count from global pool
+    size_t n = detail::get_workspace_pool().get_thread_count();
+    return (n > 0) ? n : 1;
+
+#elif defined(SCL_USE_SERIAL)
+    // Serial mode: Always single-threaded
+    return 1;
+
 #else
-    return Scheduler::get_num_threads();
+    // Fallback: Single-threaded
+    return 1;
 #endif
 }
 

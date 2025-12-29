@@ -2,7 +2,6 @@
 
 #include "scl/config.hpp"
 #include "scl/core/macros.hpp"
-#include "scl/threading/scheduler.hpp"
 
 #include <cstddef>
 #include <utility>
@@ -20,6 +19,8 @@
     #include <tbb/task_arena.h>
 #elif defined(SCL_USE_OPENMP)
     #include <omp.h>
+#elif defined(SCL_USE_BS)
+    #include "scl/threading/scheduler.hpp"
 #endif
 
 namespace scl::threading {
