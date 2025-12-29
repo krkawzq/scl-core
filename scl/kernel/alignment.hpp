@@ -436,12 +436,12 @@ Real integration_score(
         scl::algo::zero(batch_counts, static_cast<Size>(n_batches));
 
         // Count batches in neighborhood
-        auto row_idxs = neighbors.row_indices_unsafe(i);
-        Index row_len = neighbors.row_length_unsafe(i);
+        auto row_idxs = neighbors.primary_indices_unsafe(static_cast<Index>(i));
+        Index row_len = neighbors.primary_length_unsafe(static_cast<Index>(i));
         Size n_neighbors = static_cast<Size>(row_len);
 
-        for (Index j = 0; j < row_len; ++j) {
-            Index neighbor = row_idxs.ptr[j];
+        for (Size j = 0; j < row_idxs.len; ++j) {
+            Index neighbor = row_idxs[j];
             ++batch_counts[batch_labels.ptr[neighbor]];
         }
 
@@ -504,14 +504,14 @@ void batch_mixing(
         scl::algo::zero(batch_counts, static_cast<Size>(n_batches));
 
         // Count batches in neighborhood
-        auto row_idxs = neighbors.row_indices_unsafe(i);
-        Index row_len = neighbors.row_length_unsafe(i);
+        auto row_idxs = neighbors.primary_indices_unsafe(static_cast<Index>(i));
+        Index row_len = neighbors.primary_length_unsafe(static_cast<Index>(i));
         Size n_neighbors = static_cast<Size>(row_len);
 
         Index my_batch = batch_labels.ptr[i];
 
-        for (Index j = 0; j < row_len; ++j) {
-            Index neighbor = row_idxs.ptr[j];
+        for (Size j = 0; j < row_idxs.len; ++j) {
+            Index neighbor = row_idxs[j];
             ++batch_counts[batch_labels.ptr[neighbor]];
         }
 
@@ -866,12 +866,12 @@ Real kbet_score(
         Size* batch_counts_local = pool.get(thread_rank);
         scl::algo::zero(batch_counts_local, static_cast<Size>(n_batches));
 
-        auto row_idxs = neighbors.row_indices_unsafe(static_cast<Index>(i));
-        Index row_len = neighbors.row_length_unsafe(static_cast<Index>(i));
+        auto row_idxs = neighbors.primary_indices_unsafe(static_cast<Index>(i));
+        Index row_len = neighbors.primary_length_unsafe(static_cast<Index>(i));
         Size k = static_cast<Size>(row_len);
 
-        for (Index j = 0; j < row_len; ++j) {
-            Index neighbor = row_idxs.ptr[j];
+        for (Size j = 0; j < row_idxs.len; ++j) {
+            Index neighbor = row_idxs[j];
             ++batch_counts_local[batch_labels.ptr[neighbor]];
         }
 

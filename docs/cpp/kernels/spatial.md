@@ -1,297 +1,284 @@
-# spatial.hpp
+---
+title: Spatial Analysis
+description: Spatial statistics and neighbor search
+---
 
-> scl/kernel/spatial.hpp · Spatial autocorrelation statistics kernels
+# Spatial Analysis
+
+The `spatial` kernel provides spatial statistics and neighbor search for spatial transcriptomics data, including Moran's I, spatial autocorrelation, and spatial neighbor graphs.
 
 ## Overview
 
-This file provides high-performance spatial autocorrelation statistics for spatial transcriptomics and spatial data analysis. It implements Moran's I and Geary's C statistics with SIMD optimization and nested parallelism for efficient computation on large datasets.
+Spatial analysis is essential for:
+- Spatial transcriptomics data analysis
+- Detecting spatial patterns and gradients
+- Computing spatial autocorrelation
+- Building spatial neighborhood graphs
 
-This file provides:
-- Moran's I spatial autocorrelation statistic
-- Geary's C spatial autocorrelation statistic
-- Weight sum computation for graph matrices
-- SIMD-optimized computation with 8-way unrolling
-- Nested parallelism for large-scale analysis
+All operations are optimized with SIMD and parallelization.
 
-**Header**: `#include "scl/kernel/spatial.hpp"`
+## Functions
 
----
+### Weight Sum
 
-## Main APIs
+#### `weight_sum`
 
-### morans_i
+Compute the sum of all weights in a spatial graph.
 
-::: source_code file="scl/kernel/spatial.hpp" symbol="morans_i" collapsed
-:::
+```cpp
+template <typename T, bool GraphCSR>
+void weight_sum(
+    const Sparse<T, GraphCSR>& graph,
+    T& out_sum
+);
+```
 
-**Algorithm Description**
+**Parameters**:
+- `graph` [in]: Spatial neighbor graph (weights)
+- `out_sum` [out]: Sum of all weights
 
-Compute Moran's I spatial autocorrelation statistic for each feature:
-
-1. **Centering**: For each feature f:
-   - Compute mean: mean = sum(x[f, :]) / n_cells
-   - Center values: z[i] = x[f, i] - mean
-
-2. **Numerator computation**: For each feature f:
-   - Compute weighted neighbor sum: lag[i] = sum_j(w_ij * z[j])
-   - Uses 8-way unrolled loop with prefetch for efficiency
-   - Multi-accumulator pattern for latency hiding
-   - Accumulate: numerator += sum_i(z[i] * lag[i])
-
-3. **Denominator computation**: For each feature f:
-   - denominator = sum_i(z[i]^2)
-
-4. **Moran's I computation**:
-   - I = (N / W) * (numerator / denominator)
-   - Where N = n_cells, W = sum of all weights
-
-5. **Optimization strategies**:
-   - 8-way unrolled weighted neighbor sum with prefetch
-   - Multi-accumulator pattern for FP latency hiding
-   - Nested parallelism for single-feature large-cell case
-   - Block-based parallel reduction
-
-**Edge Cases**
-
-- **Zero variance**: Features with zero variance return I = 0
-- **Zero total weight**: If W = 0, returns I = 0
-- **Empty graph**: Graph with no edges returns I = 0
-- **Constant features**: Features with constant values return I = 0
-
-**Data Guarantees (Preconditions)**
-
-- `graph` must be square: graph.rows() == graph.cols()
-- `features.secondary_dim() == graph.primary_dim()`
-- `output.len == features.primary_dim()`
-- Graph weights should be non-negative (typically row-normalized)
-- Graph must be valid sparse matrix format
-
-**Complexity Analysis**
-
-- **Time**: O(n_features * nnz_graph)
-  - O(nnz_graph) per feature for neighbor sum computation
-  - n_features features processed
-- **Space**: O(n_cells * n_threads) for thread-local z buffers
-  - WorkspacePool allocates buffers per thread
-
-**Example**
-
+**Example**:
 ```cpp
 #include "scl/kernel/spatial.hpp"
 
-// Spatial weights matrix: cells x cells
-Sparse<Real, true> graph = /* ... */;
-Index n_cells = graph.rows();
+CSR spatial_graph = build_spatial_graph(coordinates, radius);
+Real total_weight = Real(0);
+kernel::spatial::weight_sum(spatial_graph, total_weight);
+```
 
-// Feature matrix: features x cells
-Sparse<Real, true> features = /* ... */;
-Index n_features = features.rows();
+### Moran's I
 
-// Pre-allocate output
-Array<Real> morans_i_scores(n_features);
+#### `morans_i`
 
-// Compute Moran's I for all features
-scl::kernel::spatial::morans_i(
-    graph,
-    features,
-    morans_i_scores
+Compute Moran's I statistic for spatial autocorrelation.
+
+```cpp
+template <typename T, bool GraphCSR>
+Real morans_i(
+    const Sparse<T, GraphCSR>& graph,
+    Array<const Real> z,
+    Real z_mean,
+    Real z_var
+);
+```
+
+**Parameters**:
+- `graph` [in]: Spatial neighbor graph (weights)
+- `z` [in]: Values to test (e.g., gene expression)
+- `z_mean` [in]: Mean of z values
+- `z_var` [in]: Variance of z values
+
+**Returns**: Moran's I statistic (range: -1 to 1)
+
+**Mathematical Definition**:
+```
+I = (n/W) * Σᵢ Σⱼ wᵢⱼ(zᵢ - z̄)(zⱼ - z̄) / Σᵢ(zᵢ - z̄)²
+```
+
+where:
+- `n`: Number of cells
+- `W`: Sum of all weights
+- `wᵢⱼ`: Weight between cells i and j
+- `z̄`: Mean of z values
+
+**Example**:
+```cpp
+// Compute Moran's I for a gene
+Array<Real> gene_expression = {expr_ptr, n_cells};
+Real mean = compute_mean(gene_expression);
+Real var = compute_variance(gene_expression, mean);
+
+Real morans_i = kernel::spatial::morans_i(
+    spatial_graph, gene_expression, mean, var
 );
 
-// Interpret results
-for (Index f = 0; f < n_features; ++f) {
-    Real I = morans_i_scores[f];
-    if (I > 0) {
-        // Positive spatial autocorrelation (clustering)
-    } else if (I < 0) {
-        // Negative spatial autocorrelation (dispersion)
-    } else {
-        // Random spatial pattern
+// Interpret: I > 0 = positive autocorrelation (clustering)
+//            I < 0 = negative autocorrelation (dispersion)
+//            I ≈ 0 = no spatial pattern
+```
+
+### Spatial Neighbors
+
+#### `spatial_neighbors`
+
+Build spatial neighbor graph from coordinates.
+
+```cpp
+CSR spatial_neighbors(
+    Array<const Real> coordinates,  // x, y coordinates
+    Index n_cells,
+    Real radius
+);
+```
+
+**Parameters**:
+- `coordinates` [in]: Array of coordinates (length = n_cells * 2, [x0, y0, x1, y1, ...])
+- `n_cells` [in]: Number of cells
+- `radius` [in]: Neighbor search radius
+
+**Returns**: CSR matrix of spatial neighbors (binary or distance-weighted)
+
+**Example**:
+```cpp
+// Coordinates: [x0, y0, x1, y1, ...]
+Array<Real> coords = {coords_ptr, n_cells * 2};
+Real radius = 50.0;  // pixels or units
+
+CSR neighbors = kernel::spatial::spatial_neighbors(
+    coords, n_cells, radius
+);
+```
+
+## Weighted Neighbor Sum
+
+### `compute_weighted_neighbor_sum`
+
+Compute weighted sum of neighbor values (used internally for Moran's I).
+
+```cpp
+template <typename T>
+T compute_weighted_neighbor_sum(
+    const T* weights,
+    const Index* indices,
+    Size len,
+    const T* z
+);
+```
+
+**Optimizations**:
+- SIMD for long arrays (≥ 16 elements)
+- Scalar fallback for short arrays
+- 8-way unrolled loop with prefetching
+- Multi-accumulator pattern
+
+## Common Patterns
+
+### Computing Moran's I for Multiple Genes
+
+```cpp
+void compute_morans_i_batch(
+    const CSR& spatial_graph,
+    const CSR& expression_matrix,
+    Array<Real> morans_i_results
+) {
+    Index n_genes = expression_matrix.cols();
+    
+    // Precompute graph statistics
+    Real total_weight = Real(0);
+    kernel::spatial::weight_sum(spatial_graph, total_weight);
+    
+    // For each gene
+    for (Index g = 0; g < n_genes; ++g) {
+        // Extract gene expression
+        auto gene_expr = expression_matrix.col_values(g);
+        Array<Real> expr_view = {gene_expr.ptr, gene_expr.size};
+        
+        // Compute statistics
+        Real mean = compute_mean(expr_view);
+        Real var = compute_variance(expr_view, mean);
+        
+        // Compute Moran's I
+        morans_i_results[g] = kernel::spatial::morans_i(
+            spatial_graph, expr_view, mean, var
+        );
     }
 }
 ```
 
----
-
-### gearys_c
-
-::: source_code file="scl/kernel/spatial.hpp" symbol="gearys_c" collapsed
-:::
-
-**Algorithm Description**
-
-Compute Geary's C spatial autocorrelation statistic for each feature:
-
-1. **Centering**: For each feature f:
-   - Compute mean and center values: z[i] = x[f, i] - mean
-
-2. **Numerator computation**: For each feature f:
-   - Compute sum of weighted squared differences:
-     numerator = sum_ij(w_ij * (z[i] - z[j])^2)
-   - Uses 8-way unrolled loop with multi-accumulator pattern
-   - Aggressive prefetching for indirect z access
-   - 4-way cleanup loop for remainder
-
-3. **Denominator computation**: For each feature f:
-   - denominator = 2 * W * sum_i(z[i]^2)
-
-4. **Geary's C computation**:
-   - C = (N-1) * numerator / denominator
-
-5. **Optimization strategies**:
-   - 8-way unrolled difference squared with multi-accumulator
-   - Aggressive prefetching for indirect z access
-   - Nested parallelism for single-feature large-cell case
-
-**Edge Cases**
-
-- **Zero variance**: Features with zero variance return C = 0
-- **Zero total weight**: If W = 0, returns C = 0
-- **Empty graph**: Graph with no edges returns C = 0
-- **Constant features**: Features with constant values return C = 0
-
-**Data Guarantees (Preconditions)**
-
-- `graph` must be square: graph.rows() == graph.cols()
-- `features.secondary_dim() == graph.primary_dim()`
-- `output.len == features.primary_dim()`
-- Graph weights should be non-negative
-- Graph must be valid sparse matrix format
-
-**Complexity Analysis**
-
-- **Time**: O(n_features * nnz_graph)
-  - O(nnz_graph) per feature for difference computation
-  - n_features features processed
-- **Space**: O(n_cells * n_threads) for thread-local z buffers
-
-**Example**
+### Building Spatial Graph with Distance Weights
 
 ```cpp
-// Compute Geary's C for all features
-Array<Real> gearys_c_scores(n_features);
-
-scl::kernel::spatial::gearys_c(
-    graph,
-    features,
-    gearys_c_scores
-);
-
-// Interpret results (inverse of Moran's I)
-for (Index f = 0; f < n_features; ++f) {
-    Real C = gearys_c_scores[f];
-    if (C < 1) {
-        // Positive spatial autocorrelation (clustering)
-    } else if (C > 1) {
-        // Negative spatial autocorrelation (dispersion)
-    } else {
-        // Random spatial pattern (C ≈ 1)
+CSR build_weighted_spatial_graph(
+    Array<const Real> coordinates,
+    Index n_cells,
+    Real radius
+) {
+    // Build binary graph first
+    CSR binary_graph = kernel::spatial::spatial_neighbors(
+        coordinates, n_cells, radius
+    );
+    
+    // Convert to distance-weighted
+    CSR weighted_graph = CSR::create(n_cells, n_cells, binary_graph.nnz());
+    
+    for (Index i = 0; i < n_cells; ++i) {
+        auto neighbors = binary_graph.row_indices(i);
+        auto n_neighbors = binary_graph.row_length(i);
+        
+        Real x_i = coordinates[i * 2];
+        Real y_i = coordinates[i * 2 + 1];
+        
+        for (Index k = 0; k < n_neighbors; ++k) {
+            Index j = neighbors[k];
+            Real x_j = coordinates[j * 2];
+            Real y_j = coordinates[j * 2 + 1];
+            
+            // Compute distance
+            Real dx = x_i - x_j;
+            Real dy = y_i - y_j;
+            Real dist = std::sqrt(dx * dx + dy * dy);
+            
+            // Inverse distance weight
+            Real weight = Real(1) / (dist + Real(1e-10));
+            weighted_graph.set(i, j, weight);
+        }
     }
+    
+    return weighted_graph;
 }
 ```
 
----
+## Performance Considerations
 
-### weight_sum
+### Parallelization
 
-::: source_code file="scl/kernel/spatial.hpp" symbol="weight_sum" collapsed
-:::
-
-**Algorithm Description**
-
-Compute sum of all edge weights in a sparse graph:
-
-1. **Parallel partitioning**: Partition rows across threads
-2. **Partial sum computation**: Each thread computes partial sum using SIMD vectorize::sum
-3. **Reduction**: Reduce partial sums to final result
-
-**Edge Cases**
-
-- **Empty graph**: Returns 0 if graph has no edges
-- **Zero weights**: Handles zero-weighted edges correctly
-
-**Data Guarantees (Preconditions)**
-
-- `graph` must be valid sparse matrix
-
-**Complexity Analysis**
-
-- **Time**: O(nnz / n_threads) - parallel reduction
-- **Space**: O(n_threads) for partial sums
-
-**Example**
+Spatial operations are automatically parallelized:
 
 ```cpp
-Real total_weight;
-scl::kernel::spatial::weight_sum(graph, total_weight);
+// Block-wise parallel computation
+constexpr Size CELL_BLOCK_SIZE = 256;
+threading::parallel_for(0, n_cells, [&](size_t i) {
+    // Process cell i
+});
 ```
 
----
+### SIMD Optimization
 
-## Utility Functions
+Weighted neighbor sums use SIMD for long arrays:
 
-### detail::compute_weighted_neighbor_sum
+```cpp
+// SIMD for arrays ≥ 16 elements
+if (len >= SIMD_GATHER_THRESHOLD) {
+    return compute_weighted_neighbor_sum_simd(...);
+} else {
+    return compute_weighted_neighbor_sum_scalar(...);
+}
+```
 
-Internal helper function that computes weighted sum of neighbor values with adaptive optimization.
+### Prefetching
 
-::: source_code file="scl/kernel/spatial.hpp" symbol="detail::compute_weighted_neighbor_sum" collapsed
-:::
+Aggressive prefetching for indirect memory access:
 
-**Complexity**
+```cpp
+// Prefetch ahead for z[indices[k + PREFETCH_DISTANCE]]
+if (k + PREFETCH_DISTANCE < len) {
+    SCL_PREFETCH_READ(&z[indices[k + PREFETCH_DISTANCE]], 0);
+}
+```
 
-- Time: O(len) where len is number of neighbors
-- Space: O(1)
+## Configuration
 
----
+```cpp
+namespace scl::kernel::spatial::config {
+    constexpr Size PREFETCH_DISTANCE = 8;
+    constexpr Size SIMD_GATHER_THRESHOLD = 16;
+    constexpr Size PARALLEL_CELL_THRESHOLD = 1024;
+    constexpr Size CELL_BLOCK_SIZE = 256;
+}
+```
 
-### detail::compute_moran_numer_block
+## Related Documentation
 
-Internal helper function that computes Moran's I numerator for a block of cells.
-
-::: source_code file="scl/kernel/spatial.hpp" symbol="detail::compute_moran_numer_block" collapsed
-:::
-
-**Complexity**
-
-- Time: O(sum of neighbor counts in block)
-- Space: O(1)
-
----
-
-### detail::compute_geary_numer_block
-
-Internal helper function that computes Geary's C numerator for a block of cells.
-
-::: source_code file="scl/kernel/spatial.hpp" symbol="detail::compute_geary_numer_block" collapsed
-:::
-
-**Complexity**
-
-- Time: O(sum of neighbor counts in block)
-- Space: O(1)
-
----
-
-## Notes
-
-**Moran's I vs Geary's C**:
-- Moran's I: Range [-1, 1], positive indicates clustering
-- Geary's C: Range [0, 2], C < 1 indicates clustering
-- Geary's C is inversely related to Moran's I
-- Both measure spatial autocorrelation but with different formulations
-
-**Performance**:
-- SIMD-optimized with 8-way unrolling
-- Multi-accumulator pattern for FP latency hiding
-- Nested parallelism for large-scale analysis
-- WorkspacePool for efficient thread-local storage
-
-**Typical Usage**:
-- Spatial transcriptomics analysis
-- Spatial pattern detection
-- Spatial autocorrelation testing
-- Feature selection based on spatial structure
-
-## See Also
-
-- [Hotspot Detection](/cpp/kernels/hotspot) - Local spatial statistics and hotspot detection
-- [Spatial Pattern](/cpp/kernels/spatial_pattern) - Spatial pattern detection methods
+- [Neighbor Search](./neighbors.md) - General neighbor search
+- [Kernels Overview](./overview.md) - General kernel usage
+- [Sparse Matrices](../core/sparse.md) - Sparse matrix operations

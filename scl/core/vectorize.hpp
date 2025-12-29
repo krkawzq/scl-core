@@ -46,7 +46,8 @@ concept IndexType = std::integral<IdxT>;
 template <Arithmetic T>
 SCL_FORCE_INLINE T sum(Array<T> span) {
     namespace s = scl::simd;
-    using SimdTag = s::SimdTagFor<T>;
+    using ValueType = std::remove_const_t<T>;
+    using SimdTag = s::SimdTagFor<ValueType>;
     const SimdTag d;
     const Size N = span.len;
     const Size lanes = s::Lanes(d);
@@ -75,7 +76,7 @@ SCL_FORCE_INLINE T sum(Array<T> span) {
         sum0 = s::Add(sum0, s::Load(d, span.ptr + i));
     }
     
-    T result = s::GetLane(s::SumOfLanes(d, sum0));
+    std::remove_const_t<T> result = s::GetLane(s::SumOfLanes(d, sum0));
     
     for (; i < N; ++i) {
         result += span[i];

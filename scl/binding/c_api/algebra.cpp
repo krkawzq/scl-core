@@ -248,19 +248,17 @@ SCL_EXPORT scl_error_t scl_algebra_row_sums(
     scl_sparse_t A,
     scl_real_t* sums,
     const scl_size_t sums_size) {
-    
+
     SCL_C_API_CHECK_NULL(A, "Matrix A is null");
     SCL_C_API_CHECK_NULL(sums, "Output sums array is null");
-    
+
     SCL_C_API_TRY
+        Array<Real> sums_arr(reinterpret_cast<Real*>(sums), sums_size);
+
         A->visit([&](auto& matrix) {
-            Array<Real> sums_arr(
-                reinterpret_cast<Real*>(sums),
-                sums_size
-            );
             scl::kernel::algebra::row_sums(matrix, sums_arr);
         });
-        
+
         SCL_C_API_RETURN_OK;
     SCL_C_API_CATCH
 }

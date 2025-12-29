@@ -69,6 +69,9 @@ compile-cython:
 compile: compile-cpp compile-cython
 
 build: compile
+	@echo "Building..."
+	make compile > build.log 2>&1
+	@echo "Build completed"
 
 rebuild: clean build
 

@@ -1,237 +1,306 @@
-# scale.hpp
+---
+title: Scaling and Standardization
+description: Scaling operations with SIMD optimization
+---
 
-> scl/kernel/scale.hpp · Scaling operations for sparse matrices
+# Scaling and Standardization
+
+The `scale` kernel provides efficient scaling and standardization operations for sparse matrices, including z-score normalization and clipping.
 
 ## Overview
 
-This file provides scaling operations for sparse matrices, including standardization (z-score normalization), row scaling, and row shifting. These operations are essential for data preprocessing and normalization.
+Scaling operations are used for:
+- Standardizing features (z-score normalization)
+- Clipping extreme values
+- Preparing data for machine learning algorithms
 
-Key features:
-- Standardization with mean and std
-- Row-wise scaling and shifting
-- SIMD-optimized implementations
-- In-place operations
-- Optional clipping for standardization
+All operations are SIMD-optimized with adaptive algorithms for different data sizes.
 
-**Header**: `#include "scl/kernel/scale.hpp"`
+## Functions
 
----
+### Standardization
 
-## Main APIs
+#### `standardize_primary`
 
-### standardize
+Standardize each row (CSR) or column (CSC) to zero mean and unit variance.
 
-::: source_code file="scl/kernel/scale.hpp" symbol="standardize" collapsed
-:::
+```cpp
+template <typename T, bool IsCSR>
+void standardize_primary(
+    Sparse<T, IsCSR>& matrix,
+    Array<const Real> means,
+    Array<const Real> std_devs,
+    bool zero_center = true,
+    Real max_value = Real(10.0)
+);
+```
 
-**Algorithm Description**
+**Parameters**:
+- `matrix` [in,out]: Matrix to standardize (modified in-place)
+- `means` [in]: Mean values for each row/column
+- `std_devs` [in]: Standard deviations for each row/column
+- `zero_center` [in]: Whether to subtract mean (default: true)
+- `max_value` [in]: Maximum absolute value for clipping (default: 10.0)
 
-Standardize sparse matrix values in-place: (x - mean) / std:
+**Mathematical Operation**: `x → clip((x - μ) / σ, -max_val, max_val)`
 
-1. **For each row i in parallel**:
-   - If `std[i] == 0`: Skip row (unchanged)
-   - Otherwise:
-     - Compute `inv_sigma = 1.0 / std[i]` (replace division with multiplication)
-     - For each non-zero element in row:
-       - If `zero_center`: `value = (value - mean[i]) * inv_sigma`
-       - Else: `value = value * inv_sigma`
-       - If `max_value > 0`: Clip to [-max_value, max_value]
-     - Use adaptive SIMD strategy:
-       - Short rows (< 16): scalar loop
-       - Medium (16-128): 4-way SIMD unroll
-       - Long (>= 128): 8-way SIMD unroll with prefetch
-
-Standardization transforms data to have zero mean and unit variance, making features comparable across different scales.
-
-**Edge Cases**
-
-- **Zero std rows**: Skipped (unchanged)
-- **max_value = 0**: No clipping applied
-- **zero_center = false**: Only scaling, no mean subtraction
-- **Negative values**: Handled correctly (clipped if max_value > 0)
-
-**Data Guarantees (Preconditions)**
-
-- Matrix must be valid CSR or CSC format with mutable values
-- `means.len == matrix.primary_dim()`
-- `stds.len == matrix.primary_dim()`
-- `stds[i] > 0` for rows to be processed (zero std rows are skipped)
-
-**Complexity Analysis**
-
-- **Time**: O(nnz) - single pass through all non-zero elements
-  - Parallelized over primary dimension (rows for CSR)
-  - SIMD acceleration for longer rows
-- **Space**: O(1) auxiliary per thread
-
-**Example**
-
+**Example**:
 ```cpp
 #include "scl/kernel/scale.hpp"
 
-Sparse<Real, true> matrix = /* ... */;
-Array<Real> means(n_rows);
-Array<Real> stds(n_rows);
+// Compute means and standard deviations
+auto means = memory::aligned_alloc<Real>(matrix.rows());
+auto std_devs = memory::aligned_alloc<Real>(matrix.rows());
+Array<Real> means_view = {means.get(), static_cast<Size>(matrix.rows())};
+Array<Real> std_devs_view = {std_devs.get(), static_cast<Size>(matrix.rows())};
 
-// ... compute means and stds ...
+compute_statistics(matrix, means_view, std_devs_view);
 
-Real max_value = 10.0;  // Clip to [-10, 10]
-bool zero_center = true;  // Subtract mean before scaling
-
-scl::kernel::scale::standardize(
-    matrix,
-    means,
-    stds,
-    max_value,
-    zero_center
+// Standardize matrix
+kernel::scale::standardize_primary(
+    matrix, means_view, std_devs_view,
+    true,  // zero_center
+    Real(10.0)  // max_value for clipping
 );
-
-// Each value v transformed to: (v - mean) / std
-// Results clipped to [-max_value, max_value]
 ```
 
----
+**Complexity**: O(nnz) time, O(1) space
 
-### scale_rows
+### Scaling
 
-::: source_code file="scl/kernel/scale.hpp" symbol="scale_rows" collapsed
-:::
+#### `scale_primary`
 
-**Algorithm Description**
-
-Multiply each primary dimension by a corresponding scale factor:
-
-1. **For each row i in parallel**:
-   - If `scales[i] == 1.0`: Skip row (early exit optimization)
-   - Otherwise:
-     - For each non-zero element in row:
-       - `value = value * scales[i]`
-     - Use SIMD 4-way unroll with prefetch for efficiency
-
-Row scaling multiplies all values in a row by a constant factor, useful for normalization or feature weighting.
-
-**Edge Cases**
-
-- **scale = 1.0**: Row unchanged (early exit)
-- **scale = 0.0**: All values become 0
-- **scale < 0**: Values become negative (if originally positive)
-
-**Data Guarantees (Preconditions)**
-
-- Matrix must be valid CSR or CSC format with mutable values
-- `scales.len == matrix.primary_dim()`
-
-**Complexity Analysis**
-
-- **Time**: O(nnz) - single pass through all non-zero elements
-  - Parallelized over primary dimension
-  - Early exit for scale = 1.0 rows
-- **Space**: O(1) auxiliary per thread
-
-**Example**
+Scale each row/column by a factor.
 
 ```cpp
-Array<Real> scales(n_rows);
-// ... set scales, e.g., based on row sums ...
-
-scl::kernel::scale::scale_rows(
-    matrix,
-    scales
+template <typename T, bool IsCSR>
+void scale_primary(
+    Sparse<T, IsCSR>& matrix,
+    Array<const Real> scales
 );
-
-// Each value in row i multiplied by scales[i]
 ```
 
----
+**Parameters**:
+- `matrix` [in,out]: Matrix to scale (modified in-place)
+- `scales` [in]: Scaling factors for each row/column
 
-### shift_rows
+**Example**:
+```cpp
+// Scale each row by its standard deviation
+auto scales = memory::aligned_alloc<Real>(matrix.rows());
+Array<Real> scales_view = {scales.get(), static_cast<Size>(matrix.rows())};
 
-::: source_code file="scl/kernel/scale.hpp" symbol="shift_rows" collapsed
-:::
+for (Index i = 0; i < matrix.rows(); ++i) {
+    Real std_dev = compute_std_dev(matrix, i);
+    scales_view[i] = (std_dev > Real(1e-10)) ? Real(1) / std_dev : Real(0);
+}
 
-**Algorithm Description**
+kernel::scale::scale_primary(matrix, scales_view);
+```
 
-Add a constant offset to each primary dimension:
+## Adaptive Algorithms
 
-1. **For each row i in parallel**:
-   - If `offsets[i] == 0.0`: Skip row (early exit optimization)
-   - Otherwise:
-     - For each non-zero element in row:
-       - `value = value + offsets[i]`
-     - Use SIMD 4-way unroll with prefetch for efficiency
+The scale kernel uses adaptive algorithms based on data size:
 
-Row shifting adds a constant to all values in a row, useful for centering or offsetting data.
+### Short Arrays (≤ 16 elements)
 
-**Edge Cases**
-
-- **offset = 0.0**: Row unchanged (early exit)
-- **Implicit zeros**: Only stored (non-zero) values are shifted
-  - Implicit zeros remain zero (sparse matrix property)
-  - For true shift of all values, matrix must be densified first
-
-**Data Guarantees (Preconditions)**
-
-- Matrix must be valid CSR or CSC format with mutable values
-- `offsets.len == matrix.primary_dim()`
-
-**Complexity Analysis**
-
-- **Time**: O(nnz) - single pass through all non-zero elements
-  - Parallelized over primary dimension
-  - Early exit for offset = 0.0 rows
-- **Space**: O(1) auxiliary per thread
-
-**Example**
+Uses scalar implementation for small arrays:
 
 ```cpp
-Array<Real> offsets(n_rows);
-// ... set offsets, e.g., negative means for centering ...
-
-scl::kernel::scale::shift_rows(
-    matrix,
-    offsets
+// Scalar fallback for short arrays
+void standardize_short(
+    T* vals, Size len,
+    T mu, T inv_sigma,
+    T max_val,
+    bool zero_center, bool do_clip
 );
-
-// Each value in row i increased by offsets[i]
-// Note: Only stored (non-zero) values are shifted
 ```
 
----
+### Medium Arrays (17-128 elements)
 
-## Notes
+Uses SIMD with 4-way unrolling:
 
-**SIMD Optimization**
+```cpp
+// SIMD with 4-way unrolling
+void standardize_medium(
+    T* vals, Size len,
+    T mu, T inv_sigma,
+    T max_val,
+    bool zero_center, bool do_clip
+);
+```
 
-All functions use adaptive SIMD strategies:
-- Short rows: scalar loop (no SIMD overhead)
-- Medium rows: 4-way SIMD unroll
-- Long rows: 8-way SIMD unroll with prefetch
+### Long Arrays (> 128 elements)
 
-**In-Place Operations**
+Uses SIMD with 8-way unrolling and prefetching:
 
-All functions modify the matrix in-place:
-- Matrix structure (indices, indptr) unchanged
-- Only values are modified
-- Memory efficient (no copies)
+```cpp
+// SIMD with 8-way unrolling and prefetching
+void standardize_long(
+    T* vals, Size len,
+    T mu, T inv_sigma,
+    T max_val,
+    bool zero_center, bool do_clip
+);
+```
 
-**Numerical Considerations**
+## Common Patterns
 
-- **Division avoidance**: Uses `inv_sigma = 1/std` to replace division with multiplication
-- **Early exits**: Skips rows with scale=1 or offset=0 for efficiency
-- **Zero std handling**: Rows with std=0 are skipped in standardization
+### Z-Score Normalization
 
-**Use Cases**
+```cpp
+void z_score_normalize(CSR& matrix) {
+    Index n_rows = matrix.rows();
+    
+    // Compute means
+    auto means = memory::aligned_alloc<Real>(n_rows);
+    Array<Real> means_view = {means.get(), static_cast<Size>(n_rows)};
+    kernel::normalize::compute_row_sums(matrix, means_view);
+    
+    // Compute row lengths for mean
+    for (Index i = 0; i < n_rows; ++i) {
+        Index len = matrix.row_length(i);
+        if (len > 0) {
+            means_view[i] /= static_cast<Real>(len);
+        }
+    }
+    
+    // Compute standard deviations
+    auto std_devs = memory::aligned_alloc<Real>(n_rows);
+    Array<Real> std_devs_view = {std_devs.get(), static_cast<Size>(n_rows)};
+    
+    for (Index i = 0; i < n_rows; ++i) {
+        Real mean = means_view[i];
+        Real sum_sq = Real(0);
+        auto values = matrix.row_values(i);
+        Index len = matrix.row_length(i);
+        
+        for (Index k = 0; k < len; ++k) {
+            Real diff = static_cast<Real>(values[k]) - mean;
+            sum_sq += diff * diff;
+        }
+        
+        Real var = (len > 1) ? sum_sq / static_cast<Real>(len - 1) : Real(0);
+        std_devs_view[i] = std::sqrt(var);
+    }
+    
+    // Standardize
+    kernel::scale::standardize_primary(
+        matrix, means_view, std_devs_view,
+        true,   // zero_center
+        Real(10.0)  // clip at ±10
+    );
+}
+```
 
-- **Standardization**: Normalize features to zero mean, unit variance
-- **Scaling**: Normalize by row sums or other factors
-- **Centering**: Shift data to zero mean
-- **Feature weighting**: Apply different scales to different features
+### Min-Max Scaling
 
-**Thread Safety**
+```cpp
+void min_max_scale(CSR& matrix, Real min_val, Real max_val) {
+    Index n_rows = matrix.rows();
+    
+    // Find min and max per row
+    auto mins = memory::aligned_alloc<Real>(n_rows);
+    auto maxs = memory::aligned_alloc<Real>(n_rows);
+    Array<Real> mins_view = {mins.get(), static_cast<Size>(n_rows)};
+    Array<Real> maxs_view = {maxs.get(), static_cast<Size>(n_rows)};
+    
+    for (Index i = 0; i < n_rows; ++i) {
+        auto values = matrix.row_values(i);
+        Index len = matrix.row_length(i);
+        
+        if (len == 0) {
+            mins_view[i] = Real(0);
+            maxs_view[i] = Real(0);
+            continue;
+        }
+        
+        Real row_min = static_cast<Real>(values[0]);
+        Real row_max = static_cast<Real>(values[0]);
+        
+        for (Index k = 1; k < len; ++k) {
+            Real val = static_cast<Real>(values[k]);
+            row_min = std::min(row_min, val);
+            row_max = std::max(row_max, val);
+        }
+        
+        mins_view[i] = row_min;
+        maxs_view[i] = row_max;
+    }
+    
+    // Scale to [min_val, max_val]
+    auto scales = memory::aligned_alloc<Real>(n_rows);
+    auto offsets = memory::aligned_alloc<Real>(n_rows);
+    Array<Real> scales_view = {scales.get(), static_cast<Size>(n_rows)};
+    Array<Real> offsets_view = {offsets.get(), static_cast<Size>(n_rows)};
+    
+    for (Index i = 0; i < n_rows; ++i) {
+        Real range = maxs_view[i] - mins_view[i];
+        if (range > Real(1e-10)) {
+            scales_view[i] = (max_val - min_val) / range;
+            offsets_view[i] = min_val - mins_view[i] * scales_view[i];
+        } else {
+            scales_view[i] = Real(1);
+            offsets_view[i] = Real(0);
+        }
+    }
+    
+    // Apply scaling
+    kernel::scale::scale_primary(matrix, scales_view);
+    // Note: Adding offsets requires a separate operation
+}
+```
 
-All functions are thread-safe and parallelized over primary dimension (rows for CSR, columns for CSC).
+## Performance Considerations
 
-## See Also
+### SIMD Optimization
 
-- [Normalize](/cpp/kernels/normalize) - Normalization operations
-- [Statistics](/cpp/kernels/statistics) - Statistical analysis
+All operations use SIMD for vectorized computation:
+
+```cpp
+// SIMD-accelerated standardization
+namespace s = scl::simd;
+auto v = s::Load(d, vals + k);
+if (zero_center) v = s::Sub(v, v_mu);
+v = s::Mul(v, v_inv_sigma);
+if (do_clip) v = s::Min(s::Max(v, v_min), v_max);
+s::Store(v, d, vals + k);
+```
+
+### Adaptive Thresholds
+
+Algorithm selection based on array length:
+
+```cpp
+namespace config {
+    constexpr Size SHORT_THRESHOLD = 16;   // Use scalar
+    constexpr Size MEDIUM_THRESHOLD = 128;  // Use 4-way SIMD
+    // > 128: Use 8-way SIMD with prefetching
+}
+```
+
+### Prefetching
+
+Prefetching reduces memory latency for long arrays:
+
+```cpp
+if (k + PREFETCH_DISTANCE < len) {
+    SCL_PREFETCH_READ(vals + k + PREFETCH_DISTANCE, 0);
+}
+```
+
+## Configuration
+
+```cpp
+namespace scl::kernel::scale::config {
+    constexpr Size SHORT_THRESHOLD = 16;
+    constexpr Size MEDIUM_THRESHOLD = 128;
+    constexpr Size PREFETCH_DISTANCE = 16;
+}
+```
+
+## Related Documentation
+
+- [Normalization](./normalize.md) - Normalization operations
+- [Kernels Overview](./overview.md) - General kernel usage
+- [SIMD](../core/simd.md) - SIMD operations

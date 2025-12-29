@@ -1,720 +1,373 @@
-# Sparse Matrix Core
-
-Block-allocated discontiguous sparse matrix with zero-copy slicing and registry-managed lifecycle.
-
-**Location**: `scl/core/sparse.hpp`
-
 ---
+title: Sparse Matrices
+description: Sparse matrix types, operations, and memory management
+---
+
+# Sparse Matrices
+
+SCL-Core provides a high-performance sparse matrix implementation with block-allocated discontiguous storage, reference counting, and zero-copy slicing.
 
 ## Overview
 
-The `Sparse<T, IsCSR>` struct is SCL-Core's primary sparse matrix data structure with several key innovations:
+The sparse matrix implementation (`Sparse<T, IsCSR>`) supports both CSR (Compressed Sparse Row) and CSC (Compressed Sparse Column) formats with:
 
-**Key Features:**
-- **Block-allocated storage**: Balances memory reuse and fragmentation
-- **Zero-copy slicing**: Shares memory via registry reference counting
-- **Registry-managed lifecycle**: Automatic memory management with alias refcounting
-- **Traditional format compatible**: Can wrap or convert to/from standard CSR/CSC
-- **SIMD-optimized operations**: Uses scl::algo custom operators for zero-overhead
-- **Prefetch hints**: Strategic prefetching for large data operations
+- **Block Allocation**: Flexible memory layout for efficient memory reuse
+- **Reference Counting**: Automatic lifetime management via registry
+- **Zero-Copy Slicing**: Efficient submatrix operations
+- **Sorted Invariant**: Indices within each row/column are strictly ascending
 
-**Design Philosophy:**
-- Indices within each row/column are **strictly sorted** (invariant enforced by all operations)
-- Lifecycle managed by registry (no manual memory management)
-- Zero-copy when possible, copy when necessary
-- Compatible with external data (NumPy, memory-mapped files) via wrap_traditional
-
----
-
-## Memory Architecture
-
-**Discontiguous Storage (Pointer-based)**:
-```
-data_ptrs    = [block1+offset0, block1+offset1, block2+offset0, ...]
-indices_ptrs = [block1+offset0, block1+offset1, block2+offset0, ...]
-lengths      = [len0, len1, len2, ...]
-```
-
-**Lifecycle Management**:
-1. **Buffers** (Layer 1): Real memory blocks allocated via registry
-2. **Aliases** (Layer 2): Access pointers with reference counting
-3. **Instances** (Layer 3): Sparse objects that hold aliases
-
-**Benefits**:
-- Each row/column can be in separate allocation (flexible)
-- Zero-copy slicing via alias sharing (efficient)
-- Partial memory release possible (blocks can be freed independently)
-- Compatible with traditional contiguous formats
-
----
-
-## Sparse<T, IsCSR>
-
-**SIGNATURE:**
-```cpp
-template <typename T, bool IsCSR>
-struct Sparse {
-    Pointer* data_ptrs;      // Pointer array to row/col values
-    Pointer* indices_ptrs;   // Pointer array to row/col indices
-    Index* lengths;          // Length of each row/col
-    Index rows_;
-    Index cols_;
-    Index nnz_;
-};
-```
-
-**TEMPLATE PARAMETERS:**
-- T: Value type (typically Real, float, or double)
-- IsCSR: true for CSR (row-major), false for CSC (column-major)
-
-**TYPE ALIASES:**
-```cpp
-using CSRMatrix<T> = Sparse<T, true>;
-using CSCMatrix<T> = Sparse<T, false>;
-using CSR = CSRMatrix<Real>;
-using CSC = CSCMatrix<Real>;
-```
-
-**INVARIANTS:**
-- Indices are **strictly sorted** within each primary dimension
-- All pointers are registry-managed or explicitly unmanaged (wrap_traditional)
-- lengths[i] == number of non-zeros in primary dimension i
-
----
-
-## Construction and Lifecycle
-
-### Constructors
+## Type Definitions
 
 ```cpp
-constexpr Sparse() noexcept;  // Empty matrix
-
-// Direct construction (advanced use)
-constexpr Sparse(Pointer* dp, Pointer* ip, Index* len,
-                 Index r, Index c, Index n) noexcept;
-
-// Copy disabled - use clone() for deep copy
-Sparse(const Sparse&) = delete;
-
-// Move enabled - transfers ownership
-Sparse(Sparse&& other) noexcept;
+namespace scl {
+    // CSR matrix (row-major)
+    template <typename T>
+    using CSRMatrix = Sparse<T, true>;
+    using CSR = CSRMatrix<Real>;
+    
+    // CSC matrix (column-major)
+    template <typename T>
+    using CSCMatrix = Sparse<T, false>;
+    using CSC = CSCMatrix<Real>;
+}
 ```
 
----
+## Creating Sparse Matrices
 
-## Factory Methods
+### Factory Methods
 
-### zeros
-
-**SUMMARY:**
-Create empty matrix with zero non-zeros.
-
-**SIGNATURE:**
 ```cpp
-[[nodiscard]] static Sparse zeros(Index rows, Index cols);
-```
+// Create empty matrix
+auto matrix = CSR::create(rows, cols, nnz);
 
-**OPTIMIZATION:**
-Uses scl::algo::zero instead of std::memset for metadata initialization.
+// Create with block allocation strategy
+auto matrix = CSR::create(
+    rows, cols, nnz,
+    BlockStrategy::adaptive()  // or contiguous(), small_blocks(), large_blocks()
+);
 
----
+// Create from traditional CSR arrays (zero-copy)
+auto matrix = CSR::from_traditional(
+    rows, cols, nnz,
+    row_ptr, col_indices, values
+);
 
-### create
-
-**SUMMARY:**
-Create sparse matrix from nnz counts with block allocation strategy.
-
-**SIGNATURE:**
-```cpp
-[[nodiscard]] static Sparse create(
-    Index rows,
-    Index cols,
-    std::span<const Index> primary_nnzs,
-    BlockStrategy strategy = BlockStrategy::adaptive()
+// Wrap existing arrays (caller manages lifetime)
+auto matrix = CSR::wrap_traditional(
+    rows, cols, nnz,
+    row_ptr, col_indices, values
 );
 ```
 
-**PARAMETERS:**
-- rows         [in] Number of rows
-- cols         [in] Number of columns
-- primary_nnzs [in] NNZ count per primary dimension [primary_dim]
-- strategy     [in] Block allocation strategy
+### Block Allocation Strategies
 
-**PRECONDITIONS:**
-- rows >= 0, cols >= 0
-- primary_nnzs.size() == primary_dim
-- All primary_nnzs[i] >= 0
-
-**POSTCONDITIONS:**
-- Returns matrix with allocated data blocks
-- All values initialized to zero
-- Blocks registered with registry as buffers with aliases
-
-**ALGORITHM:**
-1. Compute block size from strategy
-2. Allocate blocks to minimize count while respecting constraints
-3. Register blocks as buffers, create aliases for each row/column
-4. Set up pointer arrays
-
-**BLOCK STRATEGIES:**
 ```cpp
-BlockStrategy::contiguous();   // Single block (traditional CSR/CSC)
-BlockStrategy::small_blocks();  // Many small blocks (max 16K elements)
-BlockStrategy::large_blocks();  // Few large blocks (max 1M elements)
-BlockStrategy::adaptive();      // Auto-tune based on nnz and hardware
+namespace scl {
+    struct BlockStrategy {
+        Index min_block_elements = 4096;
+        Index max_block_elements = 262144;
+        Index target_block_count = 0;  // 0 = auto
+        bool force_contiguous = false;
+        
+        // Predefined strategies
+        static constexpr BlockStrategy contiguous();  // Traditional CSR
+        static constexpr BlockStrategy small_blocks();
+        static constexpr BlockStrategy large_blocks();
+        static constexpr BlockStrategy adaptive();   // Default
+    };
+}
 ```
 
-**OPTIMIZATION:**
-- Batched alias creation reduces registry overhead
-- Aligned block allocation for SIMD operations
+**Strategy Selection**:
+- `contiguous()`: Single block, compatible with traditional CSR format
+- `adaptive()`: Balanced for most use cases (default)
+- `small_blocks()`: Many small blocks for fine-grained memory control
+- `large_blocks()`: Few large blocks for reduced fragmentation
 
----
+## Accessing Matrix Data
 
-### from_traditional
+### Dimensions
 
-**SUMMARY:**
-Create from traditional CSR/CSC arrays (copies data).
-
-**SIGNATURE:**
 ```cpp
-[[nodiscard]] static Sparse from_traditional(
-    Index rows,
-    Index cols,
-    std::span<const T> values,
-    std::span<const Index> indices,
-    std::span<const Index> offsets,
-    BlockStrategy strategy = BlockStrategy::adaptive()
+Index n_rows = matrix.rows();
+Index n_cols = matrix.cols();
+Index nnz = matrix.nnz();
+```
+
+### Row/Column Access (CSR)
+
+```cpp
+// Get row data
+Index row = 0;
+Array<Index> indices = matrix.row_indices(row);
+Array<Real> values = matrix.row_values(row);
+Index length = matrix.row_length(row);
+
+// Unsafe access (no bounds checking)
+Array<Index> indices = matrix.row_indices_unsafe(row);
+Array<Real> values = matrix.row_values_unsafe(row);
+Index length = matrix.row_length_unsafe(row);
+```
+
+### Column Access (CSC)
+
+```cpp
+// Get column data
+Index col = 0;
+Array<Index> indices = matrix.col_indices(col);
+Array<Real> values = matrix.col_values(col);
+Index length = matrix.col_length(col);
+```
+
+### Primary Dimension Access
+
+For generic code that works with both CSR and CSC:
+
+```cpp
+// Primary dimension: rows for CSR, columns for CSC
+Index primary_dim = matrix.primary_dim();
+Index secondary_dim = matrix.secondary_dim();
+
+// Access primary dimension data
+Array<Index> indices = matrix.primary_indices(row_or_col);
+Array<Real> values = matrix.primary_values(row_or_col);
+Index length = matrix.primary_length(row_or_col);
+```
+
+## Matrix Operations
+
+### Element Access
+
+```cpp
+// Get element at (row, col)
+// Returns optional<Real> (empty if element doesn't exist)
+auto value = matrix.get(row, col);
+if (value.has_value()) {
+    Real val = value.value();
+}
+
+// Set element (creates if doesn't exist)
+matrix.set(row, col, value);
+
+// Check if element exists
+bool exists = matrix.has(row, col);
+```
+
+### Slicing
+
+```cpp
+// Slice rows [start, end)
+auto submatrix = matrix.slice_rows(start_row, end_row);
+
+// Slice columns [start, end)
+auto submatrix = matrix.slice_cols(start_col, end_col);
+
+// Slice both dimensions
+auto submatrix = matrix.slice(
+    start_row, end_row,
+    start_col, end_col
 );
+
+// Slicing is zero-copy (shares data via reference counting)
 ```
 
-**PARAMETERS:**
-- rows     [in] Number of rows
-- cols     [in] Number of columns
-- values   [in] Contiguous values array
-- indices  [in] Contiguous secondary indices
-- offsets  [in] Primary dimension offsets [primary_dim+1]
-- strategy [in] Block allocation strategy
+### Transposition
 
-**PRECONDITIONS:**
-- offsets.size() == primary_dim + 1
-- offsets[0] == 0
-- offsets is non-decreasing
-- values.size() >= offsets[primary_dim]
-- indices.size() >= offsets[primary_dim]
-- Indices are sorted within each primary dimension
-
-**POSTCONDITIONS:**
-- Returns new matrix with copied data
-- Data allocated via registry with specified strategy
-
-**OPTIMIZATION:**
-- Uses scl::algo::copy instead of std::memcpy
-- Prefetch hints for large copies
-- SCL_LIKELY branch hints for non-empty rows
-
----
-
-### wrap_traditional
-
-**SUMMARY:**
-Wrap existing traditional arrays (zero-copy, external ownership).
-
-**SIGNATURE:**
 ```cpp
-[[nodiscard]] static Sparse wrap_traditional(
-    Index rows,
-    Index cols,
-    T* values,
-    Index* indices,
-    std::span<const Index> offsets
-);
+// Create transpose (zero-copy for CSR/CSC)
+auto transposed = matrix.transpose();
+
+// Transpose in-place (requires temporary storage)
+matrix.transpose_inplace();
 ```
 
-**PARAMETERS:**
-- rows    [in] Number of rows
-- cols    [in] Number of columns
-- values  [in] Pointer to values array (caller owns)
-- indices [in] Pointer to indices array (caller owns)
-- offsets [in] Offset array [primary_dim+1]
+### Cloning
 
-**PRECONDITIONS:**
-- values and indices must not be null
-- Arrays must outlive the Sparse object
-- offsets[0] == 0, offsets is non-decreasing
-
-**POSTCONDITIONS:**
-- Returns matrix wrapping external arrays (no copy)
-- Data pointers are NOT registered with registry
-- Caller must manage array lifetime
-
-**LIFECYCLE:**
-When destroyed, only metadata is freed (data_ptrs, indices_ptrs, lengths).
-Original data arrays are NOT freed.
-
-**WARNING:**
-For proper lifecycle management with registry, use from_contiguous_arrays with take_ownership=true.
-
----
-
-### from_coo
-
-**SUMMARY:**
-Create from COO (Coordinate) format.
-
-**SIGNATURE:**
 ```cpp
-[[nodiscard]] static Sparse from_coo(
-    Index rows,
-    Index cols,
-    std::span<const Index> row_indices,
-    std::span<const Index> col_indices,
-    std::span<const T> values,
-    BlockStrategy strategy = BlockStrategy::adaptive()
-);
+// Deep copy
+auto copy = matrix.clone();
+
+// Clone with different format
+CSC csc_copy = csr_matrix.clone_as_csc();
 ```
 
-**PARAMETERS:**
-- rows        [in] Number of rows
-- cols        [in] Number of columns
-- row_indices [in] Row coordinates [nnz]
-- col_indices [in] Column coordinates [nnz]
-- values      [in] Values [nnz]
-- strategy    [in] Block allocation strategy
+## Memory Management
 
-**PRECONDITIONS:**
-- All arrays have same size
-- All row_indices[i] in [0, rows)
-- All col_indices[i] in [0, cols)
+### Registry System
 
-**POSTCONDITIONS:**
-- Returns sorted sparse matrix
-- Indices are sorted via sort_indices()
-- Duplicates NOT summed (last value kept)
+SCL-Core uses a registry system for automatic memory management:
 
-**OPTIMIZATION:**
-- Prefetch hints with configurable distance (16 elements ahead)
-- Unrolled final sort loops
-
----
-
-### from_dense
-
-**SUMMARY:**
-Create from dense matrix (row-major layout).
-
-**SIGNATURE:**
 ```cpp
-template <typename Pred = std::nullptr_t>
-[[nodiscard]] static Sparse from_dense(
-    Index rows,
-    Index cols,
-    std::span<const T> data,
-    Pred&& is_nonzero = nullptr,
-    BlockStrategy strategy = BlockStrategy::adaptive()
-);
+// Data is automatically registered when created via factory methods
+auto matrix = CSR::create(rows, cols, nnz);
+// Data is registered in the registry
+
+// Slicing creates aliases (zero-copy)
+auto submatrix = matrix.slice_rows(0, 100);
+// submatrix shares data with matrix via reference counting
+
+// When matrix is destroyed, data is released if ref count reaches zero
 ```
 
-**PARAMETERS:**
-- rows        [in] Number of rows
-- cols        [in] Number of columns
-- data        [in] Dense matrix [rows*cols], row-major
-- is_nonzero  [in] Custom predicate (default: x != 0)
-- strategy    [in] Block allocation strategy
+### Manual Registration
 
-**PRECONDITIONS:**
-- data.size() >= rows * cols
+For external data (e.g., from Python/NumPy):
 
-**POSTCONDITIONS:**
-- Returns sparse matrix containing non-zero elements
-- Elements where is_nonzero(x) == true are included
-
----
-
-## Element Access
-
-### at
-
-**SUMMARY:**
-Get element value at (row, col) with bounds checking.
-
-**SIGNATURE:**
 ```cpp
-[[nodiscard]] SCL_FORCE_INLINE T at(Index row, Index col) const noexcept;
+// Register external arrays
+registry::alias_incref(data_ptr, size);
+registry::alias_incref(indices_ptr, size);
+
+// Use in matrix
+auto matrix = CSR::wrap_traditional(rows, cols, nnz, ...);
+
+// Unregister when done
+registry::alias_decref(data_ptr);
+registry::alias_decref(indices_ptr);
 ```
-
-**COMPLEXITY:**
-O(log n) - binary search on sorted indices
-
-**OPTIMIZATION:**
-- SCL_FORCE_INLINE for zero-overhead
-- SCL_UNLIKELY for bounds check failures
-- Uses scl::algo::lower_bound (faster than std::)
-- SCL_LIKELY for found case
-
----
-
-### at_unsafe
-
-**SUMMARY:**
-Get element without bounds checking (caller guarantees validity).
-
-**SIGNATURE:**
-```cpp
-[[nodiscard]] SCL_FORCE_INLINE T at_unsafe(Index row, Index col) const noexcept;
-```
-
-**WARNING:**
-Caller must guarantee matrix is valid and indices are in bounds.
-
-**OPTIMIZATION:**
-- No bounds checks
-- Direct binary search
-- SCL_UNLIKELY for empty check
-
----
-
-## Slicing
-
-### row_slice_view
-
-**SUMMARY:**
-Zero-copy row slice (CSR only) with shared memory.
-
-**SIGNATURE:**
-```cpp
-[[nodiscard]] Sparse row_slice_view(std::span<const Index> row_indices) const
-    requires (IsCSR);
-```
-
-**PARAMETERS:**
-- row_indices [in] Rows to include in slice
-
-**PRECONDITIONS:**
-- All row_indices[i] in [0, rows())
-
-**POSTCONDITIONS:**
-- Returns new matrix sharing memory with original
-- Modifications affect both matrices
-- Registry ref_count incremented for shared aliases
-
-**ALGORITHM:**
-1. Allocate new metadata (data_ptrs, indices_ptrs, lengths)
-2. Copy pointers for selected rows
-3. Collect aliases and call registry.alias_incref_batch
-4. Return new matrix
-
-**LIFECYCLE:**
-Shared aliases use reference counting. When both original and slice are destroyed, memory is freed.
-
-**OPTIMIZATION:**
-- Batched alias_incref for efficiency
-- Safe for unregistered pointers (wrap_traditional)
-
----
-
-### row_slice_copy
-
-**SUMMARY:**
-Deep copy row slice with independent memory.
-
-**SIGNATURE:**
-```cpp
-[[nodiscard]] Sparse row_slice_copy(
-    std::span<const Index> row_indices,
-    BlockStrategy strategy = BlockStrategy::adaptive()
-) const requires (IsCSR);
-```
-
-**POSTCONDITIONS:**
-- Returns independent matrix
-- Modifications do NOT affect original
-
-**OPTIMIZATION:**
-Uses scl::algo::copy with prefetch hints.
-
----
-
-## Operations
-
-### clone
-
-**SUMMARY:**
-Deep copy with optional new block strategy.
-
-**SIGNATURE:**
-```cpp
-[[nodiscard]] Sparse clone(
-    BlockStrategy strategy = BlockStrategy::adaptive()
-) const;
-```
-
-**OPTIMIZATION:**
-- Prefetch next row while copying current
-- scl::algo::copy for zero-overhead
-
----
-
-### transpose
-
-**SUMMARY:**
-Convert between CSR and CSC.
-
-**SIGNATURE:**
-```cpp
-[[nodiscard]] TransposeType transpose() const;
-```
-
-**ALGORITHM:**
-1. Count nnz per new primary dimension
-2. Allocate result
-3. Fill transposed data
-4. Sort indices
-
-**OPTIMIZATION:**
-- Prefetch hints during transpose fill
-- Parallel counting of new nnzs
-
----
-
-### sort_indices
-
-**SUMMARY:**
-Sort indices within each primary dimension (in-place).
-
-**SIGNATURE:**
-```cpp
-void sort_indices();
-```
-
-**ALGORITHM:**
-1. Find max length for buffer preallocation
-2. Preallocate temp arrays (reused across all rows)
-3. For each row: create permutation, apply via temp buffers
-
-**OPTIMIZATION:**
-- SCL_UNLIKELY for early exits
-- Prefetch next row while sorting current
-- Reuses temp buffers to avoid repeated allocation
-- scl::algo::max2 instead of std::max
-
----
-
-### scale
-
-**SUMMARY:**
-Multiply all values by constant (in-place).
-
-**SIGNATURE:**
-```cpp
-void scale(T factor);
-```
-
-**MUTABILITY:**
-INPLACE - modifies values
-
----
-
-## Format Conversion
-
-### to_traditional
-
-**SUMMARY:**
-Export to traditional CSR/CSC format.
-
-**SIGNATURE:**
-```cpp
-struct TraditionalFormat {
-    std::vector<T> values;
-    std::vector<Index> indices;
-    std::vector<Index> offsets;
-};
-
-[[nodiscard]] TraditionalFormat to_traditional() const;
-```
-
-**POSTCONDITIONS:**
-- Returns contiguous arrays
-- offsets[0] = 0, offsets[primary_dim] = nnz
-
----
-
-### to_dense
-
-**SUMMARY:**
-Convert to dense row-major matrix.
-
-**SIGNATURE:**
-```cpp
-[[nodiscard]] std::vector<T> to_dense() const;
-```
-
-**RETURN VALUE:**
-Vector of size rows*cols, row-major layout with zeros filled in.
-
----
 
 ## Layout Information
 
-### is_contiguous
-
-**SUMMARY:**
-Check if data is in single contiguous block.
-
-**SIGNATURE:**
 ```cpp
-[[nodiscard]] bool is_contiguous() const noexcept;
+// Get memory layout information
+SparseLayoutInfo info = matrix.layout_info();
+
+// Access layout details
+Index data_blocks = info.data_block_count;
+Index index_blocks = info.index_block_count;
+std::size_t data_bytes = info.data_bytes;
+std::size_t index_bytes = info.index_bytes;
+bool is_contiguous = info.is_contiguous;
+bool is_traditional = info.is_traditional_format;
 ```
 
-**ALGORITHM:**
-Check if all non-empty rows/columns point to sequential memory.
+## Iteration Patterns
 
-**OPTIMIZATION:**
-- SCL_UNLIKELY for edge cases
-- Early exit for empty matrix
+### Row Iteration (CSR)
 
----
-
-### layout_info
-
-**SUMMARY:**
-Get detailed memory layout statistics.
-
-**SIGNATURE:**
 ```cpp
-struct SparseLayoutInfo {
-    Index data_block_count;
-    Index index_block_count;
-    Size data_bytes;
-    Size index_bytes;
-    Size metadata_bytes;
-    bool is_contiguous;
-    bool is_traditional_format;
-};
-
-[[nodiscard]] SparseLayoutInfo layout_info() const noexcept;
-```
-
-**ALGORITHM:**
-Uses unordered_set for O(1) unique block detection via registry BufferIDs.
-
----
-
-## BlockStrategy
-
-**SUMMARY:**
-Configuration for block allocation.
-
-**SIGNATURE:**
-```cpp
-struct BlockStrategy {
-    Index min_block_elements = 4096;
-    Index max_block_elements = 262144;  // 256K elements
-    Index target_block_count = 0;       // 0 = auto
-    bool force_contiguous = false;
+Index n_rows = matrix.rows();
+for (Index i = 0; i < n_rows; ++i) {
+    auto indices = matrix.row_indices(i);
+    auto values = matrix.row_values(i);
+    Index len = matrix.row_length(i);
     
-    static constexpr BlockStrategy contiguous();
-    static constexpr BlockStrategy small_blocks();
-    static constexpr BlockStrategy large_blocks();
-    static constexpr BlockStrategy adaptive();
+    for (Index k = 0; k < len; ++k) {
+        Index col = indices[k];
+        Real val = values[k];
+        // Process element
+    }
+}
+```
+
+### Column Iteration (CSC)
+
+```cpp
+Index n_cols = matrix.cols();
+for (Index j = 0; j < n_cols; ++j) {
+    auto indices = matrix.col_indices(j);
+    auto values = matrix.col_values(j);
+    Index len = matrix.col_length(j);
     
-    [[nodiscard]] Index compute_block_size(Index total_nnz, Index primary_dim) const;
-};
+    for (Index k = 0; k < len; ++k) {
+        Index row = indices[k];
+        Real val = values[k];
+        // Process element
+    }
+}
 ```
 
-**STRATEGIES:**
-- **contiguous()**: Single block (compatible with traditional CSR/CSC)
-- **small_blocks()**: 1K-16K elements per block (fine-grained release)
-- **large_blocks()**: 64K-1M elements per block (fewer allocations)
-- **adaptive()**: Auto-tune based on nnz and hardware concurrency
-
----
-
-## Optimization Summary
-
-**Custom Operators:**
-- scl::algo::copy instead of std::memcpy
-- scl::algo::zero instead of std::memset
-- scl::algo::max2 instead of std::max
-- scl::algo::lower_bound instead of std::lower_bound
-
-**Branch Prediction:**
-- SCL_LIKELY for common paths (non-empty rows, found elements)
-- SCL_UNLIKELY for error cases (empty, out of bounds)
-
-**Prefetching:**
-- Strategic SCL_PREFETCH_READ for sequential operations
-- Distance tuned for typical cache line sizes
-- Prefetch next row while processing current
-
-**Inlining:**
-- SCL_FORCE_INLINE for element access (at, at_unsafe)
-- Zero-overhead abstractions for hot paths
-
-**Memory Layout:**
-- Block allocation balances fragmentation vs. release granularity
-- Cache-friendly sequential access patterns
-- Registry-managed lifecycle eliminates manual tracking
-
----
-
-## Thread Safety
-
-**Read-only operations**: Safe for concurrent access
-**Modifications**: Unsafe - caller must synchronize
-**Registry operations**: Thread-safe (sharded with fine-grained locking)
-
----
-
-## Type Aliases
+### Parallel Iteration
 
 ```cpp
-template <typename T> using CSRMatrix = Sparse<T, true>;
-template <typename T> using CSCMatrix = Sparse<T, false>;
-
-using CSR = Sparse<Real, true>;
-using CSC = Sparse<Real, false>;
-using CSRf = Sparse<float, true>;
-using CSCf = Sparse<float, false>;
-using CSRd = Sparse<double, true>;
-using CSCd = Sparse<double, false>;
+// Parallel row processing
+threading::parallel_for(Size(0), static_cast<Size>(matrix.rows()), [&](size_t i) {
+    auto row = matrix.row_values(static_cast<Index>(i));
+    // Process row in parallel
+});
 ```
 
----
+## Best Practices
 
-## Utility Functions
+### 1. Choose Correct Format
 
-### vstack
-
-**SUMMARY:**
-Concatenate CSR matrices vertically.
-
-**SIGNATURE:**
 ```cpp
-template <typename T>
-[[nodiscard]] Sparse<T, true> vstack(
-    std::span<const Sparse<T, true>> matrices,
-    BlockStrategy strategy = BlockStrategy::adaptive()
-);
+// Row-based operations → CSR
+CSR matrix = CSR::create(rows, cols, nnz);
+// Fast row access, slow column access
+
+// Column-based operations → CSC
+CSC matrix = CSC::create(rows, cols, nnz);
+// Fast column access, slow row access
 ```
 
-**OPTIMIZATION:**
-Prefetch next matrix row during copy.
+### 2. Use Unsafe Access in Hot Loops
 
----
-
-### hstack
-
-**SUMMARY:**
-Concatenate CSC matrices horizontally.
-
-**SIGNATURE:**
 ```cpp
-template <typename T>
-[[nodiscard]] Sparse<T, false> hstack(
-    std::span<const Sparse<T, false>> matrices,
-    BlockStrategy strategy = BlockStrategy::adaptive()
-);
+// In performance-critical code
+for (Index i = 0; i < n_rows; ++i) {
+    // Use unsafe access (no bounds checking)
+    auto values = matrix.row_values_unsafe(i);
+    auto indices = matrix.row_indices_unsafe(i);
+    Index len = matrix.row_length_unsafe(i);
+    
+    // Process row
+}
 ```
 
-**OPTIMIZATION:**
-Prefetch next matrix column during copy.
+### 3. Leverage Slicing for Submatrix Operations
+
+```cpp
+// Instead of creating new matrix
+auto submatrix = matrix.slice_rows(0, 100);
+// Zero-copy, efficient
+
+// Process submatrix
+process(submatrix);
+```
+
+### 4. Prefer Factory Methods
+
+```cpp
+// Good: Automatic memory management
+auto matrix = CSR::create(rows, cols, nnz);
+
+// Avoid: Manual memory management (unless necessary)
+auto matrix = CSR::wrap_traditional(...);  // Caller manages lifetime
+```
+
+## Performance Considerations
+
+### Memory Layout
+
+- **Contiguous**: Single block, cache-friendly, traditional CSR format
+- **Block-allocated**: Multiple blocks, flexible, better for large matrices
+
+### Access Patterns
+
+```cpp
+// Good: Sequential row access (CSR)
+for (Index i = 0; i < n_rows; ++i) {
+    process_row(matrix, i);
+}
+
+// Slow: Random column access (CSR)
+for (Index j = 0; j < n_cols; ++j) {
+    process_col(matrix, j);  // Use CSC instead
+}
+```
+
+### Sorted Invariant
+
+All indices within each row/column are **strictly ascending**. This invariant is:
+- Enforced by factory methods
+- Maintained by all operations
+- Assumed by all access methods
+
+**Do not** manually modify indices to violate this invariant.
+
+## Related Documentation
+
+- [Core Types](./types.md) - Fundamental types
+- [Memory Management](./memory.md) - Registry and allocation
+- [Kernels](../kernels/) - Matrix operations and algorithms

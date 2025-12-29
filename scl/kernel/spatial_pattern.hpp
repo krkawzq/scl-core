@@ -235,6 +235,8 @@ void spatial_variability(
     Size n_permutations,
     uint64_t seed
 ) {
+    static_assert(IsCSR, "spatial_variability requires CSR format (cells × genes)");
+    
     const Size n_cells = static_cast<Size>(expression.rows());
     const Size n_genes = static_cast<Size>(expression.cols());
 
@@ -266,12 +268,12 @@ void spatial_variability(
         }
 
         for (Size i = 0; i < n_cells; ++i) {
-            const Index row_start = expression.row_indices_unsafe()[i];
-            const Index row_end = expression.row_indices_unsafe()[i + 1];
+            auto row_col_indices = expression.row_indices_unsafe(static_cast<Index>(i));
+            auto row_values = expression.row_values_unsafe(static_cast<Index>(i));
 
-            for (Index j = row_start; j < row_end; ++j) {
-                if (expression.col_indices_unsafe()[j] == static_cast<Index>(g)) {
-                    gene_values[i] = static_cast<Real>(expression.values()[j]);
+            for (Size j = 0; j < row_col_indices.len; ++j) {
+                if (row_col_indices[j] == static_cast<Index>(g)) {
+                    gene_values[i] = static_cast<Real>(row_values[j]);
                     break;
                 }
             }
@@ -413,6 +415,8 @@ void periodic_pattern(
     Size n_wavelengths,
     const Real* test_wavelengths  // wavelengths to test
 ) {
+    static_assert(IsCSR, "periodic_pattern requires CSR format (cells × genes)");
+    
     const Size n_cells = static_cast<Size>(expression.rows());
     const Size n_genes = static_cast<Size>(expression.cols());
 
@@ -433,12 +437,12 @@ void periodic_pattern(
         }
 
         for (Size i = 0; i < n_cells; ++i) {
-            const Index row_start = expression.row_indices_unsafe()[i];
-            const Index row_end = expression.row_indices_unsafe()[i + 1];
+            auto row_col_indices = expression.row_indices_unsafe(i);
+            auto row_vals = expression.row_values_unsafe(i);
 
-            for (Index j = row_start; j < row_end; ++j) {
-                if (expression.col_indices_unsafe()[j] == static_cast<Index>(g)) {
-                    gene_values[i] = static_cast<Real>(expression.values()[j]);
+            for (Size j = 0; j < row_col_indices.len; ++j) {
+                if (row_col_indices[j] == static_cast<Index>(g)) {
+                    gene_values[i] = static_cast<Real>(row_vals[j]);
                     break;
                 }
             }
@@ -530,6 +534,8 @@ void boundary_detection(
     Array<Real> boundary_scores,
     Size n_neighbors
 ) {
+    static_assert(IsCSR, "boundary_detection requires CSR format (cells × genes)");
+    
     const Size n_cells = static_cast<Size>(expression.rows());
     const Size n_genes = static_cast<Size>(expression.cols());
     SCL_CHECK_DIM(n_cells == boundary_scores.len, "Boundary scores must match cell count");
@@ -580,11 +586,11 @@ void boundary_detection(
             expr_i[g] = Real(0.0);
         }
 
-        const Index row_start_i = expression.row_indices_unsafe()[i];
-        const Index row_end_i = expression.row_indices_unsafe()[i + 1];
+        auto row_col_indices_i = expression.row_indices_unsafe(i);
+        auto row_vals_i = expression.row_values_unsafe(i);
 
-        for (Index j = row_start_i; j < row_end_i; ++j) {
-            expr_i[expression.col_indices_unsafe()[j]] = static_cast<Real>(expression.values()[j]);
+        for (Size j = 0; j < row_col_indices_i.len; ++j) {
+            expr_i[row_col_indices_i[j]] = static_cast<Real>(row_vals_i[j]);
         }
 
         // Compute average distance to neighbors in expression space
@@ -598,11 +604,11 @@ void boundary_detection(
                 expr_j[g] = Real(0.0);
             }
 
-            const Index row_start_j = expression.row_indices_unsafe()[neighbor];
-            const Index row_end_j = expression.row_indices_unsafe()[neighbor + 1];
+            auto row_col_indices_j = expression.row_indices_unsafe(neighbor);
+            auto row_vals_j = expression.row_values_unsafe(neighbor);
 
-            for (Index j = row_start_j; j < row_end_j; ++j) {
-                expr_j[expression.col_indices_unsafe()[j]] = static_cast<Real>(expression.values()[j]);
+            for (Size j = 0; j < row_col_indices_j.len; ++j) {
+                expr_j[row_col_indices_j[j]] = static_cast<Real>(row_vals_j[j]);
             }
 
             // Compute expression distance
@@ -647,6 +653,8 @@ void spatial_domain(
     Array<Index> domain_labels,
     uint64_t seed
 ) {
+    static_assert(IsCSR, "spatial_domain requires CSR format (cells × genes)");
+    
     const Size n_cells = static_cast<Size>(expression.rows());
     const Size n_genes = static_cast<Size>(expression.cols());
     SCL_CHECK_DIM(n_cells == domain_labels.len, "Domain labels must match cell count");
@@ -706,12 +714,12 @@ void spatial_domain(
 
     // Compute gene means
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_col_indices = expression.row_indices_unsafe(i);
+        auto row_vals = expression.row_values_unsafe(i);
 
-        for (Index j = row_start; j < row_end; ++j) {
-            gene_mean[expression.col_indices_unsafe()[j]] +=
-                static_cast<Real>(expression.values()[j]);
+        for (Size j = 0; j < row_col_indices.len; ++j) {
+            gene_mean[row_col_indices[j]] +=
+                static_cast<Real>(row_vals[j]);
         }
     }
 
@@ -721,13 +729,13 @@ void spatial_domain(
 
     // Compute gene variances
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_col_indices = expression.row_indices_unsafe(i);
+        auto row_vals = expression.row_values_unsafe(i);
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Real diff = static_cast<Real>(expression.values()[j]) -
-                       gene_mean[expression.col_indices_unsafe()[j]];
-            gene_var[expression.col_indices_unsafe()[j]] += diff * diff;
+        for (Size j = 0; j < row_col_indices.len; ++j) {
+            Real diff = static_cast<Real>(row_vals[j]) -
+                       gene_mean[row_col_indices[j]];
+            gene_var[row_col_indices[j]] += diff * diff;
         }
     }
 
@@ -749,15 +757,15 @@ void spatial_domain(
             features[i * n_features + n_dims + f] = Real(0.0);
         }
 
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_col_indices = expression.row_indices_unsafe(i);
+        auto row_vals = expression.row_values_unsafe(i);
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices_unsafe()[j];
+        for (Size j = 0; j < row_col_indices.len; ++j) {
+            Index gene = row_col_indices[j];
 
             for (Size f = 0; f < n_expr_features; ++f) {
                 if (top_genes[f] == gene) {
-                    Real val = static_cast<Real>(expression.values()[j]);
+                    Real val = static_cast<Real>(row_vals[j]);
                     Real std_dev = std::sqrt(gene_var[gene] / static_cast<Real>(n_cells));
                     if (std_dev > config::EPSILON) {
                         features[i * n_features + n_dims + f] =
@@ -926,6 +934,8 @@ void spatial_autocorrelation(
     Real* morans_i,
     Real* gearys_c
 ) {
+    static_assert(IsCSR, "spatial_autocorrelation requires CSR format (cells × genes)");
+    
     const Size n_cells = static_cast<Size>(expression.rows());
     const Size n_genes = static_cast<Size>(expression.cols());
 
@@ -948,12 +958,12 @@ void spatial_autocorrelation(
         }
 
         for (Size i = 0; i < n_cells; ++i) {
-            const Index row_start = expression.row_indices_unsafe()[i];
-            const Index row_end = expression.row_indices_unsafe()[i + 1];
+            auto row_col_indices = expression.row_indices_unsafe(i);
+            auto row_vals = expression.row_values_unsafe(i);
 
-            for (Index j = row_start; j < row_end; ++j) {
-                if (expression.col_indices_unsafe()[j] == static_cast<Index>(g)) {
-                    gene_values[i] = static_cast<Real>(expression.values()[j]);
+            for (Size j = 0; j < row_col_indices.len; ++j) {
+                if (row_col_indices[j] == static_cast<Index>(g)) {
+                    gene_values[i] = static_cast<Real>(row_vals[j]);
                     break;
                 }
             }
@@ -978,6 +988,8 @@ void spatial_smoothing(
     Real bandwidth,
     Real* smoothed  // [n_cells * n_genes]
 ) {
+    static_assert(IsCSR, "spatial_smoothing requires CSR format (cells × genes)");
+    
     const Size n_cells = static_cast<Size>(expression.rows());
     const Size n_genes = static_cast<Size>(expression.cols());
 
@@ -1001,12 +1013,12 @@ void spatial_smoothing(
             Real w = weights[i * n_cells + j];
             if (w < config::EPSILON) continue;
 
-            const Index row_start = expression.row_indices_unsafe()[j];
-            const Index row_end = expression.row_indices_unsafe()[j + 1];
+            auto row_col_indices = expression.row_indices_unsafe(j);
+            auto row_vals = expression.row_values_unsafe(j);
 
-            for (Index k = row_start; k < row_end; ++k) {
-                Index gene = expression.col_indices_unsafe()[k];
-                smoothed[i * n_genes + gene] += w * static_cast<Real>(expression.values()[k]);
+            for (Size k = 0; k < row_col_indices.len; ++k) {
+                Index gene = row_col_indices[k];
+                smoothed[i * n_genes + gene] += w * static_cast<Real>(row_vals[k]);
             }
         }
     }
@@ -1027,6 +1039,8 @@ void spatial_coexpression(
     Size n_pairs,
     Real* coexpression_scores
 ) {
+    static_assert(IsCSR, "spatial_coexpression requires CSR format (cells × genes)");
+    
     const Size n_cells = static_cast<Size>(expression.rows());
 
     if (n_cells == 0 || n_pairs == 0) return;
@@ -1054,15 +1068,15 @@ void spatial_coexpression(
         }
 
         for (Size i = 0; i < n_cells; ++i) {
-            const Index row_start = expression.row_indices_unsafe()[i];
-            const Index row_end = expression.row_indices_unsafe()[i + 1];
+            auto row_col_indices = expression.row_indices_unsafe(i);
+            auto row_vals = expression.row_values_unsafe(i);
 
-            for (Index j = row_start; j < row_end; ++j) {
-                if (expression.col_indices_unsafe()[j] == gene1) {
-                    expr1[i] = static_cast<Real>(expression.values()[j]);
+            for (Size j = 0; j < row_col_indices.len; ++j) {
+                if (row_col_indices[j] == gene1) {
+                    expr1[i] = static_cast<Real>(row_vals[j]);
                 }
-                if (expression.col_indices_unsafe()[j] == gene2) {
-                    expr2[i] = static_cast<Real>(expression.values()[j]);
+                if (row_col_indices[j] == gene2) {
+                    expr2[i] = static_cast<Real>(row_vals[j]);
                 }
             }
         }

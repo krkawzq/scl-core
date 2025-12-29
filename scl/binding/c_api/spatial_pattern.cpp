@@ -26,13 +26,19 @@ scl_error_t scl_spatial_pattern_variability(
     try {
         auto* sparse = static_cast<scl_sparse_matrix*>(expression);
 
+        if (!sparse->is_csr_format()) {
+            return SCL_ERROR_INVALID_ARGUMENT;  // spatial_variability requires CSR format
+        }
+
         sparse->visit([&](auto& m) {
-            scl::kernel::spatial_pattern::spatial_variability(
-                m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
-                reinterpret_cast<scl::Real*>(variability_scores),
-                reinterpret_cast<scl::Real*>(p_values),
-                n_permutations, seed
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::spatial_pattern::spatial_variability(
+                    m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
+                    reinterpret_cast<scl::Real*>(variability_scores),
+                    reinterpret_cast<scl::Real*>(p_values),
+                    n_permutations, seed
+                );
+            }
         });
 
         return SCL_OK;
@@ -86,14 +92,20 @@ scl_error_t scl_spatial_pattern_periodic(
     try {
         auto* sparse = static_cast<scl_sparse_matrix*>(expression);
 
+        if (!sparse->is_csr_format()) {
+            return SCL_ERROR_INVALID_ARGUMENT;  // periodic_pattern requires CSR format
+        }
+
         sparse->visit([&](auto& m) {
-            scl::kernel::spatial_pattern::periodic_pattern(
-                m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
-                reinterpret_cast<scl::Real*>(periodicity_scores),
-                reinterpret_cast<scl::Real*>(dominant_wavelengths),
-                n_wavelengths,
-                reinterpret_cast<const scl::Real*>(test_wavelengths)
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::spatial_pattern::periodic_pattern(
+                    m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
+                    reinterpret_cast<scl::Real*>(periodicity_scores),
+                    reinterpret_cast<scl::Real*>(dominant_wavelengths),
+                    n_wavelengths,
+                    reinterpret_cast<const scl::Real*>(test_wavelengths)
+                );
+            }
         });
 
         return SCL_OK;
@@ -117,13 +129,19 @@ scl_error_t scl_spatial_pattern_boundary(
         auto* sparse = static_cast<scl_sparse_matrix*>(expression);
         scl::Index n_cells = sparse->rows();
 
+        if (!sparse->is_csr_format()) {
+            return SCL_ERROR_INVALID_ARGUMENT;  // boundary_detection requires CSR format
+        }
+
         sparse->visit([&](auto& m) {
-            scl::Array<scl::Real> scores(reinterpret_cast<scl::Real*>(boundary_scores),
-                                         static_cast<scl::Size>(n_cells));
-            scl::kernel::spatial_pattern::boundary_detection(
-                m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
-                scores, n_neighbors
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::Array<scl::Real> scores(reinterpret_cast<scl::Real*>(boundary_scores),
+                                             static_cast<scl::Size>(n_cells));
+                scl::kernel::spatial_pattern::boundary_detection(
+                    m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
+                    scores, n_neighbors
+                );
+            }
         });
 
         return SCL_OK;
@@ -148,12 +166,18 @@ scl_error_t scl_spatial_pattern_domain(
         auto* sparse = static_cast<scl_sparse_matrix*>(expression);
         scl::Index n_cells = sparse->rows();
 
+        if (!sparse->is_csr_format()) {
+            return SCL_ERROR_INVALID_ARGUMENT;  // spatial_domain requires CSR format
+        }
+
         sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> labels(domain_labels, static_cast<scl::Size>(n_cells));
-            scl::kernel::spatial_pattern::spatial_domain(
-                m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
-                n_domains, labels, seed
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::Array<scl::Index> labels(domain_labels, static_cast<scl::Size>(n_cells));
+                scl::kernel::spatial_pattern::spatial_domain(
+                    m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
+                    n_domains, labels, seed
+                );
+            }
         });
 
         return SCL_OK;
@@ -204,12 +228,18 @@ scl_error_t scl_spatial_pattern_autocorrelation(
     try {
         auto* sparse = static_cast<scl_sparse_matrix*>(expression);
 
+        if (!sparse->is_csr_format()) {
+            return SCL_ERROR_INVALID_ARGUMENT;  // spatial_autocorrelation requires CSR format
+        }
+
         sparse->visit([&](auto& m) {
-            scl::kernel::spatial_pattern::spatial_autocorrelation(
-                m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
-                reinterpret_cast<scl::Real*>(morans_i),
-                reinterpret_cast<scl::Real*>(gearys_c)
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::spatial_pattern::spatial_autocorrelation(
+                    m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
+                    reinterpret_cast<scl::Real*>(morans_i),
+                    reinterpret_cast<scl::Real*>(gearys_c)
+                );
+            }
         });
 
         return SCL_OK;
@@ -232,12 +262,18 @@ scl_error_t scl_spatial_pattern_smoothing(
     try {
         auto* sparse = static_cast<scl_sparse_matrix*>(expression);
 
+        if (!sparse->is_csr_format()) {
+            return SCL_ERROR_INVALID_ARGUMENT;  // spatial_smoothing requires CSR format
+        }
+
         sparse->visit([&](auto& m) {
-            scl::kernel::spatial_pattern::spatial_smoothing(
-                m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
-                static_cast<scl::Real>(bandwidth),
-                reinterpret_cast<scl::Real*>(smoothed)
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::spatial_pattern::spatial_smoothing(
+                    m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
+                    static_cast<scl::Real>(bandwidth),
+                    reinterpret_cast<scl::Real*>(smoothed)
+                );
+            }
         });
 
         return SCL_OK;
@@ -261,12 +297,18 @@ scl_error_t scl_spatial_pattern_coexpression(
     try {
         auto* sparse = static_cast<scl_sparse_matrix*>(expression);
 
+        if (!sparse->is_csr_format()) {
+            return SCL_ERROR_INVALID_ARGUMENT;  // spatial_coexpression requires CSR format
+        }
+
         sparse->visit([&](auto& m) {
-            scl::kernel::spatial_pattern::spatial_coexpression(
-                m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
-                gene_pairs, n_pairs,
-                reinterpret_cast<scl::Real*>(coexpression_scores)
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::spatial_pattern::spatial_coexpression(
+                    m, reinterpret_cast<const scl::Real*>(coordinates), n_dims,
+                    gene_pairs, n_pairs,
+                    reinterpret_cast<scl::Real*>(coexpression_scores)
+                );
+            }
         });
 
         return SCL_OK;

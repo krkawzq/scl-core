@@ -37,6 +37,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "black>=23.0.0",
     "flake8>=6.0.0",
+    "libclang>=18.1.1",
 ]
 # All dependencies
 all = [
@@ -50,10 +51,10 @@ all = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"scl" = "python"}
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["python"]
 namespaces = false
 
 # Include compiled libraries in the package

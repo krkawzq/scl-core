@@ -1,489 +1,246 @@
-# projection.hpp
+---
+title: Dimensionality Reduction
+description: Random projection and dimensionality reduction methods
+---
 
-> scl/kernel/projection.hpp · Sparse random projection kernels for dimensionality reduction
+# Dimensionality Reduction
+
+The `projection` kernel provides high-performance random projection methods for dimensionality reduction, optimized with SIMD and efficient sparse projections.
 
 ## Overview
 
-This file provides high-performance sparse random projection kernels for dimensionality reduction with Johnson-Lindenstrauss distance preservation guarantees.
+Random projection is a fast dimensionality reduction technique that:
+- Preserves pairwise distances (Johnson-Lindenstrauss lemma)
+- Works with sparse matrices efficiently
+- Supports multiple projection types
+- Much faster than PCA for large datasets
 
-This file provides:
-- Gaussian random projection (dense, highest accuracy)
-- Achlioptas projection (sparse ternary, 3x faster)
-- Very sparse projection (best for high-dimensional data)
-- Count-Sketch projection (O(nnz) time, hash-based)
-- On-the-fly methods (memory-efficient, no matrix storage)
-- Johnson-Lindenstrauss dimension computation
+## Projection Types
 
-**Header**: `#include "scl/kernel/projection.hpp"`
+### Gaussian Projection
 
----
+Dense Gaussian random projection with N(0, 1/k) distribution.
 
-## Main APIs
+```cpp
+ProjectionType::Gaussian
+```
 
-### project_with_matrix
+**Use Case**: High accuracy, dense output
 
-::: source_code file="scl/kernel/projection.hpp" symbol="project_with_matrix" collapsed
-:::
+### Achlioptas Projection
 
-**Algorithm Description**
+Sparse projection with values {+1, 0, -1} with probabilities {1/6, 2/3, 1/6}.
 
-Project sparse matrix X using pre-computed projection matrix R: `Y = X * R`
+```cpp
+ProjectionType::Achlioptas
+```
 
-1. **Parallel Processing**: Process each row of X in parallel:
-   - Each thread handles independent rows
-   - No synchronization needed
+**Use Case**: Faster computation, sparse output
 
-2. **Row Projection**: For each row i:
-   - Initialize output row to zero
-   - For each non-zero element (j, v) in row i:
-     - Load projection row R[j, :]
-     - Accumulate: `output_row += v * R[j, :]`
-   - Use SIMD FMA (fused multiply-add) for large output_dim
+### Sparse Projection
 
-3. **SIMD Optimization**: 
-   - For output_dim >= 64: 4-way unrolled SIMD accumulation
-   - Prefetch projection rows for long sparse rows
-   - Cache-efficient access pattern
+Very sparse projection with density 1/√d.
 
-4. **Output**: Store projected data in dense buffer:
-   - `output[i*k ... (i+1)*k-1]` contains projected row i
+```cpp
+ProjectionType::Sparse
+```
 
-**Edge Cases**
+**Use Case**: Maximum speed, very sparse output
 
-- **Empty rows**: Rows with no non-zeros get zero output
-- **Very sparse rows**: Handled efficiently with minimal overhead
-- **Large output_dim**: SIMD path provides significant speedup
-- **Small output_dim**: Scalar path avoids SIMD overhead
+### CountSketch
 
-**Data Guarantees (Preconditions)**
+Sign flips with hash-based indexing.
 
-- Matrix must be CSR format (IsCSR = true)
-- `proj.input_dim == matrix.cols()`
-- `output.len >= matrix.rows() * proj.output_dim`
-- Output buffer must be pre-allocated
-- Projection matrix must be valid
+```cpp
+ProjectionType::CountSketch
+```
 
-**Complexity Analysis**
+**Use Case**: Deterministic, hash-based
 
-- **Time**: O(nnz * output_dim) for matrix multiplication
-  - Each non-zero contributes to output_dim elements
-  - Parallelized over rows
-  - SIMD reduces constant factor
-- **Space**: O(1) auxiliary space per thread
+### Feature Hash
 
-**Example**
+Multiple hash functions for better accuracy.
 
+```cpp
+ProjectionType::FeatureHash
+```
+
+**Use Case**: Better accuracy than CountSketch
+
+## Functions
+
+### `random_projection`
+
+Project sparse matrix to lower dimension.
+
+```cpp
+template <typename T, bool IsCSR>
+void random_projection(
+    const Sparse<T, IsCSR>& matrix,
+    Array<Real> output,
+    Index n_components,
+    ProjectionType type = ProjectionType::Achlioptas,
+    uint64_t seed = 0
+);
+```
+
+**Parameters**:
+- `matrix` [in]: Input sparse matrix (cells × genes)
+- `output` [out]: Projected matrix (cells × n_components)
+- `n_components` [in]: Target dimension
+- `type` [in]: Projection type (default: Achlioptas)
+- `seed` [in]: Random seed (default: 0)
+
+**Example**:
 ```cpp
 #include "scl/kernel/projection.hpp"
 
-scl::Sparse<Real, true> matrix = /* ... */;  // [n_rows x n_cols]
-
-// Create Gaussian projection matrix
-auto proj = scl::kernel::projection::create_gaussian_projection<Real>(
-    n_cols,      // input_dim
-    100,         // output_dim
-    42           // seed
+// Project to 50 dimensions
+constexpr Index N_COMPONENTS = 50;
+auto projected = memory::aligned_alloc<Real>(
+    matrix.rows() * N_COMPONENTS
 );
+Array<Real> proj_view = {
+    projected.get(),
+    static_cast<Size>(matrix.rows() * N_COMPONENTS)
+};
 
-// Allocate output buffer
-scl::Array<Real> output(n_rows * proj.output_dim);
-
-// Project matrix
-scl::kernel::projection::project_with_matrix(matrix, proj, output);
-
-// output[i*100 ... (i+1)*100-1] contains projected row i
+kernel::projection::random_projection(
+    matrix, proj_view, N_COMPONENTS,
+    ProjectionType::Achlioptas,
+    seed=42
+);
 ```
 
----
+**Complexity**: O(nnz * n_components) time, O(n * n_components) space
 
-### project
+## Performance Optimizations
 
-::: source_code file="scl/kernel/projection.hpp" symbol="project" collapsed
-:::
-
-**Algorithm Description**
-
-Unified interface for sparse random projection with automatic method selection:
-
-1. **Method Selection**: Based on ProjectionType:
-   - **Gaussian**: Uses on-the-fly Gaussian generation
-   - **Achlioptas**: Uses on-the-fly ternary generation
-   - **Sparse**: Uses on-the-fly sparse with density = max(1/sqrt(cols), 0.01)
-   - **CountSketch**: Uses hash-based projection
-
-2. **On-the-Fly Generation**: For each non-zero element:
-   - Generate random projection values on-demand
-   - No explicit projection matrix storage
-   - Deterministic given same seed
-
-3. **Projection**: Apply projection to sparse matrix:
-   - Same algorithm as project_with_matrix
-   - But generates projection values dynamically
-
-4. **Output**: Store projected data in dense buffer
-
-**Edge Cases**
-
-- **Same as project_with_matrix**: Handles all edge cases similarly
-- **Memory efficient**: No projection matrix storage needed
-- **Deterministic**: Same seed produces same results
-
-**Data Guarantees (Preconditions)**
-
-- Matrix must be CSR format
-- `output.len >= matrix.rows() * output_dim`
-- Output buffer must be pre-allocated
-
-**Complexity Analysis**
-
-- **Time**: O(nnz * output_dim) with higher constant than pre-computed
-  - Random generation overhead
-  - Still parallelized and SIMD-optimized
-- **Space**: O(1) auxiliary (no projection matrix storage)
-
-**Example**
+### SIMD-Accelerated Random Generation
 
 ```cpp
-scl::Sparse<Real, true> matrix = /* ... */;
-scl::Array<Real> output(n_rows * 100);
-
-// Use sparse projection (memory efficient)
-scl::kernel::projection::project(
-    matrix,
-    100,                              // output_dim
-    output,
-    scl::kernel::projection::ProjectionType::Sparse,
-    42                                // seed
-);
+// Generate 4 random numbers in parallel
+Xoshiro256 rng(seed);
+uint64_t randoms[4];
+rng.next4(randoms);
 ```
 
----
-
-### project_countsketch
-
-::: source_code file="scl/kernel/projection.hpp" symbol="project_countsketch" collapsed
-:::
-
-**Algorithm Description**
-
-Count-Sketch projection using hash-based bucketing and sign flips:
-
-1. **Hash Functions**: For each feature j:
-   - Hash to bucket: `h(j) = hash(j) % output_dim`
-   - Generate sign: `s(j) = ±1` based on hash
-
-2. **Projection**: For each non-zero element (i, j, v):
-   - Bucket = h(j)
-   - Sign = s(j)
-   - Accumulate: `output[i, bucket] += sign * v`
-
-3. **Output**: Store projected data:
-   - Each feature contributes to exactly one bucket per row
-   - O(nnz) time complexity (not O(nnz * k))
-
-**Edge Cases**
-
-- **Hash collisions**: Multiple features map to same bucket (expected)
-- **Collision effects**: Reduce accuracy but maintain unbiased property
-- **Small output_dim**: More collisions, lower accuracy
-- **Large output_dim**: Fewer collisions, better accuracy
-
-**Data Guarantees (Preconditions)**
-
-- Matrix must be CSR format
-- `output.len >= matrix.rows() * output_dim`
-- Output buffer must be pre-allocated
-
-**Complexity Analysis**
-
-- **Time**: O(nnz) - linear in number of non-zeros
-  - Each non-zero contributes to exactly one output element
-  - Much faster than O(nnz * k) methods
-- **Space**: O(1) auxiliary space
-
-**Example**
+### Block-Wise Processing
 
 ```cpp
-scl::Sparse<Real, true> matrix = /* ... */;
-scl::Array<Real> output(n_rows * 100);
-
-// Count-Sketch projection (O(nnz) time)
-scl::kernel::projection::project_countsketch(
-    matrix,
-    100,    // output_dim (number of buckets)
-    output,
-    42      // seed
-);
+// Process in blocks for cache efficiency
+constexpr Size BLOCK_SIZE = 256;
+for (Size block = 0; block < n_rows; block += BLOCK_SIZE) {
+    process_block(block, std::min(BLOCK_SIZE, n_rows - block));
+}
 ```
 
----
+### Sparse Projection Structures
 
-### create_gaussian_projection
-
-::: source_code file="scl/kernel/projection.hpp" symbol="create_gaussian_projection" collapsed
-:::
-
-**Algorithm Description**
-
-Create a dense Gaussian random projection matrix:
-
-1. **Random Generation**: For each entry (i, j):
-   - Generate Gaussian sample: `X ~ N(0, 1)`
-   - Scale by: `R[i,j] = X / sqrt(output_dim)`
-   - Uses Box-Muller transform for Gaussian samples
-
-2. **Storage**: Store in row-major order:
-   - `data[i * output_dim + j] = R[i,j]`
-   - Cache-efficient for projection operation
-
-3. **Output**: Return ProjectionMatrix struct:
-   - Contains data pointer, dimensions, ownership flag
-
-**Edge Cases**
-
-- **Zero dimensions**: Returns invalid matrix if dimensions <= 0
-- **Large dimensions**: Requires O(input_dim * output_dim) memory
-- **Deterministic**: Same seed produces same matrix
-
-**Data Guarantees (Preconditions)**
-
-- `input_dim > 0`
-- `output_dim > 0`
-- Matrix will be allocated internally
-
-**Complexity Analysis**
-
-- **Time**: O(input_dim * output_dim) for generation
-  - Each entry requires random number generation
-- **Space**: O(input_dim * output_dim) for storage
-
-**Example**
+For sparse projections, precompute projection structure:
 
 ```cpp
-// Create Gaussian projection matrix
-auto proj = scl::kernel::projection::create_gaussian_projection<Real>(
-    10000,   // input_dim
-    100,     // output_dim
-    42       // seed
-);
-
-// Use for projection
-scl::kernel::projection::project_with_matrix(matrix, proj, output);
+// Precompute sparse projection indices
+struct SparseProjection {
+    Index* indices;
+    Real* values;
+    Size nnz_per_col;
+};
 ```
 
----
-
-### create_achlioptas_projection
-
-::: source_code file="scl/kernel/projection.hpp" symbol="create_achlioptas_projection" collapsed
-:::
-
-**Algorithm Description**
-
-Create a sparse Achlioptas random projection matrix:
-
-1. **Ternary Generation**: For each entry (i, j):
-   - Generate random value: X ~ {+1, 0, -1}
-   - Probabilities: P(+1) = 1/6, P(0) = 2/3, P(-1) = 1/6
-   - Scale by: `R[i,j] = sqrt(3/output_dim) * X`
-
-2. **Sparsity**: 2/3 of entries are zero:
-   - Only 1/3 of entries stored (sparse representation)
-   - 3x faster to compute than Gaussian
-
-3. **Output**: Return ProjectionMatrix struct
-
-**Edge Cases**
-
-- **Same as Gaussian**: Handles dimension edge cases
-- **Sparse storage**: More memory efficient than Gaussian
-- **Same guarantees**: Theoretical guarantees same as Gaussian
-
-**Data Guarantees (Preconditions)**
-
-- `input_dim > 0`
-- `output_dim > 0`
-
-**Complexity Analysis**
-
-- **Time**: O(input_dim * output_dim / 3) for generation (sparse)
-- **Space**: O(input_dim * output_dim / 3) for storage (sparse)
-
-**Example**
+### Multi-Accumulator FMA
 
 ```cpp
-// Create Achlioptas projection (3x faster than Gaussian)
-auto proj = scl::kernel::projection::create_achlioptas_projection<Real>(
-    10000,   // input_dim
-    100,     // output_dim
-    42       // seed
-);
+// Fused multiply-add with multiple accumulators
+auto acc0 = s::Zero(d);
+auto acc1 = s::Zero(d);
+// ... accumulate in parallel
+auto result = s::Add(acc0, acc1);
 ```
 
----
+## Common Patterns
 
-### create_sparse_projection
-
-::: source_code file="scl/kernel/projection.hpp" symbol="create_sparse_projection" collapsed
-:::
-
-**Algorithm Description**
-
-Create a very sparse random projection matrix with custom density:
-
-1. **Sparse Generation**: For each entry (i, j):
-   - Generate with probability = density
-   - If selected: X ~ {+1, -1} with equal probability
-   - Scale by: `R[i,j] = sqrt(1/(output_dim * density)) * X`
-
-2. **Density Control**: 
-   - Typical density = 1/sqrt(input_dim)
-   - For high-dimensional data, most entries are zero
-   - sqrt(input_dim)x faster than Gaussian
-
-3. **Output**: Return ProjectionMatrix struct
-
-**Edge Cases**
-
-- **Very low density**: If density too small, may have insufficient non-zeros
-- **High-dimensional**: Best for input_dim > 10000
-- **Same guarantees**: Distance preservation guarantees maintained
-
-**Data Guarantees (Preconditions)**
-
-- `input_dim > 0`
-- `output_dim > 0`
-- `density` in (0, 1]
-
-**Complexity Analysis**
-
-- **Time**: O(input_dim * output_dim * density) for generation
-- **Space**: O(input_dim * output_dim * density) for storage
-
-**Example**
+### Fast Dimensionality Reduction
 
 ```cpp
-// Create very sparse projection for high-dimensional data
-Real density = 1.0 / std::sqrt(input_dim);
-auto proj = scl::kernel::projection::create_sparse_projection<Real>(
-    input_dim,
-    output_dim,
-    density,
-    42
-);
+void fast_dimension_reduction(
+    const CSR& matrix,
+    Index n_components,
+    Array<Real>& output
+) {
+    // Use sparse projection for speed
+    kernel::projection::random_projection(
+        matrix, output, n_components,
+        ProjectionType::Sparse,  // Fastest
+        seed=42
+    );
+}
 ```
 
----
-
-## Utility Functions
-
-### compute_jl_dimension
-
-Compute minimum target dimension for Johnson-Lindenstrauss guarantee.
-
-::: source_code file="scl/kernel/projection.hpp" symbol="compute_jl_dimension" collapsed
-:::
-
-**Algorithm Description**
-
-Computes minimum dimension k for (1 ± epsilon) distance preservation:
-
-- Formula: `k >= 4 * ln(n) / (epsilon^2/2 - epsilon^3/3)`
-- Guarantees: With probability >= 1 - 1/n^2, distances preserved within (1 ± epsilon)
-
-**Complexity**
-
-- Time: O(1)
-- Space: O(1)
-
-**Example**
+### High-Accuracy Projection
 
 ```cpp
-Size n_samples = 10000;
-Real epsilon = 0.1;
-
-Size min_dim = scl::kernel::projection::compute_jl_dimension(
-    n_samples,
-    epsilon
-);
-
-// min_dim is minimum output_dim for distance preservation
+void accurate_projection(
+    const CSR& matrix,
+    Index n_components,
+    Array<Real>& output
+) {
+    // Use Gaussian for accuracy
+    kernel::projection::random_projection(
+        matrix, output, n_components,
+        ProjectionType::Gaussian,  // Most accurate
+        seed=42
+    );
+}
 ```
 
----
+### Deterministic Projection
 
-### project_gaussian_otf
-
-On-the-fly Gaussian projection (memory efficient).
-
-::: source_code file="scl/kernel/projection.hpp" symbol="project_gaussian_otf" collapsed
-:::
-
-**Complexity**
-
-- Time: O(nnz * output_dim) with higher constant
-- Space: O(1) auxiliary
-
----
-
-### project_achlioptas_otf
-
-On-the-fly Achlioptas projection.
-
-::: source_code file="scl/kernel/projection.hpp" symbol="project_achlioptas_otf" collapsed
-:::
-
-**Complexity**
-
-- Time: O(nnz * output_dim) with lower constant than Gaussian
-- Space: O(1) auxiliary
-
----
-
-### project_sparse_otf
-
-On-the-fly very sparse projection.
-
-::: source_code file="scl/kernel/projection.hpp" symbol="project_sparse_otf" collapsed
-:::
-
-**Complexity**
-
-- Time: O(nnz * output_dim * density)
-- Space: O(1) auxiliary
-
----
+```cpp
+void deterministic_projection(
+    const CSR& matrix,
+    Index n_components,
+    Array<Real>& output
+) {
+    // Use CountSketch for reproducibility
+    kernel::projection::random_projection(
+        matrix, output, n_components,
+        ProjectionType::CountSketch,  // Deterministic
+        seed=42
+    );
+}
+```
 
 ## Configuration
 
-Default parameters in `scl::kernel::projection::config`:
+```cpp
+namespace scl::kernel::projection::config {
+    constexpr Size SIMD_THRESHOLD = 32;
+    constexpr Size PREFETCH_DISTANCE = 8;
+    constexpr Size BLOCK_SIZE = 256;
+    constexpr Size SMALL_OUTPUT_DIM = 64;
+    constexpr Real DEFAULT_EPSILON = 0.1;
+    constexpr Size MIN_PARALLEL_ROWS = 64;
+    constexpr Size MAX_PRECOMPUTE_BYTES = 256 * 1024 * 1024;  // 256 MB
+}
+```
 
-- `SIMD_THRESHOLD = 64`: Minimum output_dim for SIMD accumulation
-- `PREFETCH_DISTANCE = 16`: Cache line prefetch distance
-- `SMALL_OUTPUT_DIM = 32`: Threshold for scalar path
-- `DEFAULT_EPSILON = 0.1`: Default distance distortion for JL dimension
+## Algorithm Selection
 
----
+The implementation automatically selects optimal algorithm:
 
-## Performance Notes
+```cpp
+// For small output dimensions: Use dense precomputation
+if (n_components < SMALL_OUTPUT_DIM) {
+    use_dense_projection();
+} else {
+    // For large dimensions: Use sparse/hash-based
+    use_sparse_projection();
+}
+```
 
-### Method Selection
+## Related Documentation
 
-- **Gaussian**: Highest accuracy, use for small-medium datasets
-- **Achlioptas**: Good balance, 3x faster than Gaussian
-- **Sparse**: Best for high-dimensional data (d > 10000)
-- **CountSketch**: Best for streaming/online applications
-
-### Memory vs Speed Trade-off
-
-- **Pre-computed matrix**: Faster but requires O(d*k) memory
-- **On-the-fly**: Slower but O(1) memory
-- Choose based on available memory and projection reuse
-
----
-
-## See Also
-
-- [Sparse Matrices](../core/sparse)
-- [SIMD Operations](../core/simd)
-- [Dimensionality Reduction](../math)
+- [Kernels Overview](./overview.md) - General kernel usage
+- [Sparse Matrices](../core/sparse.md) - Sparse matrix operations
+- [SIMD](../core/simd.md) - SIMD operations

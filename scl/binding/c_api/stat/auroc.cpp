@@ -14,6 +14,14 @@ namespace scl::binding {
 
 extern "C" {
 
+using scl::kernel::stat::auroc::auroc;
+using scl::kernel::stat::auroc::auroc_with_fc;
+using scl::binding::SparseWrapper;
+using scl::Index;
+using scl::Size;
+using scl::Real;
+using scl::Array;
+
 // =============================================================================
 // AUROC
 // =============================================================================

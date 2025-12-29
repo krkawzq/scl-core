@@ -170,40 +170,73 @@ SCL_FORCE_INLINE void shuffle_indices(Index* indices, Size n, FastRNG& rng) noex
 #if defined(__AVX2__) || defined(__AVX__)
 #include <immintrin.h>
 
-SCL_FORCE_INLINE Size count_geq_simd(const Real* data, Size n, Real thresh) noexcept {
-    Size count = 0;
+// Helper functions for overload resolution
+SCL_FORCE_INLINE Size count_geq_simd_impl(const double* data, Size n, double thresh) noexcept {
     const __m256d tv = _mm256_set1_pd(thresh);
+    Size count = 0;
     Size i = 0;
-
     for (; i + 4 <= n; i += 4) {
         __m256d v = _mm256_loadu_pd(data + i);
         count += __builtin_popcount(_mm256_movemask_pd(_mm256_cmp_pd(v, tv, _CMP_GE_OQ)));
     }
-
     for (; i < n; ++i) {
         count += (data[i] >= thresh);
     }
-
     return count;
 }
 
-SCL_FORCE_INLINE Size count_abs_geq_simd(const Real* data, Size n, Real thresh) noexcept {
+SCL_FORCE_INLINE Size count_geq_simd_impl(const float* data, Size n, float thresh) noexcept {
+    const __m256 tv = _mm256_set1_ps(thresh);
     Size count = 0;
+    Size i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 v = _mm256_loadu_ps(data + i);
+        count += __builtin_popcount(_mm256_movemask_ps(_mm256_cmp_ps(v, tv, _CMP_GE_OQ)));
+    }
+    for (; i < n; ++i) {
+        count += (data[i] >= thresh);
+    }
+    return count;
+}
+
+SCL_FORCE_INLINE Size count_geq_simd(const Real* data, Size n, Real thresh) noexcept {
+    return count_geq_simd_impl(data, n, thresh);
+}
+
+SCL_FORCE_INLINE Size count_abs_geq_simd_impl(const double* data, Size n, double thresh) noexcept {
     const __m256d tv = _mm256_set1_pd(thresh);
     const __m256d sign = _mm256_set1_pd(-0.0);
+    Size count = 0;
     Size i = 0;
-
     for (; i + 4 <= n; i += 4) {
         __m256d v = _mm256_andnot_pd(sign, _mm256_loadu_pd(data + i));
         count += __builtin_popcount(_mm256_movemask_pd(_mm256_cmp_pd(v, tv, _CMP_GE_OQ)));
     }
-
     for (; i < n; ++i) {
-        Real av = (data[i] >= 0) ? data[i] : -data[i];
+        double av = (data[i] >= 0) ? data[i] : -data[i];
         count += (av >= thresh);
     }
-
     return count;
+}
+
+SCL_FORCE_INLINE Size count_abs_geq_simd_impl(const float* data, Size n, float thresh) noexcept {
+    const __m256 tv = _mm256_set1_ps(thresh);
+    const __m256 sign = _mm256_set1_ps(-0.0f);
+    Size count = 0;
+    Size i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 v = _mm256_andnot_ps(sign, _mm256_loadu_ps(data + i));
+        count += __builtin_popcount(_mm256_movemask_ps(_mm256_cmp_ps(v, tv, _CMP_GE_OQ)));
+    }
+    for (; i < n; ++i) {
+        float av = (data[i] >= 0) ? data[i] : -data[i];
+        count += (av >= thresh);
+    }
+    return count;
+}
+
+SCL_FORCE_INLINE Size count_abs_geq_simd(const Real* data, Size n, Real thresh) noexcept {
+    return count_abs_geq_simd_impl(data, n, thresh);
 }
 
 #else  // Scalar fallback with unrolling
@@ -556,10 +589,17 @@ inline void fdr_correction_bh(
     if (n == 0) return;
 
     auto order_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-
+    auto p_values_copy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
 
     Index* order = order_ptr.release();
-    scl::sort::argsort_inplace(p_values, Array<Index>(order, n));
+    Real* p_values_copy = p_values_copy_ptr.release();
+    
+    // Copy p_values to mutable buffer for sorting
+    for (Size i = 0; i < n; ++i) {
+        p_values_copy[i] = p_values[static_cast<Index>(i)];
+    }
+    
+    scl::sort::argsort_inplace(Array<Real>(p_values_copy, n), Array<Index>(order, n));
 
     Real cummin = Real(1);
     for (Size i = n; i > 0; --i) {
@@ -570,6 +610,7 @@ inline void fdr_correction_bh(
     }
 
     scl::memory::aligned_free<Index>(order, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Real>(p_values_copy, SCL_ALIGNMENT);
 }
 
 inline void fdr_correction_by(
@@ -592,10 +633,17 @@ inline void fdr_correction_by(
     }
 
     auto order_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-
+    auto p_values_copy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
 
     Index* order = order_ptr.release();
-    scl::sort::argsort_inplace(p_values, Array<Index>(order, n));
+    Real* p_values_copy = p_values_copy_ptr.release();
+    
+    // Copy p_values to mutable buffer for sorting
+    for (Size i = 0; i < n; ++i) {
+        p_values_copy[i] = p_values[static_cast<Index>(i)];
+    }
+    
+    scl::sort::argsort_inplace(Array<Real>(p_values_copy, n), Array<Index>(order, n));
 
     Real cn_n = cn * static_cast<Real>(n);
     Real cummin = Real(1);
@@ -607,11 +655,50 @@ inline void fdr_correction_by(
     }
 
     scl::memory::aligned_free<Index>(order, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Real>(p_values_copy, SCL_ALIGNMENT);
 }
 
 // =============================================================================
 // Bonferroni (SIMD-optimized)
 // =============================================================================
+
+inline void bonferroni_correction_impl(const double* p_values, double* adjusted, Size n, double n_real) noexcept {
+#if defined(__AVX2__) || defined(__AVX__)
+    const __m256d nv = _mm256_set1_pd(n_real);
+    const __m256d one = _mm256_set1_pd(1.0);
+    Size i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256d p = _mm256_loadu_pd(p_values + i);
+        _mm256_storeu_pd(adjusted + i, _mm256_min_pd(_mm256_mul_pd(p, nv), one));
+    }
+    for (; i < n; ++i) {
+        adjusted[i] = scl::algo::min2(p_values[i] * n_real, 1.0);
+    }
+#else
+    for (Size i = 0; i < n; ++i) {
+        adjusted[i] = scl::algo::min2(p_values[i] * n_real, 1.0);
+    }
+#endif
+}
+
+inline void bonferroni_correction_impl(const float* p_values, float* adjusted, Size n, float n_real) noexcept {
+#if defined(__AVX2__) || defined(__AVX__)
+    const __m256 nv = _mm256_set1_ps(n_real);
+    const __m256 one = _mm256_set1_ps(1.0f);
+    Size i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 p = _mm256_loadu_ps(p_values + i);
+        _mm256_storeu_ps(adjusted + i, _mm256_min_ps(_mm256_mul_ps(p, nv), one));
+    }
+    for (; i < n; ++i) {
+        adjusted[i] = scl::algo::min2(p_values[i] * n_real, 1.0f);
+    }
+#else
+    for (Size i = 0; i < n; ++i) {
+        adjusted[i] = scl::algo::min2(p_values[i] * n_real, 1.0f);
+    }
+#endif
+}
 
 inline void bonferroni_correction(
     Array<const Real> p_values,
@@ -621,25 +708,7 @@ inline void bonferroni_correction(
     SCL_CHECK_DIM(adjusted.len >= n, "Bonferroni: output buffer too small");
 
     const Real n_real = static_cast<Real>(n);
-
-#if defined(__AVX2__) || defined(__AVX__)
-    const __m256d nv = _mm256_set1_pd(n_real);
-    const __m256d one = _mm256_set1_pd(1.0);
-    Size i = 0;
-
-    for (; i + 4 <= n; i += 4) {
-        __m256d p = _mm256_loadu_pd(p_values.ptr + i);
-        _mm256_storeu_pd(adjusted.ptr + i, _mm256_min_pd(_mm256_mul_pd(p, nv), one));
-    }
-
-    for (; i < n; ++i) {
-        adjusted[static_cast<Index>(i)] = scl::algo::min2(p_values[static_cast<Index>(i)] * n_real, Real(1));
-    }
-#else
-    for (Size i = 0; i < n; ++i) {
-        adjusted[static_cast<Index>(i)] = scl::algo::min2(p_values[static_cast<Index>(i)] * n_real, Real(1));
-    }
-#endif
+    bonferroni_correction_impl(p_values.ptr, adjusted.ptr, n, n_real);
 }
 
 // =============================================================================
@@ -656,10 +725,17 @@ inline void holm_correction(
     if (n == 0) return;
 
     auto order_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-
+    auto p_values_copy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
 
     Index* order = order_ptr.release();
-    scl::sort::argsort_inplace(p_values, Array<Index>(order, n));
+    Real* p_values_copy = p_values_copy_ptr.release();
+    
+    // Copy p_values to mutable buffer for sorting
+    for (Size i = 0; i < n; ++i) {
+        p_values_copy[i] = p_values[static_cast<Index>(i)];
+    }
+    
+    scl::sort::argsort_inplace(Array<Real>(p_values_copy, n), Array<Index>(order, n));
 
     Real cummax = 0;
     for (Size i = 0; i < n; ++i) {
@@ -670,37 +746,62 @@ inline void holm_correction(
     }
 
     scl::memory::aligned_free<Index>(order, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Real>(p_values_copy, SCL_ALIGNMENT);
 }
 
 // =============================================================================
 // Utilities (SIMD-optimized)
 // =============================================================================
 
+inline Size count_significant_impl(const double* p_values, Size n, double alpha) noexcept {
+#if defined(__AVX2__) || defined(__AVX__)
+    const __m256d av = _mm256_set1_pd(alpha);
+    Size count = 0;
+    Size i = 0;
+    for (; i + 4 <= n; i += 4) {
+        __m256d p = _mm256_loadu_pd(p_values + i);
+        count += __builtin_popcount(_mm256_movemask_pd(_mm256_cmp_pd(p, av, _CMP_LT_OQ)));
+    }
+    for (; i < n; ++i) {
+        count += (p_values[i] < alpha);
+    }
+    return count;
+#else
+    Size count = 0;
+    for (Size i = 0; i < n; ++i) {
+        count += (p_values[i] < alpha);
+    }
+    return count;
+#endif
+}
+
+inline Size count_significant_impl(const float* p_values, Size n, float alpha) noexcept {
+#if defined(__AVX2__) || defined(__AVX__)
+    const __m256 av = _mm256_set1_ps(alpha);
+    Size count = 0;
+    Size i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 p = _mm256_loadu_ps(p_values + i);
+        count += __builtin_popcount(_mm256_movemask_ps(_mm256_cmp_ps(p, av, _CMP_LT_OQ)));
+    }
+    for (; i < n; ++i) {
+        count += (p_values[i] < alpha);
+    }
+    return count;
+#else
+    Size count = 0;
+    for (Size i = 0; i < n; ++i) {
+        count += (p_values[i] < alpha);
+    }
+    return count;
+#endif
+}
+
 inline Size count_significant(
     Array<const Real> p_values,
     Real alpha = Real(0.05)
 ) {
-    Size count = 0;
-
-#if defined(__AVX2__) || defined(__AVX__)
-    const __m256d av = _mm256_set1_pd(alpha);
-    Size i = 0;
-
-    for (; i + 4 <= p_values.len; i += 4) {
-        __m256d p = _mm256_loadu_pd(p_values.ptr + i);
-        count += __builtin_popcount(_mm256_movemask_pd(_mm256_cmp_pd(p, av, _CMP_LT_OQ)));
-    }
-
-    for (; i < p_values.len; ++i) {
-        count += (p_values[static_cast<Index>(i)] < alpha);
-    }
-#else
-    for (Size i = 0; i < p_values.len; ++i) {
-        count += (p_values[static_cast<Index>(i)] < alpha);
-    }
-#endif
-
-    return count;
+    return count_significant_impl(p_values.ptr, p_values.len, alpha);
 }
 
 inline void get_significant_indices(

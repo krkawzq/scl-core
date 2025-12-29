@@ -348,15 +348,17 @@ void compute_gene_means(
 
     scl::algo::zero(gene_means.ptr, G);
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         // Use atomic accumulation for CSR
         constexpr int64_t SCALE = 1000000LL;
 
-        auto atomic_sums_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT);
-        std::atomic<int64_t>* atomic_sums = atomic_sums_ptr.get();
+        // Note: std::atomic is not trivially constructible, use Byte allocation + placement new
+        auto raw_mem_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<int64_t>) * G, SCL_ALIGNMENT);
+        Byte* raw_mem = raw_mem_ptr.release();
+        auto* atomic_sums = reinterpret_cast<std::atomic<int64_t>*>(raw_mem);
 
         for (Size g = 0; g < G; ++g) {
-            atomic_sums[g].store(0, std::memory_order_relaxed);
+            new (&atomic_sums[g]) std::atomic<int64_t>(0);
         }
 
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
@@ -379,7 +381,11 @@ void compute_gene_means(
             gene_means[static_cast<Index>(g)] = static_cast<Real>(atomic_sums[g].load()) / SCALE * inv_n;
         }
 
-        scl::memory::aligned_free(atomic_sums, SCL_ALIGNMENT);
+        // Cleanup: manually destruct atomics and free memory
+        for (Size g = 0; g < G; ++g) {
+            atomic_sums[g].~atomic();
+        }
+        scl::memory::aligned_free(raw_mem, SCL_ALIGNMENT);
     } else {
         // Parallel over genes for CSC
         scl::threading::parallel_for(Size(0), G, [&](size_t g) {
@@ -426,7 +432,7 @@ void mean_score(
 
     Real inv_n_genes = Real(1) / static_cast<Real>(gene_set.len);
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
             auto values = X.row_values_unsafe(static_cast<Index>(c));
@@ -446,11 +452,13 @@ void mean_score(
         // Parallel over genes, atomic accumulation
         constexpr int64_t SCALE = 1000000LL;
 
-        auto atomic_scores_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
-        std::atomic<int64_t>* atomic_scores = atomic_scores_ptr.get();
+        // Note: std::atomic is not trivially constructible, use Byte allocation + placement new
+        auto raw_mem_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<int64_t>) * N, SCL_ALIGNMENT);
+        Byte* raw_mem = raw_mem_ptr.release();
+        auto* atomic_scores = reinterpret_cast<std::atomic<int64_t>*>(raw_mem);
 
         for (Size c = 0; c < N; ++c) {
-            atomic_scores[c].store(0, std::memory_order_relaxed);
+            new (&atomic_scores[c]) std::atomic<int64_t>(0);
         }
 
         scl::threading::parallel_for(Size(0), gene_set.len, [&](size_t i) {
@@ -471,10 +479,14 @@ void mean_score(
         });
 
         for (Size c = 0; c < N; ++c) {
-            scores[static_cast<Index>(c)] = static_cast<Real>(atomic_scores[static_cast<Index>(c)].load()) / SCALE * inv_n_genes;
+            scores[static_cast<Index>(c)] = static_cast<Real>(atomic_scores[c].load()) / SCALE * inv_n_genes;
         }
 
-        scl::memory::aligned_free(atomic_scores, SCL_ALIGNMENT);
+        // Cleanup: manually destruct atomics and free memory
+        for (Size c = 0; c < N; ++c) {
+            atomic_scores[c].~atomic();
+        }
+        scl::memory::aligned_free(raw_mem, SCL_ALIGNMENT);
     }
 
     lookup.destroy();
@@ -522,7 +534,7 @@ void weighted_score(
 
     Real inv_total = Real(1) / total_weight;
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
             auto values = X.row_values_unsafe(static_cast<Index>(c));
@@ -541,11 +553,13 @@ void weighted_score(
     } else {
         constexpr int64_t SCALE = 1000000LL;
 
-        auto atomic_scores_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
-        std::atomic<int64_t>* atomic_scores = atomic_scores_ptr.get();
+        // Note: std::atomic is not trivially constructible, use Byte allocation + placement new
+        auto raw_mem_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<int64_t>) * N, SCL_ALIGNMENT);
+        Byte* raw_mem = raw_mem_ptr.release();
+        auto* atomic_scores = reinterpret_cast<std::atomic<int64_t>*>(raw_mem);
 
         for (Size c = 0; c < N; ++c) {
-            atomic_scores[c].store(0, std::memory_order_relaxed);
+            new (&atomic_scores[c]) std::atomic<int64_t>(0);
         }
 
         scl::threading::parallel_for(Size(0), gene_set.len, [&](size_t i) {
@@ -561,16 +575,20 @@ void weighted_score(
                 Index c = indices[k];
                 if (c < n_cells) {
                     auto scaled = static_cast<int64_t>(w * static_cast<Real>(values[k]) * SCALE);
-                    atomic_scores[static_cast<Index>(c)].fetch_add(scaled, std::memory_order_relaxed);
+                    atomic_scores[c].fetch_add(scaled, std::memory_order_relaxed);
                 }
             }
         });
 
         for (Size c = 0; c < N; ++c) {
-            scores[static_cast<Index>(c)] = static_cast<Real>(atomic_scores[static_cast<Index>(c)].load()) / SCALE * inv_total;
+            scores[static_cast<Index>(c)] = static_cast<Real>(atomic_scores[c].load()) / SCALE * inv_total;
         }
 
-        scl::memory::aligned_free(atomic_scores, SCL_ALIGNMENT);
+        // Cleanup: manually destruct atomics and free memory
+        for (Size c = 0; c < N; ++c) {
+            atomic_scores[c].~atomic();
+        }
+        scl::memory::aligned_free(raw_mem, SCL_ALIGNMENT);
     }
 
     scl::memory::aligned_free(weight_map, SCL_ALIGNMENT);
@@ -617,7 +635,7 @@ void auc_score(
 
         scl::algo::zero(expr_values, G);
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(static_cast<Index>(c)));
             auto values = X.row_values_unsafe(static_cast<Index>(static_cast<Index>(c)));
             const Index len = X.row_length_unsafe(static_cast<Index>(static_cast<Index>(c)));
@@ -911,14 +929,16 @@ void zscore_score(
     Real* gene_vars = gene_vars_ptr.release();
     scl::algo::zero(gene_vars, G);
 
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         constexpr int64_t SCALE = 1000000LL;
 
-        auto atomic_vars_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT);
-        std::atomic<int64_t>* atomic_vars = atomic_vars_ptr.get();
+        // Note: std::atomic is not trivially constructible, use Byte allocation + placement new
+        auto raw_mem_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<int64_t>) * G, SCL_ALIGNMENT);
+        Byte* raw_mem = raw_mem_ptr.release();
+        auto* atomic_vars = reinterpret_cast<std::atomic<int64_t>*>(raw_mem);
 
         for (Size g = 0; g < G; ++g) {
-            atomic_vars[g].store(0, std::memory_order_relaxed);
+            new (&atomic_vars[g]) std::atomic<int64_t>(0);
         }
 
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
@@ -931,7 +951,7 @@ void zscore_score(
                 if (gene < n_genes) {
                     Real d = static_cast<Real>(values[k]) - gene_means[static_cast<Index>(gene)];
                     auto scaled = static_cast<int64_t>(d * d * SCALE);
-                    atomic_vars[static_cast<Index>(gene)].fetch_add(scaled, std::memory_order_relaxed);
+                    atomic_vars[gene].fetch_add(scaled, std::memory_order_relaxed);
                 }
             }
         });
@@ -940,7 +960,11 @@ void zscore_score(
             gene_vars[g] = static_cast<Real>(atomic_vars[g].load()) / SCALE;
         }
 
-        scl::memory::aligned_free(atomic_vars, SCL_ALIGNMENT);
+        // Cleanup: manually destruct atomics and free memory
+        for (Size g = 0; g < G; ++g) {
+            atomic_vars[g].~atomic();
+        }
+        scl::memory::aligned_free(raw_mem, SCL_ALIGNMENT);
     } else {
         scl::threading::parallel_for(Size(0), G, [&](size_t g) {
             auto values = X.col_values_unsafe(static_cast<Index>(g));
@@ -991,7 +1015,7 @@ void zscore_score(
     Real inv_n_set = Real(1) / static_cast<Real>(n_set);
 
     // Compute z-scores per cell (parallel)
-    if (IsCSR) {
+    if constexpr (IsCSR) {
         // Build gene -> set index map
         auto gene_to_set_ptr = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
 
@@ -1053,8 +1077,10 @@ void zscore_score(
         // CSC: accumulate per gene
         constexpr int64_t SCALE = 1000000LL;
 
-        auto atomic_scores_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
-        std::atomic<int64_t>* atomic_scores = atomic_scores_ptr.get();
+        // Note: std::atomic is not trivially constructible, use Byte allocation + placement new
+        auto raw_mem_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<int64_t>) * N, SCL_ALIGNMENT);
+        Byte* raw_mem = raw_mem_ptr.release();
+        auto* atomic_scores = reinterpret_cast<std::atomic<int64_t>*>(raw_mem);
 
         // Initialize with z-score sum for all zeros
         Real z_zero_sum = Real(0);
@@ -1063,7 +1089,7 @@ void zscore_score(
         }
 
         for (Size c = 0; c < N; ++c) {
-            atomic_scores[c].store(static_cast<int64_t>(z_zero_sum * SCALE), std::memory_order_relaxed);
+            new (&atomic_scores[c]) std::atomic<int64_t>(static_cast<int64_t>(z_zero_sum * SCALE));
         }
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_set), [&](size_t i) {
@@ -1091,10 +1117,14 @@ void zscore_score(
         });
 
         for (Size c = 0; c < N; ++c) {
-            scores[static_cast<Index>(c)] = static_cast<Real>(atomic_scores[static_cast<Index>(c)].load()) / SCALE * inv_n_set;
+            scores[static_cast<Index>(c)] = static_cast<Real>(atomic_scores[c].load()) / SCALE * inv_n_set;
         }
 
-        scl::memory::aligned_free(atomic_scores, SCL_ALIGNMENT);
+        // Cleanup: manually destruct atomics and free memory
+        for (Size c = 0; c < N; ++c) {
+            atomic_scores[c].~atomic();
+        }
+        scl::memory::aligned_free(raw_mem, SCL_ALIGNMENT);
     }
 
     scl::memory::aligned_free(set_inv_std, SCL_ALIGNMENT);
@@ -1264,7 +1294,7 @@ void quantile_score(
         Real* values = values_pool.get(thread_rank);
         scl::algo::zero(values, static_cast<Size>(n_set));
 
-        if (IsCSR) {
+        if constexpr (IsCSR) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
             auto vals = X.row_values_unsafe(static_cast<Index>(c));
             const Index len = X.row_length_unsafe(static_cast<Index>(c));

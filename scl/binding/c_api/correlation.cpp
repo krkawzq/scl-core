@@ -8,9 +8,9 @@
 #include "scl/kernel/correlation.hpp"
 #include "scl/core/type.hpp"
 
-namespace scl::binding {
+using namespace scl;
+using namespace scl::binding;
     using namespace scl::kernel::correlation;
-}
 
 extern "C" {
 
@@ -27,24 +27,20 @@ scl_error_t scl_corr_compute_stats(
     SCL_C_API_CHECK_NULL(out_means, "Output means pointer is null");
     SCL_C_API_CHECK_NULL(out_inv_stds, "Output inverse stds pointer is null");
 
-    SCL_C_API_TRY {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle is null");
         
-        SCL_C_API_CHECK(wrapper->valid(), SCL_ERROR_INVALID_ARGUMENT,
-                       "Invalid sparse matrix");
-
-        const Index n_rows = wrapper->rows();
+    SCL_C_API_TRY
+        const Index n_rows = matrix->rows();
         const Size n_rows_sz = static_cast<Size>(n_rows);
         
         Array<Real> means_arr(reinterpret_cast<Real*>(out_means), n_rows_sz);
         Array<Real> inv_stds_arr(reinterpret_cast<Real*>(out_inv_stds), n_rows_sz);
 
-        wrapper->visit([&](auto& m) {
+        matrix->visit([&](auto& m) {
             compute_stats(m, means_arr, inv_stds_arr);
         });
 
         SCL_C_API_RETURN_OK;
-    }
     SCL_C_API_CATCH
 }
 
@@ -63,13 +59,8 @@ scl_error_t scl_corr_pearson(
     SCL_C_API_CHECK_NULL(inv_stds, "Inverse stds pointer is null");
     SCL_C_API_CHECK_NULL(output, "Output pointer is null");
 
-    SCL_C_API_TRY {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
-        
-        SCL_C_API_CHECK(wrapper->valid(), SCL_ERROR_INVALID_ARGUMENT,
-                       "Invalid sparse matrix");
-
-        const Index n_rows = wrapper->rows();
+    SCL_C_API_TRY
+        const Index n_rows = matrix->rows();
         const Size n_rows_sz = static_cast<Size>(n_rows);
         const Size n_sq = n_rows_sz * n_rows_sz;
 
@@ -77,12 +68,11 @@ scl_error_t scl_corr_pearson(
         Array<const Real> inv_stds_arr(reinterpret_cast<const Real*>(inv_stds), n_rows_sz);
         Array<Real> out_arr(reinterpret_cast<Real*>(output), n_sq);
 
-        wrapper->visit([&](auto& m) {
+        matrix->visit([&](auto& m) {
             pearson(m, means_arr, inv_stds_arr, out_arr);
         });
 
         SCL_C_API_RETURN_OK;
-    }
     SCL_C_API_CATCH
 }
 
@@ -97,24 +87,18 @@ scl_error_t scl_corr_pearson_auto(
     SCL_C_API_CHECK_NULL(matrix, "Matrix handle is null");
     SCL_C_API_CHECK_NULL(output, "Output pointer is null");
 
-    SCL_C_API_TRY {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
-        
-        SCL_C_API_CHECK(wrapper->valid(), SCL_ERROR_INVALID_ARGUMENT,
-                       "Invalid sparse matrix");
-
-        const Index n_rows = wrapper->rows();
+    SCL_C_API_TRY
+        const Index n_rows = matrix->rows();
         const Size n_rows_sz = static_cast<Size>(n_rows);
         const Size n_sq = n_rows_sz * n_rows_sz;
 
         Array<Real> out_arr(reinterpret_cast<Real*>(output), n_sq);
 
-        wrapper->visit([&](auto& m) {
+        matrix->visit([&](auto& m) {
             pearson(m, out_arr);
         });
 
         SCL_C_API_RETURN_OK;
-    }
     SCL_C_API_CATCH
 }
 

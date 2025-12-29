@@ -15,6 +15,15 @@ namespace scl::binding {
 extern "C" {
 
 namespace {
+    using scl::kernel::stat::effect_size::EffectSizeType;
+    using scl::kernel::stat::effect_size::effect_size;
+    using scl::kernel::stat::effect_size::ttest_with_effect_size;
+    using scl::binding::SparseWrapper;
+    using scl::Index;
+    using scl::Size;
+    using scl::Real;
+    using scl::Array;
+    
     [[nodiscard]] constexpr auto convert_effect_size_type(scl_effect_size_type_t type) noexcept 
         -> EffectSizeType {
         switch (type) {

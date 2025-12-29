@@ -168,7 +168,9 @@ SCL_FORCE_INLINE Real compute_mean_diff_from_sorted(
     const T* values,
     const Size* indices,
     Size n,
-    const int32_t* perm_groups
+    const int32_t* perm_groups,
+    [[maybe_unused]] Size n1,
+    [[maybe_unused]] Size n2
 ) {
     double sum1 = 0.0, sum2 = 0.0;
     Size count1 = 0, count2 = 0;
@@ -393,10 +395,15 @@ Real permutation_test_single(
     if (n1 == 0 || n2 == 0) return Real(1);
 
     // Allocate workspace
-    T* sorted_vals = scl::memory::aligned_alloc<T>(n, SCL_ALIGNMENT);
-    auto sorted_idx = scl::memory::aligned_alloc<Size>(n, SCL_ALIGNMENT);
-    auto perm_groups = scl::memory::aligned_alloc<int32_t>(n, SCL_ALIGNMENT);
-    auto null_dist = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
+    auto sorted_vals_ptr = scl::memory::aligned_alloc<T>(n, SCL_ALIGNMENT);
+    auto sorted_idx_ptr = scl::memory::aligned_alloc<Size>(n, SCL_ALIGNMENT);
+    auto perm_groups_ptr = scl::memory::aligned_alloc<int32_t>(n, SCL_ALIGNMENT);
+    auto null_dist_ptr = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
+    
+    T* sorted_vals = sorted_vals_ptr.get();
+    Size* sorted_idx = sorted_idx_ptr.get();
+    int32_t* perm_groups = perm_groups_ptr.get();
+    Real* null_dist = null_dist_ptr.get();
 
     // Filter and sort
     Size total = 0;
@@ -444,7 +451,7 @@ Real permutation_test_single(
     Real abs_obs = (observed >= 0) ? observed : -observed;
 
     for (Size perm = 0; perm < n_permutations; ++perm) {
-        detail::shuffle_groups(perm_groups.get(), n, rng);
+        detail::shuffle_groups(perm_groups, n, rng);
 
         switch (stat_type) {
             case PermStatType::MWU:

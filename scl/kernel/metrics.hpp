@@ -152,14 +152,14 @@ Real silhouette_score(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices_unsafe(i);
-            const Index row_end = distances.row_indices_unsafe(i + 1);
+            auto neighbor_indices = distances.primary_indices_unsafe(static_cast<Index>(i));
+            auto neighbor_values = distances.primary_values_unsafe(static_cast<Index>(i));
 
-            for (Index j = row_start; j < row_end; ++j) {
-                const Index neighbor = distances.col_indices_unsafe(j);
+            for (Size j = 0; j < neighbor_indices.len; ++j) {
+                const Index neighbor = neighbor_indices[j];
                 if (neighbor == static_cast<Index>(i)) continue;
 
-                const T dist_val = distances.values()[j];
+                const T dist_val = neighbor_values[j];
                 const Index neighbor_cluster = labels.ptr[neighbor];
                 cluster_dist_sum[neighbor_cluster] += static_cast<Real>(dist_val);
             }
@@ -208,14 +208,14 @@ Real silhouette_score(
             cluster_dist_sum[c] = Real(0.0);
         }
 
-        const Index row_start = distances.row_indices_unsafe(i);
-        const Index row_end = distances.row_indices_unsafe(i + 1);
+        auto neighbor_indices = distances.primary_indices_unsafe(i);
+        auto neighbor_values = distances.primary_values_unsafe(i);
 
-        for (Index j = row_start; j < row_end; ++j) {
-            const Index neighbor = distances.col_indices_unsafe(j);
+        for (Size j = 0; j < neighbor_indices.len; ++j) {
+            const Index neighbor = neighbor_indices[j];
             if (neighbor == static_cast<Index>(i)) continue;
 
-            const T dist_val = distances.values()[j];
+            const T dist_val = neighbor_values[j];
             const Index neighbor_cluster = labels.ptr[neighbor];
             cluster_dist_sum[neighbor_cluster] += static_cast<Real>(dist_val);
         }
@@ -288,14 +288,14 @@ void silhouette_samples(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices_unsafe(i);
-            const Index row_end = distances.row_indices_unsafe(i + 1);
+            auto neighbor_indices = distances.primary_indices_unsafe(static_cast<Index>(i));
+            auto neighbor_values = distances.primary_values_unsafe(static_cast<Index>(i));
 
-            for (Index j = row_start; j < row_end; ++j) {
-                const Index neighbor = distances.col_indices_unsafe(j);
+            for (Size j = 0; j < neighbor_indices.len; ++j) {
+                const Index neighbor = neighbor_indices[j];
                 if (neighbor == static_cast<Index>(i)) continue;
 
-                const T dist_val = distances.values()[j];
+                const T dist_val = neighbor_values[j];
                 const Index neighbor_cluster = labels.ptr[neighbor];
                 cluster_dist_sum[neighbor_cluster] += static_cast<Real>(dist_val);
             }
@@ -339,14 +339,14 @@ void silhouette_samples(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices_unsafe(i);
-            const Index row_end = distances.row_indices_unsafe(i + 1);
+            auto neighbor_indices = distances.primary_indices_unsafe(i);
+            auto neighbor_values = distances.primary_values_unsafe(i);
 
-            for (Index j = row_start; j < row_end; ++j) {
-                const Index neighbor = distances.col_indices_unsafe(j);
+            for (Size j = 0; j < neighbor_indices.len; ++j) {
+                const Index neighbor = neighbor_indices[j];
                 if (neighbor == static_cast<Index>(i)) continue;
 
-                const T dist_val = distances.values()[j];
+                const T dist_val = neighbor_values[j];
                 const Index neighbor_cluster = labels.ptr[neighbor];
                 cluster_dist_sum[neighbor_cluster] += static_cast<Real>(dist_val);
             }

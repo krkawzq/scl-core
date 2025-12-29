@@ -198,19 +198,23 @@ void isolation_score(
 
     Real* cell_vars = cell_vars_ptr.release();
 
+    // Build offset array for CSR access
+    auto row_offsets = data.build_offset_array();
+    const T* values_ptr = data.contiguous_data();
+
     // Global statistics accumulators
     std::atomic<Real> global_sum{Real(0.0)};
     std::atomic<Real> global_sum_sq{Real(0.0)};
 
     auto compute_cell_stats = [&](Size i) {
-        const Index row_start = data.row_indices_unsafe()[i];
-        const Index row_end = data.row_indices_unsafe()[i + 1];
+        const Index row_start = row_offsets[i];
+        const Index row_end = row_offsets[i + 1];
 
         Real sum = Real(0.0);
         Real sum_sq = Real(0.0);
 
         for (Index j = row_start; j < row_end; ++j) {
-            Real val = static_cast<Real>(data.values()[j]);
+            Real val = static_cast<Real>(values_ptr[j]);
             sum += val;
             sum_sq += val * val;
         }
@@ -290,10 +294,16 @@ void local_outlier_factor(
 
     if (n_cells == 0) return;
 
+    // Build offset arrays for CSR access
+    auto neighbors_offsets = neighbors.build_offset_array();
+    auto distances_offsets = distances.build_offset_array();
+    const Real* distances_values = distances.contiguous_data();
+    const Index* neighbors_indices = neighbors.contiguous_indices();
+
     // Determine k from neighbor graph
     Size k = 0;
     for (Size i = 0; i < n_cells; ++i) {
-        Size nnz = static_cast<Size>(neighbors.row_indices_unsafe()[i + 1] - neighbors.row_indices_unsafe()[i]);
+        Size nnz = static_cast<Size>(neighbors_offsets[i + 1] - neighbors_offsets[i]);
         if (nnz > k) k = nnz;
     }
     k = scl::algo::max2(k, config::MIN_K_NEIGHBORS);
@@ -301,11 +311,11 @@ void local_outlier_factor(
     // Step 1: Compute k-distance for each point (parallel)
     auto k_distances_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
 
-    Real* k_distances = k_distances_ptr.release();
+    Real* k_distances = k_distances_ptr.get();
 
     auto compute_k_distance = [&](Size i) {
-        const Index row_start = distances.row_indices_unsafe()[i];
-        const Index row_end = distances.row_indices_unsafe()[i + 1];
+        const Index row_start = distances_offsets[i];
+        const Index row_end = distances_offsets[i + 1];
         const Size n_neighbors = static_cast<Size>(row_end - row_start);
 
         if (n_neighbors == 0) {
@@ -314,7 +324,7 @@ void local_outlier_factor(
         }
 
         Size actual_k = scl::algo::min2(k, n_neighbors);
-        k_distances[i] = distances.values()[row_start + actual_k - 1];
+        k_distances[i] = distances_values[row_start + actual_k - 1];
     };
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
@@ -330,15 +340,15 @@ void local_outlier_factor(
     // Step 2: Compute local reachability density (LRD) for each point (parallel)
     auto lrd_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
 
-    Real* lrd = lrd_ptr.release();
+    Real* lrd = lrd_ptr.get();
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
         scl::threading::WorkspacePool<Real> reach_pool;
         reach_pool.init(scl::threading::get_num_threads_runtime(), k);
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
-            const Index row_start = neighbors.row_indices_unsafe()[i];
-            const Index row_end = neighbors.row_indices_unsafe()[i + 1];
+            const Index row_start = neighbors_offsets[i];
+            const Index row_end = neighbors_offsets[i + 1];
             const Size n_neighbors = static_cast<Size>(row_end - row_start);
 
             if (n_neighbors == 0) {
@@ -348,8 +358,8 @@ void local_outlier_factor(
 
             Real* reach_dists = reach_pool.get(thread_id);
             for (Size j = 0; j < n_neighbors; ++j) {
-                Index neighbor_idx = neighbors.col_indices_unsafe()[row_start + j];
-                Real dist = distances.values()[distances.row_indices_unsafe()[i] + j];
+                Index neighbor_idx = neighbors_indices[row_start + j];
+                Real dist = distances_values[distances_offsets[i] + j];
                 reach_dists[j] = detail::reachability_distance(dist, k_distances[neighbor_idx]);
             }
 
@@ -358,11 +368,11 @@ void local_outlier_factor(
     } else {
         auto reach_dists_ptr = scl::memory::aligned_alloc<Real>(k, SCL_ALIGNMENT);
 
-        Real* reach_dists = reach_dists_ptr.release();
+        Real* reach_dists = reach_dists_ptr.get();
 
         for (Size i = 0; i < n_cells; ++i) {
-            const Index row_start = neighbors.row_indices_unsafe()[i];
-            const Index row_end = neighbors.row_indices_unsafe()[i + 1];
+            const Index row_start = neighbors_offsets[i];
+            const Index row_end = neighbors_offsets[i + 1];
             const Size n_neighbors = static_cast<Size>(row_end - row_start);
 
             if (n_neighbors == 0) {
@@ -371,21 +381,19 @@ void local_outlier_factor(
             }
 
             for (Size j = 0; j < n_neighbors; ++j) {
-                Index neighbor_idx = neighbors.col_indices_unsafe()[row_start + j];
-                Real dist = distances.values()[distances.row_indices_unsafe()[i] + j];
+                Index neighbor_idx = neighbors_indices[row_start + j];
+                Real dist = distances_values[distances_offsets[i] + j];
                 reach_dists[j] = detail::reachability_distance(dist, k_distances[neighbor_idx]);
             }
 
             lrd[i] = detail::local_reachability_density(reach_dists, n_neighbors);
         }
-
-        scl::memory::aligned_free(reach_dists);
     }
 
     // Step 3: Compute LOF for each point (parallel)
     auto compute_lof = [&](Size i) {
-        const Index row_start = neighbors.row_indices_unsafe()[i];
-        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
+        const Index row_start = neighbors_offsets[i];
+        const Index row_end = neighbors_offsets[i + 1];
         const Size n_neighbors = static_cast<Size>(row_end - row_start);
 
         if (n_neighbors == 0 || lrd[i] < config::EPSILON) {
@@ -395,7 +403,7 @@ void local_outlier_factor(
 
         Real sum_neighbor_lrd = Real(0.0);
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor_idx = neighbors.col_indices_unsafe()[j];
+            Index neighbor_idx = neighbors_indices[j];
             sum_neighbor_lrd += lrd[neighbor_idx];
         }
 
@@ -434,18 +442,23 @@ void ambient_detection(
 
     if (n_cells == 0 || n_genes == 0) return;
 
+    // Build offset arrays for CSR access
+    auto expression_offsets = expression.build_offset_array();
+    const T* expression_values = expression.contiguous_data();
+    const Index* expression_indices = expression.contiguous_indices();
+
     // Compute total UMI per cell
     auto total_umi_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
 
-    Real* total_umi = total_umi_ptr.release();
+    Real* total_umi = total_umi_ptr.get();
 
     for (Size i = 0; i < n_cells; ++i) {
         Real sum = Real(0.0);
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        const Index row_start = expression_offsets[i];
+        const Index row_end = expression_offsets[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            sum += static_cast<Real>(expression.values()[j]);
+            sum += static_cast<Real>(expression_values[j]);
         }
         total_umi[i] = sum;
     }
@@ -453,7 +466,7 @@ void ambient_detection(
     // Find low-UMI cells to estimate ambient profile
     auto sorted_umi_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
 
-    Real* sorted_umi = sorted_umi_ptr.release();
+    Real* sorted_umi = sorted_umi_ptr.get();
     scl::algo::copy(total_umi, sorted_umi, n_cells);
     scl::sort::sort(Array<Real>(sorted_umi, n_cells));
 
@@ -464,7 +477,7 @@ void ambient_detection(
     // Compute ambient gene profile
     auto ambient_profile_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
 
-    Real* ambient_profile = ambient_profile_ptr.release();
+    Real* ambient_profile = ambient_profile_ptr.get();
     for (Size g = 0; g < n_genes; ++g) {
         ambient_profile[g] = Real(0.0);
     }
@@ -473,12 +486,12 @@ void ambient_detection(
     for (Size i = 0; i < n_cells; ++i) {
         if (total_umi[i] > umi_threshold) continue;
 
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        const Index row_start = expression_offsets[i];
+        const Index row_end = expression_offsets[i + 1];
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices_unsafe()[j];
-            Real val = static_cast<Real>(expression.values()[j]);
+            Index gene = expression_indices[j];
+            Real val = static_cast<Real>(expression_values[j]);
             ambient_profile[gene] += val;
             ambient_total += val;
         }
@@ -493,8 +506,8 @@ void ambient_detection(
 
     // Score each cell by correlation with ambient profile
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        const Index row_start = expression_offsets[i];
+        const Index row_end = expression_offsets[i + 1];
 
         if (total_umi[i] < config::EPSILON) {
             ambient_scores.ptr[i] = Real(1.0);
@@ -506,8 +519,8 @@ void ambient_detection(
         Real cell_norm = Real(0.0);
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices_unsafe()[j];
-            Real val = static_cast<Real>(expression.values()[j]) / total_umi[i];
+            Index gene = expression_indices[j];
+            Real val = static_cast<Real>(expression_values[j]) / total_umi[i];
             dot_product += val * ambient_profile[gene];
             cell_norm += val * val;
         }

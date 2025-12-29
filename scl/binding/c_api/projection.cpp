@@ -65,14 +65,22 @@ scl_error_t scl_projection_project(
                 return SCL_ERROR_INVALID_ARGUMENT;
         }
         
+        // All projection methods currently require CSR format
+        if (!matrix->is_csr_format()) {
+            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Projection requires CSR format");
+            return SCL_ERROR_INVALID_ARGUMENT;
+        }
+        
         matrix->visit([&](auto& m) {
-            scl::kernel::projection::project(
-                m,
-                static_cast<Size>(output_dim),
-                output_arr,
-                proj_type,
-                seed
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::projection::project(
+                    m,
+                    static_cast<Size>(output_dim),
+                    output_arr,
+                    proj_type,
+                    seed
+                );
+            }
         });
         
         clear_last_error();
@@ -153,13 +161,20 @@ scl_error_t scl_projection_gaussian(
             total_size
         );
         
+        if (!matrix->is_csr_format()) {
+            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "project_gaussian requires CSR format");
+            return SCL_ERROR_INVALID_ARGUMENT;
+        }
+        
         matrix->visit([&](auto& m) {
-            scl::kernel::projection::project_gaussian_otf(
-                m,
-                static_cast<Size>(output_dim),
-                output_arr,
-                seed
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::projection::project_gaussian_otf(
+                    m,
+                    static_cast<Size>(output_dim),
+                    output_arr,
+                    seed
+                );
+            }
         });
         
         clear_last_error();
@@ -194,13 +209,20 @@ scl_error_t scl_projection_achlioptas(
             total_size
         );
         
+        if (!matrix->is_csr_format()) {
+            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "project_achlioptas requires CSR format");
+            return SCL_ERROR_INVALID_ARGUMENT;
+        }
+        
         matrix->visit([&](auto& m) {
-            scl::kernel::projection::project_achlioptas_otf(
-                m,
-                static_cast<Size>(output_dim),
-                output_arr,
-                seed
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::projection::project_achlioptas_otf(
+                    m,
+                    static_cast<Size>(output_dim),
+                    output_arr,
+                    seed
+                );
+            }
         });
         
         clear_last_error();
@@ -241,14 +263,21 @@ scl_error_t scl_projection_sparse(
             total_size
         );
         
+        if (!matrix->is_csr_format()) {
+            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "project_sparse requires CSR format");
+            return SCL_ERROR_INVALID_ARGUMENT;
+        }
+        
         matrix->visit([&](auto& m) {
-            scl::kernel::projection::project_sparse_otf(
-                m,
-                static_cast<Size>(output_dim),
-                output_arr,
-                static_cast<Real>(density),
-                seed
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::projection::project_sparse_otf(
+                    m,
+                    static_cast<Size>(output_dim),
+                    output_arr,
+                    static_cast<Real>(density),
+                    seed
+                );
+            }
         });
         
         clear_last_error();
@@ -283,13 +312,20 @@ scl_error_t scl_projection_countsketch(
             total_size
         );
         
+        if (!matrix->is_csr_format()) {
+            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "project_countsketch requires CSR format");
+            return SCL_ERROR_INVALID_ARGUMENT;
+        }
+        
         matrix->visit([&](auto& m) {
-            scl::kernel::projection::project_countsketch(
-                m,
-                static_cast<Size>(output_dim),
-                output_arr,
-                seed
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::projection::project_countsketch(
+                    m,
+                    static_cast<Size>(output_dim),
+                    output_arr,
+                    seed
+                );
+            }
         });
         
         clear_last_error();
@@ -330,14 +366,21 @@ scl_error_t scl_projection_feature_hash(
             total_size
         );
         
+        if (!matrix->is_csr_format()) {
+            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "project_feature_hash requires CSR format");
+            return SCL_ERROR_INVALID_ARGUMENT;
+        }
+        
         matrix->visit([&](auto& m) {
-            scl::kernel::projection::project_feature_hash(
-                m,
-                static_cast<Size>(output_dim),
-                output_arr,
-                static_cast<Size>(n_hashes),
-                seed
-            );
+            if constexpr (std::remove_reference_t<decltype(m)>::is_csr) {
+                scl::kernel::projection::project_feature_hash(
+                    m,
+                    static_cast<Size>(output_dim),
+                    output_arr,
+                    static_cast<Size>(n_hashes),
+                    seed
+                );
+            }
         });
         
         clear_last_error();

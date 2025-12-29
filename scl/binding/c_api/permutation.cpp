@@ -8,10 +8,13 @@
 #include "scl/kernel/permutation.hpp"
 #include "scl/core/type.hpp"
 
-using namespace scl;
-using namespace scl::binding;
-
 extern "C" {
+
+using scl::Index;
+using scl::Size;
+using scl::Real;
+using scl::Array;
+using scl::binding::SparseWrapper;
 
 // =============================================================================
 // Correlation Test

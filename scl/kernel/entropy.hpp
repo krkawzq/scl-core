@@ -284,8 +284,10 @@ SCL_HOT void discretize_equal_width_parallel(
     T max_val = values[0];
     if (SCL_LIKELY(n >= config::PARALLEL_THRESHOLD)) {
         const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-        T* thread_mins = scl::memory::aligned_alloc<T>(n_threads, SCL_ALIGNMENT);
-        T* thread_maxs = scl::memory::aligned_alloc<T>(n_threads, SCL_ALIGNMENT);
+        auto thread_mins_owner = scl::memory::aligned_alloc<T>(n_threads, SCL_ALIGNMENT);
+        auto thread_maxs_owner = scl::memory::aligned_alloc<T>(n_threads, SCL_ALIGNMENT);
+        T* thread_mins = thread_mins_owner.get();
+        T* thread_maxs = thread_maxs_owner.get();
         for (size_t t = 0; t < n_threads; ++t) {
             thread_mins[t] = values[0];
             thread_maxs[t] = values[0];
@@ -300,9 +302,6 @@ SCL_HOT void discretize_equal_width_parallel(
             min_val = scl::algo::min2(min_val, thread_mins[t]);
             max_val = scl::algo::max2(max_val, thread_maxs[t]);
         }
-        
-        scl::memory::aligned_free(thread_maxs, SCL_ALIGNMENT);
-        scl::memory::aligned_free(thread_mins, SCL_ALIGNMENT);
     } else {
         // Use SIMD for sequential min/max when T is Real
         if constexpr (std::is_same_v<T, Real>) {

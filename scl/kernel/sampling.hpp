@@ -158,44 +158,44 @@ void kmeans_pp_init(
     for (Size c = 1; c < k; ++c) {
         Index last_center = centers[c - 1];
 
-        const Index center_start = data.row_indices_unsafe()[last_center];
-        const Index center_end = data.row_indices_unsafe()[last_center + 1];
+        auto center_indices = data.primary_indices_unsafe(last_center);
+        auto center_values = data.primary_values_unsafe(last_center);
 
         // Parallel distance update
         auto update_distance = [&](Size i) {
             Real dist = Real(0.0);
 
-            const Index row_start = data.row_indices_unsafe()[i];
-            const Index row_end = data.row_indices_unsafe()[i + 1];
+            auto row_indices = data.primary_indices_unsafe(static_cast<Index>(i));
+            auto row_values = data.primary_values_unsafe(static_cast<Index>(i));
 
             // Sparse distance computation with merge
-            Index ci = center_start, ri = row_start;
-            while (ci < center_end && ri < row_end) {
-                Index c_col = data.col_indices_unsafe()[ci];
-                Index r_col = data.col_indices_unsafe()[ri];
+            Size ci = 0, ri = 0;
+            while (ci < center_indices.len && ri < row_indices.len) {
+                Index c_col = center_indices[ci];
+                Index r_col = row_indices[ri];
 
                 if (c_col == r_col) {
-                    Real diff = static_cast<Real>(data.values()[ci]) -
-                               static_cast<Real>(data.values()[ri]);
+                    Real diff = static_cast<Real>(center_values[ci]) -
+                               static_cast<Real>(row_values[ri]);
                     dist += diff * diff;
                     ++ci;
                     ++ri;
                 } else if (c_col < r_col) {
-                    Real val = static_cast<Real>(data.values()[ci]);
+                    Real val = static_cast<Real>(center_values[ci]);
                     dist += val * val;
                     ++ci;
                 } else {
-                    Real val = static_cast<Real>(data.values()[ri]);
+                    Real val = static_cast<Real>(row_values[ri]);
                     dist += val * val;
                     ++ri;
                 }
             }
-            while (ci < center_end) {
-                Real val = static_cast<Real>(data.values()[ci++]);
+            while (ci < center_indices.len) {
+                Real val = static_cast<Real>(center_values[ci++]);
                 dist += val * val;
             }
-            while (ri < row_end) {
-                Real val = static_cast<Real>(data.values()[ri++]);
+            while (ri < row_indices.len) {
+                Real val = static_cast<Real>(row_values[ri++]);
                 dist += val * val;
             }
 
@@ -279,12 +279,12 @@ void geometric_sketching(
 
     // Find bounds
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = data.row_indices_unsafe()[i];
-        const Index row_end = data.row_indices_unsafe()[i + 1];
+        auto row_col_indices = data.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_vals = data.primary_values_unsafe(static_cast<Index>(i));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index feature = data.col_indices_unsafe()[j];
-            Real val = static_cast<Real>(data.values()[j]);
+        for (Size j = 0; j < row_col_indices.len; ++j) {
+            Index feature = row_col_indices[j];
+            Real val = static_cast<Real>(row_vals[j]);
             min_vals[feature] = scl::algo::min2(min_vals[feature], val);
             max_vals[feature] = scl::algo::max2(max_vals[feature], val);
         }
@@ -317,12 +317,12 @@ void geometric_sketching(
             point_buffer[d] = Real(0.0);
         }
 
-        const Index row_start = data.row_indices_unsafe()[i];
-        const Index row_end = data.row_indices_unsafe()[i + 1];
+        auto row_col_indices = data.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_vals = data.primary_values_unsafe(static_cast<Index>(i));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index feature = data.col_indices_unsafe()[j];
-            point_buffer[feature] = static_cast<Real>(data.values()[j]);
+        for (Size j = 0; j < row_col_indices.len; ++j) {
+            Index feature = row_col_indices[j];
+            point_buffer[feature] = static_cast<Real>(row_vals[j]);
         }
 
         cell_hashes[i] = detail::compute_grid_cell(point_buffer, n_features,
@@ -567,12 +567,12 @@ void representative_cells(
     // Compute centroids
     for (Size i = 0; i < n_cells; ++i) {
         Index c = cluster_labels.ptr[i];
-        const Index row_start = data.row_indices_unsafe()[i];
-        const Index row_end = data.row_indices_unsafe()[i + 1];
+        auto row_col_indices = data.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_vals = data.primary_values_unsafe(static_cast<Index>(i));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index feature = data.col_indices_unsafe()[j];
-            centroids[c][feature] += static_cast<Real>(data.values()[j]);
+        for (Size j = 0; j < row_col_indices.len; ++j) {
+            Index feature = row_col_indices[j];
+            centroids[c][feature] += static_cast<Real>(row_vals[j]);
         }
     }
 
@@ -595,21 +595,21 @@ void representative_cells(
             Index cell = cluster_indices[c][idx];
             Real dist = Real(0.0);
 
-            const Index row_start = data.row_indices_unsafe()[cell];
-            const Index row_end = data.row_indices_unsafe()[cell + 1];
+            auto row_col_indices = data.primary_indices_unsafe(cell);
+            auto row_vals = data.primary_values_unsafe(cell);
 
             // Sparse distance to centroid
-            for (Index j = row_start; j < row_end; ++j) {
-                Index feature = data.col_indices_unsafe()[j];
-                Real diff = static_cast<Real>(data.values()[j]) - centroids[c][feature];
+            for (Size j = 0; j < row_col_indices.len; ++j) {
+                Index feature = row_col_indices[j];
+                Real diff = static_cast<Real>(row_vals[j]) - centroids[c][feature];
                 dist += diff * diff;
             }
             // Add contribution from zero entries (centroid non-zero)
             for (Size d = 0; d < n_features; ++d) {
                 if (centroids[c][d] != Real(0.0)) {
                     bool found = false;
-                    for (Index j = row_start; j < row_end; ++j) {
-                        if (data.col_indices_unsafe()[j] == static_cast<Index>(d)) {
+                    for (Size j = 0; j < row_col_indices.len; ++j) {
+                        if (row_col_indices[j] == static_cast<Index>(d)) {
                             found = true;
                             break;
                         }

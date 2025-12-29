@@ -278,9 +278,9 @@ SCL_HOT void project_row_gaussian_blocked(
             // Scale and accumulate
             T scaled_val = val * scale;
             if (block_len >= config::SIMD_THRESHOLD) {
-                accumulate_simd(out_block, block_len, scaled_val, local_gauss);
+                accumulate_simd(out_block, block_len, scaled_val, local_gauss.data());
             } else {
-                accumulate_scalar(out_block, block_len, scaled_val, local_gauss);
+                accumulate_scalar(out_block, block_len, scaled_val, local_gauss.data());
             }
         }
     }
@@ -1158,26 +1158,31 @@ void project(
     ProjectionType type = ProjectionType::Sparse,
     uint64_t seed = 42
 ) {
-    Real density = Real(1) / std::sqrt(static_cast<Real>(matrix.cols()));
-    density = scl::algo::max2(density, Real(0.01));
-    density = scl::algo::min2(density, Real(0.5));
+    if constexpr (IsCSR) {
+        Real density = Real(1) / std::sqrt(static_cast<Real>(matrix.cols()));
+        density = scl::algo::max2(density, Real(0.01));
+        density = scl::algo::min2(density, Real(0.5));
 
-    switch (type) {
-        case ProjectionType::Gaussian:
-            project_gaussian_otf(matrix, output_dim, output, seed);
-            break;
-        case ProjectionType::Achlioptas:
-            project_achlioptas_otf(matrix, output_dim, output, seed);
-            break;
-        case ProjectionType::Sparse:
-            project_sparse_otf(matrix, output_dim, output, density, seed);
-            break;
-        case ProjectionType::CountSketch:
-            project_countsketch(matrix, output_dim, output, seed);
-            break;
-        case ProjectionType::FeatureHash:
-            project_feature_hash(matrix, output_dim, output, 3, seed);
-            break;
+        switch (type) {
+            case ProjectionType::Gaussian:
+                project_gaussian_otf(matrix, output_dim, output, seed);
+                break;
+            case ProjectionType::Achlioptas:
+                project_achlioptas_otf(matrix, output_dim, output, seed);
+                break;
+            case ProjectionType::Sparse:
+                project_sparse_otf(matrix, output_dim, output, density, seed);
+                break;
+            case ProjectionType::CountSketch:
+                project_countsketch(matrix, output_dim, output, seed);
+                break;
+            case ProjectionType::FeatureHash:
+                project_feature_hash(matrix, output_dim, output, 3, seed);
+                break;
+        }
+    } else {
+        // CSC format: Add support for CSC-compatible projections in the future
+        SCL_CHECK_ARG(false, "Projection requires CSR format (transpose your matrix)");
     }
 }
 
@@ -1189,24 +1194,29 @@ void project_auto(
     Array<T> output,
     uint64_t seed = 42
 ) {
-    const Size input_dim = static_cast<Size>(matrix.cols());
-    
-    // Heuristic selection based on dimensions
-    if (output_dim <= 64) {
-        // For very small output, CountSketch is fastest
-        project_countsketch(matrix, output_dim, output, seed);
-    } else if (input_dim > 100000) {
-        // For very high dimensional input, use sparse projection
-        Real density = Real(1) / std::sqrt(static_cast<Real>(input_dim));
-        project_sparse_otf(matrix, output_dim, output, density, seed);
-    } else if (output_dim >= 512) {
-        // For large output, Achlioptas is good balance
-        project_achlioptas_otf(matrix, output_dim, output, seed);
+    if constexpr (IsCSR) {
+        const Size input_dim = static_cast<Size>(matrix.cols());
+        
+        // Heuristic selection based on dimensions
+        if (output_dim <= 64) {
+            // For very small output, CountSketch is fastest
+            project_countsketch(matrix, output_dim, output, seed);
+        } else if (input_dim > 100000) {
+            // For very high dimensional input, use sparse projection
+            Real density = Real(1) / std::sqrt(static_cast<Real>(input_dim));
+            project_sparse_otf(matrix, output_dim, output, density, seed);
+        } else if (output_dim >= 512) {
+            // For large output, Achlioptas is good balance
+            project_achlioptas_otf(matrix, output_dim, output, seed);
+        } else {
+            // Default: sparse projection
+            Real density = Real(1) / std::sqrt(static_cast<Real>(input_dim));
+            density = scl::algo::max2(density, Real(0.05));
+            project_sparse_otf(matrix, output_dim, output, density, seed);
+        }
     } else {
-        // Default: sparse projection
-        Real density = Real(1) / std::sqrt(static_cast<Real>(input_dim));
-        density = scl::algo::max2(density, Real(0.05));
-        project_sparse_otf(matrix, output_dim, output, density, seed);
+        // CSC format: Add support in the future
+        SCL_CHECK_ARG(false, "project_auto requires CSR format (transpose your matrix)");
     }
 }
 

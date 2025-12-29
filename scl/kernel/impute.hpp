@@ -286,7 +286,7 @@ SCL_HOT Index collect_neighbor_values_batch(
             auto row_values = X.row_values_unsafe(neighbor);
             Index len = X.row_length_unsafe(neighbor);
             
-            if (has_expression(indices, row_values, len, gene, val)) {
+            if (has_expression(indices.ptr, row_values.ptr, len, gene, val)) {
                 values[k] = static_cast<Real>(val);
                 has_value[k] = 1;
                 ++count;
@@ -299,7 +299,7 @@ SCL_HOT Index collect_neighbor_values_batch(
             auto col_values = X.col_values_unsafe(gene);
             Index len = X.col_length_unsafe(gene);
 
-            if (has_expression(indices, col_values, len, neighbor, val)) {
+            if (has_expression(indices.ptr, col_values.ptr, len, neighbor, val)) {
                 values[k] = static_cast<Real>(val);
                 has_value[k] = 1;
                 ++count;
@@ -999,14 +999,18 @@ void detect_dropouts(
 
     if constexpr (IsCSR) {
         // Parallel over cells, atomic accumulation
-        auto atomic_sums_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT);
-        std::atomic<int64_t>* atomic_sums = atomic_sums_ptr.get();
-        auto atomic_nnz_ptr = scl::memory::aligned_alloc<std::atomic<Index>>(G, SCL_ALIGNMENT);
-        std::atomic<Index>* atomic_nnz = atomic_nnz_ptr.get();
+        // Note: std::atomic is not trivially constructible, use Byte allocation + placement new
+        auto raw_mem_sums_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<int64_t>) * G, SCL_ALIGNMENT);
+        Byte* raw_mem_sums = raw_mem_sums_ptr.release();
+        auto* atomic_sums = reinterpret_cast<std::atomic<int64_t>*>(raw_mem_sums);
+        
+        auto raw_mem_nnz_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<Index>) * G, SCL_ALIGNMENT);
+        Byte* raw_mem_nnz = raw_mem_nnz_ptr.release();
+        auto* atomic_nnz = reinterpret_cast<std::atomic<Index>*>(raw_mem_nnz);
 
         for (Size g = 0; g < G; ++g) {
-            atomic_sums[g].store(0, std::memory_order_relaxed);
-            atomic_nnz[g].store(0, std::memory_order_relaxed);
+            new (&atomic_sums[g]) std::atomic<int64_t>(0);
+            new (&atomic_nnz[g]) std::atomic<Index>(0);
         }
 
         constexpr int64_t SCALE = 1000000LL;
@@ -1031,7 +1035,13 @@ void detect_dropouts(
             gene_nnz[g] = atomic_nnz[g].load();
         }
 
-        scl::memory::aligned_free(atomic_nnz, SCL_ALIGNMENT);
+        // Cleanup: manually destruct atomics and free memory
+        for (Size g = 0; g < G; ++g) {
+            atomic_sums[g].~atomic();
+            atomic_nnz[g].~atomic();
+        }
+        scl::memory::aligned_free(raw_mem_sums, SCL_ALIGNMENT);
+        scl::memory::aligned_free(raw_mem_nnz, SCL_ALIGNMENT);
         scl::memory::aligned_free(atomic_sums, SCL_ALIGNMENT);
     } else {
         // Parallel over genes

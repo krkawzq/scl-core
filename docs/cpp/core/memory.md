@@ -1,364 +1,345 @@
-# memory.hpp
-
-> scl/core/memory.hpp · Low-level memory operations optimized for high-performance computing
-
-## Overview
-
-This file provides low-level memory operations optimized for high-performance computing with SIMD acceleration. It includes aligned memory allocation, initialization (fill/zero), data movement (copy), and cache optimization utilities.
-
-Key features:
-- Aligned memory allocation for SIMD operations
-- SIMD-accelerated fill and zero operations
-- Fast copy operations with overlap handling
-- RAII wrapper for aligned buffers
-- Cache optimization hints (prefetch)
-
-**Header**: `` `#include "scl/core/memory.hpp"` ``
-
+---
+title: Memory Management
+description: Aligned allocation, RAII wrappers, and memory utilities
 ---
 
-## Main APIs
+# Memory Management
 
-### aligned_alloc
+SCL-Core provides modern C++ memory management utilities with aligned allocation, RAII wrappers, and automatic lifetime management.
 
-Allocate aligned memory for primitive types.
+## Aligned Allocation
 
-::: source_code file="scl/core/memory.hpp" symbol="aligned_alloc" collapsed
-:::
-
-**Algorithm Description**
-
-Allocates memory aligned to a specified boundary (default 64 bytes for cache-line alignment):
-
-1. Check if count == 0, return nullptr if so
-2. Calculate total bytes needed: count * sizeof(T)
-3. Use platform-specific aligned allocation:
-   - C++17+: aligned operator new
-   - POSIX: posix_memalign
-   - Windows: _aligned_malloc
-4. Zero-initialize the allocated memory
-5. Return aligned pointer, or nullptr on failure
-
-The default alignment of 64 bytes matches AVX-512 cache line size and ensures optimal SIMD performance.
-
-**Edge Cases**
-
-- **count == 0**: Returns nullptr (no allocation)
-- **Allocation failure**: Returns nullptr (caller must check)
-- **Overflow**: count * sizeof(T) overflow checked, returns nullptr
-- **Invalid alignment**: Must be power of 2 and >= sizeof(void*)
-
-**Data Guarantees (Preconditions)**
-
-- `alignment` must be a power of 2
-- `alignment >= sizeof(void*)` (platform minimum)
-- `count * sizeof(T)` must not overflow
-- T must be trivially constructible
-
-**Complexity Analysis**
-
-- **Time**: O(1) - single allocation call
-- **Space**: O(count * sizeof(T)) - allocated memory
-
-**Example**
+### Basic Allocation
 
 ```cpp
-#include "scl/core/memory.hpp"
+namespace scl::memory {
+    // Allocate aligned memory (returns unique_ptr)
+    template <typename T>
+    auto aligned_alloc(Size count, std::size_t alignment = DEFAULT_ALIGNMENT)
+        -> std::unique_ptr<T[], AlignedDeleter<T>>;
+    
+    // Legacy: Raw pointer allocation (deprecated)
+    template <typename T>
+    [[deprecated]] auto aligned_alloc_raw(Size count, std::size_t alignment = DEFAULT_ALIGNMENT)
+        -> T*;
+    
+    // Free aligned memory
+    template <typename T>
+    void aligned_free(T* ptr, std::size_t alignment = DEFAULT_ALIGNMENT);
+}
+```
 
-// Allocate aligned buffer for SIMD operations
-Real* data = scl::memory::aligned_alloc<Real>(
-    1000,    // Number of elements
-    64       // Alignment in bytes (default: 64)
-);
+### Usage Examples
 
-if (data == nullptr) {
-    // Handle allocation failure
-    return;
+```cpp
+// Modern: Use unique_ptr (recommended)
+auto buffer = memory::aligned_alloc<Real>(1000, SCL_ALIGNMENT);
+Array<Real> view = {buffer.get(), 1000};
+
+// Access data
+for (Size i = 0; i < 1000; ++i) {
+    view[i] = static_cast<Real>(i);
 }
 
-// Use data for SIMD operations...
-// Memory is zero-initialized
-
-// Free with aligned_free (MUST use aligned_free, not free())
-scl::memory::aligned_free(data, 64);
+// Automatic cleanup when buffer goes out of scope
 ```
 
----
-
-### aligned_free
-
-Free memory allocated with aligned_alloc.
-
-::: source_code file="scl/core/memory.hpp" symbol="aligned_free" collapsed
-:::
-
-**Algorithm Description**
-
-Frees memory allocated by aligned_alloc using platform-specific deallocation:
-- C++17+: aligned operator delete
-- POSIX: free
-- Windows: _aligned_free
-
-The alignment parameter must match the value used in aligned_alloc.
-
-**Edge Cases**
-
-- **ptr == nullptr**: Safe to call, does nothing
-- **Double free**: Undefined behavior (caller must track ownership)
-- **Mismatched alignment**: Undefined behavior (must match aligned_alloc)
-
-**Data Guarantees (Preconditions)**
-
-- ptr must be nullptr or allocated with aligned_alloc
-- alignment must match the alignment used in aligned_alloc
-
-**Complexity Analysis**
-
-- **Time**: O(1) - single deallocation call
-- **Space**: O(1)
-
-**Example**
+### Alignment Constants
 
 ```cpp
-Real* data = scl::memory::aligned_alloc<Real>(1000, 64);
-
-// Use data...
-
-// Free with matching alignment
-scl::memory::aligned_free(data, 64);
-// data is now invalid (dangling pointer)
+namespace scl::memory {
+    inline constexpr std::size_t DEFAULT_ALIGNMENT = 64;  // AVX-512 alignment
+    inline constexpr std::size_t STREAM_ALIGNMENT = 64;    // Non-temporal stores
+    inline constexpr std::size_t CACHE_LINE_SIZE = 64;    // Cache line size
+}
 ```
 
----
+## RAII Wrappers
 
 ### AlignedBuffer
 
-RAII wrapper for aligned memory allocation.
-
-::: source_code file="scl/core/memory.hpp" symbol="AlignedBuffer" collapsed
-:::
-
-**Algorithm Description**
-
-RAII wrapper that manages aligned memory allocation:
-- Constructor: Allocates aligned memory using aligned_alloc
-- Destructor: Automatically frees memory using aligned_free
-- Movable: Supports move construction and assignment
-- Non-copyable: Copy operations are deleted
-
-Provides safe exception handling - if an exception occurs, destructor automatically frees memory.
-
-**Edge Cases**
-
-- **Allocation failure**: Buffer is invalid (operator bool returns false)
-- **Move from**: Source buffer becomes invalid (empty)
-- **Double move**: Second move has no effect
-
-**Data Guarantees (Preconditions)**
-
-- Alignment must be power of 2 and >= sizeof(void*)
-- T must be trivially constructible
-
-**Complexity Analysis**
-
-- **Construction**: O(1) - single allocation
-- **Destruction**: O(1) - single deallocation
-- **Access**: O(1) - pointer dereference
-
-**Example**
-
 ```cpp
-#include "scl/core/memory.hpp"
-
-{
-    // RAII buffer - automatically freed on scope exit
-    scl::memory::AlignedBuffer<Real> buffer(1000, 64);
-    
-    if (buffer) {  // Check allocation success
-        Real* data = buffer.get();
-        Array<Real> span = buffer.span();
+namespace scl::memory {
+    template <typename T>
+    struct AlignedBuffer {
+        AlignedBuffer(Size count, std::size_t alignment = DEFAULT_ALIGNMENT);
         
-        // Use data...
-        span[0] = 1.0;
-        span[1] = 2.0;
+        // Non-copyable, movable
+        AlignedBuffer(const AlignedBuffer&) = delete;
+        AlignedBuffer& operator=(const AlignedBuffer&) = delete;
+        AlignedBuffer(AlignedBuffer&&) noexcept = default;
+        AlignedBuffer& operator=(AlignedBuffer&&) noexcept = default;
         
-        // Automatic cleanup on scope exit
-    }
+        // Get array view
+        Array<T> array() noexcept;
+        Array<const T> array() const noexcept;
+        
+        // Direct access
+        T* data() noexcept;
+        const T* data() const noexcept;
+        Size size() const noexcept;
+    };
 }
 ```
 
----
-
-### fill
-
-Fill memory with a value using SIMD acceleration.
-
-::: source_code file="scl/core/memory.hpp" symbol="fill" collapsed
-:::
-
-**Algorithm Description**
-
-Fills a memory range with a specified value using SIMD optimization:
-
-1. Create SIMD vector with broadcasted value
-2. Process bulk of data with 4-way unrolled SIMD loop
-3. Process remainder with SIMD loop
-4. Process tail elements with scalar loop
-
-Uses platform-specific SIMD instructions (AVX2/AVX-512/NEON) automatically selected by compiler.
-
-**Edge Cases**
-
-- **Empty span**: Returns immediately (no operation)
-- **Null pointer**: Safe if span.len == 0, undefined behavior otherwise
-- **Large values**: All elements set to same value (including NaNs)
-
-**Data Guarantees (Preconditions)**
-
-- span.ptr must be valid or nullptr (if span.len == 0)
-- Memory must be writable
-
-**Complexity Analysis**
-
-- **Time**: O(n / lanes) where lanes is SIMD width (typically 4-16x faster than scalar)
-- **Space**: O(1) auxiliary
-
-**Example**
-
+**Usage**:
 ```cpp
-#include "scl/core/memory.hpp"
+// Create buffer
+AlignedBuffer<Real> buffer(1000);
+Array<Real> view = buffer.array();
 
-Real* data = new Real[1000];
-Array<Real> span(data, 1000);
+// Use view
+for (Size i = 0; i < view.size(); ++i) {
+    view[i] = static_cast<Real>(i);
+}
 
-// Fill with value 1.5
-scl::memory::fill(span, Real(1.5));
-
-// All elements in span are now 1.5
+// Automatic cleanup
 ```
 
----
+## Memory Utilities
 
-### zero
-
-Zero out memory efficiently.
-
-::: source_code file="scl/core/memory.hpp" symbol="zero" collapsed
-:::
-
-**Algorithm Description**
-
-Efficiently zeros memory:
-- For trivial types: Uses optimized memset (fastest)
-- For non-trivial types: Uses fill(span, T(0))
-
-Provides optimal performance for common case of zeroing primitive types.
-
-**Edge Cases**
-
-- **Empty span**: Returns immediately
-- **Null pointer**: Safe if span.len == 0
-- **Non-trivial types**: Uses fill, may call constructors
-
-**Data Guarantees (Preconditions)**
-
-- span.ptr must be valid or nullptr (if span.len == 0)
-
-**Complexity Analysis**
-
-- **Time**: O(n * sizeof(T)) for trivial types (memset), O(n / lanes) for non-trivial (SIMD fill)
-- **Space**: O(1) auxiliary
-
-**Example**
+### Prefetching
 
 ```cpp
-Real* data = scl::memory::aligned_alloc<Real>(1000, 64);
-Array<Real> span(data, 1000);
+// Prefetch for read
+SCL_PREFETCH_READ(ptr, locality);  // locality: 0-3 (0=no locality, 3=strong locality)
 
-// Zero out memory
-scl::memory::zero(span);
+// Prefetch for write
+SCL_PREFETCH_WRITE(ptr, locality);
 
-// All elements are now 0.0
+// Example: Prefetch ahead in loop
+for (Size i = 0; i < n; ++i) {
+    if (i + PREFETCH_DISTANCE < n) {
+        SCL_PREFETCH_READ(&data[i + PREFETCH_DISTANCE], 0);
+    }
+    process(data[i]);
+}
 ```
 
----
-
-### copy_fast
-
-Fast copy assuming NO overlap (uses memcpy semantics).
-
-::: source_code file="scl/core/memory.hpp" symbol="copy_fast" collapsed
-:::
-
-**Algorithm Description**
-
-Fast memory copy optimized for non-overlapping ranges:
-- Uses memcpy for trivially copyable types
-- Compiler can optimize with __restrict__ semantics
-- No overlap checking (fastest option)
-
-**Edge Cases**
-
-- **Overlapping ranges**: Undefined behavior (use copy() instead)
-- **Size mismatch**: Undefined behavior (src.len must == dst.len)
-- **Empty ranges**: Returns immediately
-
-**Data Guarantees (Preconditions)**
-
-- src.len == dst.len
-- src and dst must NOT overlap
-- Both pointers must be valid
-
-**Complexity Analysis**
-
-- **Time**: O(n * sizeof(T)) - typically very fast (memcpy)
-- **Space**: O(1) auxiliary
-
-**Example**
+### Memory Operations
 
 ```cpp
-Real* src = new Real[1000];
-Real* dst = scl::memory::aligned_alloc<Real>(1000, 64);
+// Zero memory
+void zero(Array<T> data);
 
-Array<const Real> src_span(src, 1000);
-Array<Real> dst_span(dst, 1000);
+// Copy memory
+void copy(Array<const T> src, Array<T> dst);
 
-// Fast copy (no overlap check)
-scl::memory::copy_fast(src_span, dst_span);
-
-// dst now contains copy of src
+// Fill memory
+void fill(Array<T> data, T value);
 ```
 
----
+## Registry System
 
-## Utility Functions
+The registry system manages memory lifetime for sparse matrices and shared data:
 
-### copy
+```cpp
+namespace scl::registry {
+    // Register pointer (increment reference count)
+    void alias_incref(void* ptr, std::size_t size);
+    
+    // Unregister pointer (decrement reference count)
+    void alias_decref(void* ptr);
+    
+    // Batch operations
+    void alias_incref_batch(const void* const* ptrs, const std::size_t* sizes, Size count);
+    void alias_decref_batch(const void* const* ptrs, Size count);
+    
+    // Check if pointer is registered
+    bool is_registered(const void* ptr);
+}
+```
 
-Copy with overlap handling (uses memmove semantics). Safe for overlapping ranges but slower than copy_fast.
+### Usage with Sparse Matrices
 
-**Complexity**: O(n * sizeof(T))
+```cpp
+// Factory methods automatically register data
+auto matrix = CSR::create(rows, cols, nnz);
+// Data is registered in registry
 
-### prefetch_read / prefetch_write
+// Slicing creates aliases
+auto submatrix = matrix.slice_rows(0, 100);
+// submatrix shares data, ref count incremented
 
-Cache prefetch hints for optimization.
+// When destroyed, ref count decremented
+// Data freed when ref count reaches zero
+```
 
-**Complexity**: O(1) - single prefetch instruction
+### Manual Registration
 
-## Platform Support
+For external data (e.g., from Python):
 
-- **C++17+**: Uses aligned operator new/delete
-- **POSIX**: Uses posix_memalign and free
-- **Windows**: Uses _aligned_malloc and _aligned_free
+```cpp
+// Register external arrays
+Real* data_ptr = ...;
+Index* indices_ptr = ...;
+Size data_size = ...;
+Size indices_size = ...;
 
-## Performance Notes
+registry::alias_incref(data_ptr, data_size * sizeof(Real));
+registry::alias_incref(indices_ptr, indices_size * sizeof(Index));
 
-- **Aligned allocation**: 64-byte alignment matches AVX-512 cache line size
-- **SIMD operations**: Automatically use best available instructions (AVX2/AVX-512/NEON)
-- **copy_fast**: Fastest when overlap is impossible, use copy() for safety
+// Use in matrix
+auto matrix = CSR::wrap_traditional(rows, cols, nnz, ...);
 
-## See Also
+// Unregister when done
+registry::alias_decref(data_ptr);
+registry::alias_decref(indices_ptr);
+```
 
-- [Type System](./types) - Array<T> type used for memory views
-- [SIMD](./simd) - SIMD abstraction layer
-- [Registry](./registry) - Memory tracking for allocated buffers
+## Configuration
+
+### Memory Alignment
+
+```cpp
+// Default alignment (64 bytes for AVX-512)
+constexpr std::size_t DEFAULT_ALIGNMENT = 64;
+
+// Cache line size
+constexpr std::size_t CACHE_LINE_SIZE = 64;
+
+// Prefetch configuration
+constexpr std::size_t DEFAULT_PREFETCH_DISTANCE = 8;
+constexpr std::size_t DEFAULT_MAX_PREFETCHES = 16;
+```
+
+### Stream Copy Threshold
+
+For large arrays, non-temporal stores can improve performance:
+
+```cpp
+// Threshold for using non-temporal stores
+constexpr std::size_t STREAM_THRESHOLD = 256 * 1024;  // 256KB
+
+// Arrays larger than threshold use stream copy
+if (size > STREAM_THRESHOLD) {
+    // Use non-temporal stores
+}
+```
+
+## Best Practices
+
+### 1. Use RAII Wrappers
+
+```cpp
+// Good: Automatic cleanup
+{
+    AlignedBuffer<Real> buffer(1000);
+    Array<Real> view = buffer.array();
+    // Use view
+}  // Automatic cleanup
+
+// Avoid: Manual memory management
+Real* ptr = memory::aligned_alloc_raw<Real>(1000);
+// ... use ptr ...
+memory::aligned_free(ptr, SCL_ALIGNMENT);  // Easy to forget
+```
+
+### 2. Prefer unique_ptr for Temporary Buffers
+
+```cpp
+// Good: Clear ownership
+auto buffer = memory::aligned_alloc<Real>(n);
+Array<Real> view = {buffer.get(), n};
+
+// Avoid: Raw pointers
+Real* buffer = memory::aligned_alloc_raw<Real>(n);  // Deprecated
+```
+
+### 3. Align for SIMD
+
+```cpp
+// Always align data used with SIMD
+auto buffer = memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+Array<Real> view = {buffer.get(), n};
+
+// Use with SIMD
+namespace s = scl::simd;
+const s::SimdTag d;
+auto v = s::Load(d, view.data());  // Requires alignment
+```
+
+### 4. Use Prefetching Strategically
+
+```cpp
+// Prefetch ahead in hot loops
+constexpr Size PREFETCH_DISTANCE = 64;
+for (Size i = 0; i < n; ++i) {
+    if (i + PREFETCH_DISTANCE < n) {
+        SCL_PREFETCH_READ(&data[i + PREFETCH_DISTANCE], 0);
+    }
+    process(data[i]);
+}
+```
+
+### 5. Register External Data
+
+```cpp
+// When receiving data from external sources (Python, etc.)
+Real* external_data = ...;
+Size size = ...;
+
+// Register before use
+registry::alias_incref(external_data, size * sizeof(Real));
+
+// Use in SCL-Core
+auto matrix = CSR::wrap_traditional(..., external_data, ...);
+
+// Unregister when done
+registry::alias_decref(external_data);
+```
+
+## Performance Considerations
+
+### Alignment Impact
+
+Aligned memory is crucial for SIMD performance:
+
+```cpp
+// Aligned: Fast SIMD operations
+auto aligned = memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+// SIMD operations are fast
+
+// Unaligned: Slower SIMD operations
+auto unaligned = new Real[n];  // May not be aligned
+// SIMD operations may be slower or require special handling
+```
+
+### Cache-Friendly Access
+
+```cpp
+// Sequential access: Optimal
+for (Size i = 0; i < n; ++i) {
+    process(data[i]);
+}
+
+// Strided access: May cause cache misses
+for (Size i = 0; i < n; i += stride) {
+    process(data[i]);
+}
+```
+
+### Prefetching Benefits
+
+Prefetching can hide memory latency:
+
+```cpp
+// Without prefetching
+for (Size i = 0; i < n; ++i) {
+    process(data[i]);  // May wait for memory
+}
+
+// With prefetching
+for (Size i = 0; i < n; ++i) {
+    if (i + 64 < n) {
+        SCL_PREFETCH_READ(&data[i + 64], 0);
+    }
+    process(data[i]);  // Data may already be in cache
+}
+```
+
+## Related Documentation
+
+- [Core Types](./types.md) - Array views and types
+- [Sparse Matrices](./sparse.md) - Registry usage with sparse matrices
+- [SIMD](./simd.md) - Alignment requirements for SIMD

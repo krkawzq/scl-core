@@ -7,6 +7,7 @@
 
 #include <vector>
 #include <cstring>
+#include <memory>
 
 // =============================================================================
 // FILE: scl/threading/workspace.hpp
@@ -33,14 +34,11 @@ public:
 
         // Single contiguous allocation for all threads
         total_size_ = n_threads * capacity;
-        data_ = scl::memory::aligned_alloc<T>(total_size_, SCL_ALIGNMENT);
+        data_owner_ = scl::memory::aligned_alloc<T>(total_size_, SCL_ALIGNMENT);
+        data_ = data_owner_.get();
     }
 
-    ~WorkspacePool() {
-        if (data_) {
-            scl::memory::aligned_free(data_, SCL_ALIGNMENT);
-        }
-    }
+    ~WorkspacePool() = default;
 
     // Non-copyable
     WorkspacePool(const WorkspacePool&) = delete;
@@ -48,7 +46,8 @@ public:
 
     // Movable
     WorkspacePool(WorkspacePool&& other) noexcept
-        : data_(other.data_)
+        : data_owner_(std::move(other.data_owner_))
+        , data_(other.data_)
         , n_threads_(other.n_threads_)
         , capacity_(other.capacity_)
         , total_size_(other.total_size_)
@@ -61,7 +60,7 @@ public:
 
     WorkspacePool& operator=(WorkspacePool&& other) noexcept {
         if (this != &other) {
-            if (data_) scl::memory::aligned_free(data_, SCL_ALIGNMENT);
+            data_owner_ = std::move(other.data_owner_);
             data_ = other.data_;
             n_threads_ = other.n_threads_;
             capacity_ = other.capacity_;
@@ -97,6 +96,8 @@ public:
     [[nodiscard]] size_t n_threads() const noexcept { return n_threads_; }
 
 private:
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::unique_ptr<T[], scl::memory::AlignedDeleter<T>> data_owner_;
     T* data_ = nullptr;
     size_t n_threads_ = 0;
     size_t capacity_ = 0;
@@ -171,7 +172,8 @@ public:
         n_threads_ = n_threads;
         max_capacity_ = max_capacity;
 
-        data_ = scl::memory::aligned_alloc<T>(n_threads * max_capacity, SCL_ALIGNMENT);
+        data_owner_ = scl::memory::aligned_alloc<T>(n_threads * max_capacity, SCL_ALIGNMENT);
+        data_ = data_owner_.get();
         buffers_.resize(n_threads);
 
         for (size_t i = 0; i < n_threads; ++i) {
@@ -181,11 +183,7 @@ public:
         }
     }
 
-    ~DynamicWorkspacePool() {
-        if (data_) {
-            scl::memory::aligned_free(data_, SCL_ALIGNMENT);
-        }
-    }
+    ~DynamicWorkspacePool() = default;
 
     // Non-copyable
     DynamicWorkspacePool(const DynamicWorkspacePool&) = delete;
@@ -193,7 +191,8 @@ public:
 
     // Movable
     DynamicWorkspacePool(DynamicWorkspacePool&& other) noexcept
-        : data_(other.data_)
+        : data_owner_(std::move(other.data_owner_))
+        , data_(other.data_)
         , buffers_(std::move(other.buffers_))
         , n_threads_(other.n_threads_)
         , max_capacity_(other.max_capacity_)
@@ -205,7 +204,7 @@ public:
 
     DynamicWorkspacePool& operator=(DynamicWorkspacePool&& other) noexcept {
         if (this != &other) {
-            if (data_) scl::memory::aligned_free(data_, SCL_ALIGNMENT);
+            data_owner_ = std::move(other.data_owner_);
             data_ = other.data_;
             buffers_ = std::move(other.buffers_);
             n_threads_ = other.n_threads_;
@@ -225,6 +224,8 @@ public:
     [[nodiscard]] size_t max_capacity() const noexcept { return max_capacity_; }
 
 private:
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::unique_ptr<T[], scl::memory::AlignedDeleter<T>> data_owner_;
     T* data_ = nullptr;
     std::vector<ThreadBuffer> buffers_;
     size_t n_threads_ = 0;
@@ -256,7 +257,8 @@ public:
         n_threads_ = n_threads;
         k_ = k;
 
-        data_ = scl::memory::aligned_alloc<T>(n_threads * k, SCL_ALIGNMENT);
+        data_owner_ = scl::memory::aligned_alloc<T>(n_threads * k, SCL_ALIGNMENT);
+        data_ = data_owner_.get();
         buffers_.resize(n_threads);
 
         for (size_t i = 0; i < n_threads; ++i) {
@@ -266,11 +268,7 @@ public:
         }
     }
 
-    ~HeapWorkspacePool() {
-        if (data_) {
-            scl::memory::aligned_free(data_, SCL_ALIGNMENT);
-        }
-    }
+    ~HeapWorkspacePool() = default;
 
     // Non-copyable
     HeapWorkspacePool(const HeapWorkspacePool&) = delete;
@@ -278,7 +276,8 @@ public:
 
     // Movable
     HeapWorkspacePool(HeapWorkspacePool&& other) noexcept
-        : data_(other.data_)
+        : data_owner_(std::move(other.data_owner_))
+        , data_(other.data_)
         , buffers_(std::move(other.buffers_))
         , n_threads_(other.n_threads_)
         , k_(other.k_) {
@@ -289,9 +288,7 @@ public:
 
     HeapWorkspacePool& operator=(HeapWorkspacePool&& other) noexcept {
         if (this != &other) {
-            if (data_) {
-                scl::memory::aligned_free(data_, SCL_ALIGNMENT);
-            }
+            data_owner_ = std::move(other.data_owner_);
             data_ = other.data_;
             buffers_ = std::move(other.buffers_);
             n_threads_ = other.n_threads_;
@@ -311,6 +308,8 @@ public:
     [[nodiscard]] size_t k() const noexcept { return k_; }
 
 private:
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::unique_ptr<T[], scl::memory::AlignedDeleter<T>> data_owner_;
     T* data_ = nullptr;
     std::vector<HeapBuffer> buffers_;
     size_t n_threads_ = 0;

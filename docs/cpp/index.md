@@ -1,152 +1,274 @@
+---
+title: C++ Developer Guide
+description: Complete guide for C++ developers using SCL-Core
+---
+
 # C++ Developer Guide
 
-Welcome to the SCL-Core C++ Developer Guide! This documentation is designed for developers who want to contribute to SCL-Core, extend its functionality, or integrate it into their own C++ projects.
+Welcome to the SCL-Core C++ Developer Guide. This documentation provides comprehensive information for developers who want to use, extend, or contribute to SCL-Core.
 
 ## Overview
 
-SCL-Core is a high-performance biological operator library built with modern C++17. It provides:
+SCL-Core is a high-performance biological operator library built with **C++20**. It provides zero-overhead abstractions, SIMD-accelerated kernels, and parallel-by-default operations for maximum performance in computational biology applications.
 
-- **Zero-overhead abstractions** for maximum performance
-- **SIMD-accelerated** compute kernels
-- **Parallel-by-default** operations
-- **Memory-efficient** sparse matrix infrastructure
-- **Stable C-ABI** for language bindings
+### Key Features
 
-## Quick Navigation
+- **Zero-Overhead Abstractions**: All high-level APIs compile to optimal machine code
+- **SIMD Acceleration**: Built-in support via Google Highway library
+- **Parallel by Default**: Automatic parallelization with optimal work distribution
+- **Memory Efficient**: Advanced sparse matrix infrastructure with block allocation
+- **Modern C++20**: Uses concepts, `std::span`, `constexpr`, and other modern features
+- **Stable C-ABI**: Clean C interface for Python and other language bindings
 
-### For Contributors
+## Quick Start
 
-- [Getting Started](/cpp/getting-started/) - Set up your development environment
-- [Building from Source](/cpp/getting-started/building) - Compile and test the library
-- [Contributing Guide](/cpp/getting-started/contributing) - Code standards and workflow
-
-### For Library Users
-
-- [Architecture Overview](/cpp/architecture/) - Understand the design philosophy
-- [Core Modules](/cpp/core/) - Types, sparse matrices, memory management
-- [Threading](/cpp/threading/) - Parallel processing infrastructure
-- [Kernels](/cpp/kernels/) - Computational operators
-- [Memory-Mapped Arrays](/cpp/mmap/) - Out-of-core processing (Experimental)
-
-### For Advanced Users
-
-- [API Reference](/cpp/reference/) - Complete function reference
-- [Design Principles](/cpp/architecture/design-principles) - Performance optimization strategies
-- [Memory Model](/cpp/architecture/memory-model) - Registry and lifetime management
-
-## Key Features
-
-### Zero-Overhead Performance
-
-All abstractions compile down to optimal machine code:
+### Basic Usage
 
 ```cpp
-// High-level API
-scl::kernel::normalize::normalize_rows_inplace(matrix, NormMode::L2);
+#include "scl/core/type.hpp"
+#include "scl/core/sparse.hpp"
+#include "scl/kernel/normalize.hpp"
+#include "scl/threading/parallel_for.hpp"
 
-// Compiles to tight SIMD loops with no overhead
-```
+using namespace scl;
 
-### SIMD Acceleration
+// Create a sparse matrix
+auto matrix = CSR::create(1000, 2000, 10000);
 
-Built-in SIMD support via Highway library:
+// Normalize rows in-place
+kernel::normalize::normalize_rows_inplace(matrix, 1e4);
 
-```cpp
-namespace s = scl::simd;
-const s::Tag d;
-
-auto v_sum = s::Zero(d);
-for (size_t i = 0; i < n; i += s::lanes()) {
-    auto v = s::Load(d, data + i);
-    v_sum = s::Add(v_sum, v);
-}
-```
-
-### Parallel by Default
-
-Automatic parallelization with optimal work distribution:
-
-```cpp
-scl::threading::parallel_for(Size(0), n_rows, [&](size_t i) {
-    // Process row i in parallel
-    process_row(matrix, i);
+// Parallel processing
+threading::parallel_for(Size(0), 1000, [&](size_t i) {
+    // Process row i
 });
 ```
 
-### Memory Efficiency
-
-Advanced sparse matrix infrastructure:
+### Core Types
 
 ```cpp
-// Discontiguous storage for flexible memory management
-scl::Sparse<Real, true> matrix = 
-    scl::Sparse<Real, true>::create(rows, cols, nnz_per_row);
+// Floating-point type (configurable: float32/float64/float16)
+Real value = 3.14;
 
-// Registry-based lifetime management
-auto arrays = scl::kernel::sparse::to_contiguous_arrays(matrix);
-// Arrays are registered and tracked automatically
+// Index type (configurable: int16/int32/int64)
+Index idx = 42;
+
+// Zero-overhead array view
+Array<Real> data = {ptr, size};
+
+// Sparse matrix (CSR or CSC)
+CSR matrix = CSR::create(rows, cols, nnz);
+```
+
+## Documentation Structure
+
+### [Getting Started](./getting-started/)
+- Installation and build instructions
+- Development environment setup
+- First steps with the library
+
+### [Core Types](./core/)
+- **Type System**: `Real`, `Index`, `Array<T>`, `Size`
+- **Sparse Matrices**: `Sparse<T, IsCSR>`, CSR/CSC formats
+- **Memory Management**: Aligned allocation, RAII wrappers
+- **SIMD**: Highway-based vectorization
+
+### [Threading](./threading/)
+- Parallel execution backends (OpenMP, TBB, BS::thread_pool)
+- `parallel_for` interface
+- Thread safety guidelines
+
+### [Error Handling](./error-handling/)
+- Exception hierarchy
+- Error codes
+- Validation macros
+
+### [Kernels](./kernels/)
+- Normalization operations
+- Neighbor search
+- Statistical tests
+- Spatial analysis
+- And 50+ more algorithm modules
+
+### [Memory Management](./memory/)
+- Aligned allocation
+- Registry system
+- Memory-mapped arrays (experimental)
+
+## Design Principles
+
+### 1. Zero-Overhead Abstraction
+
+All abstractions compile down to optimal machine code with no runtime cost:
+
+```cpp
+// High-level API
+Array<Real> view = {data, n};
+Real sum = vectorize::sum(view);
+
+// Compiles to tight SIMD loops
+```
+
+### 2. Data-Oriented Design
+
+Optimize for cache locality and memory bandwidth:
+
+```cpp
+// Block-allocated sparse matrices
+auto matrix = CSR::create(rows, cols, nnz, BlockStrategy::adaptive());
+
+// Cache-friendly access patterns
+for (Index i = 0; i < n_rows; ++i) {
+    auto row = matrix.row_values(i);
+    // Process contiguous row data
+}
+```
+
+### 3. Explicit Resource Management
+
+No hidden allocations or implicit costs:
+
+```cpp
+// Explicit aligned allocation
+auto buffer = memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+
+// RAII wrapper
+AlignedBuffer<Real> buf(n);
+Array<Real> view = buf.array();
+```
+
+### 4. Compile-Time Polymorphism
+
+Templates over virtual functions for maximum performance:
+
+```cpp
+template <typename T, bool IsCSR>
+void process_matrix(const Sparse<T, IsCSR>& matrix) {
+    // Compile-time dispatch, zero overhead
+}
 ```
 
 ## Module Organization
 
 ```
 scl/
-├── core/           # Core types, sparse matrices, SIMD, memory
-├── threading/      # Parallel processing infrastructure
-├── kernel/         # Computational operators (80+ files, 400+ functions)
-├── math/           # Statistical functions and regression
-├── mmap/           # [Experimental] Memory-mapped arrays for out-of-core processing
-└── io/             # I/O utilities
+├── config.hpp          # Configuration (precision, threading backend)
+├── version.hpp         # Version information
+├── core/               # Core infrastructure
+│   ├── type.hpp        # Type system (Real, Index, Array, Sparse)
+│   ├── sparse.hpp      # Sparse matrix implementation
+│   ├── memory.hpp      # Memory management
+│   ├── simd.hpp        # SIMD abstraction (Highway)
+│   ├── error.hpp       # Exception system
+│   ├── macros.hpp      # Compiler abstractions
+│   └── ...
+├── kernel/             # Computational kernels (70+ modules)
+│   ├── normalize.hpp  # Normalization operations
+│   ├── neighbors.hpp  # Neighbor search
+│   ├── spatial.hpp    # Spatial analysis
+│   └── ...
+├── threading/          # Parallel processing
+│   ├── parallel_for.hpp
+│   └── scheduler.hpp
+├── math/               # Mathematical functions
+├── mmap/               # Memory-mapped arrays (experimental)
+└── binding/            # C-ABI interface
 ```
 
-## Documentation Structure
+## Configuration
 
-This guide is organized into several sections:
+SCL-Core supports compile-time configuration:
 
-### Getting Started
-Learn how to set up your development environment, build the library, and contribute code.
+### Precision Control
 
-### Architecture
-Understand the design principles, module structure, and memory model that make SCL-Core fast.
+```cpp
+// In config.hpp or via compile flags
+#define SCL_PRECISION 0  // 0=float32, 1=float64, 2=float16
+#define SCL_INDEX_PRECISION 2  // 0=int16, 1=int32, 2=int64
+```
 
-### Core Modules
-Deep dive into the fundamental building blocks: types, sparse matrices, SIMD, and memory management.
+### Threading Backend
 
-### Threading
-Learn about the parallel processing infrastructure and how to write thread-safe code.
+```cpp
+// Auto-selected based on platform
+// Or explicitly set:
+#define SCL_BACKEND_OPENMP   // OpenMP (default on Linux/Windows)
+#define SCL_BACKEND_TBB      // Intel TBB
+#define SCL_BACKEND_BS       // BS::thread_pool (default on macOS)
+#define SCL_BACKEND_SERIAL   // Serial execution
+```
 
-### Kernels
-Explore the 400+ computational operators organized by functionality.
+## Performance Tips
 
-### Reference
-Complete API reference extracted from source code documentation.
+### 1. Use Appropriate Data Types
 
-## Design Philosophy
+```cpp
+// For small datasets (< 32K elements)
+#define SCL_INDEX_PRECISION 0  // int16 saves memory
 
-SCL-Core follows these core principles:
+// For large datasets
+#define SCL_INDEX_PRECISION 2  // int64 (default, NumPy-compatible)
+```
 
-1. **Zero-Overhead Abstraction** - No runtime cost for high-level APIs
-2. **Data-Oriented Design** - Optimize for cache locality and memory bandwidth
-3. **Explicit Resource Management** - No hidden allocations or implicit costs
-4. **Compile-Time Polymorphism** - Templates over virtual functions
-5. **Documentation as Code** - `.h` files contain comprehensive API docs
+### 2. Choose Correct Sparse Format
 
-## Getting Help
+```cpp
+// Row-based operations → CSR
+CSR matrix = CSR::create(rows, cols, nnz);
 
-- **Issues**: Report bugs on [GitHub Issues](https://github.com/krkawzq/scl-core/issues)
-- **Discussions**: Ask questions in [GitHub Discussions](https://github.com/krkawzq/scl-core/discussions)
-- **Contributing**: See the [Contributing Guide](/cpp/getting-started/contributing)
+// Column-based operations → CSC
+CSC matrix = CSC::create(rows, cols, nnz);
+```
+
+### 3. Enable SIMD
+
+```cpp
+// SIMD is enabled by default
+// Disable only for debugging:
+#define SCL_ONLY_SCALAR  // Force scalar execution
+```
+
+### 4. Parallel Thresholds
+
+Most kernels automatically parallelize when data size exceeds thresholds:
+
+```cpp
+// Typically 256-500 elements
+// Adjust in kernel config namespaces if needed
+```
+
+## Building from Source
+
+```bash
+# Clone repository
+git clone https://github.com/krkawzq/scl-core.git
+cd scl-core
+
+# Configure
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+# Build
+cmake --build build -j
+
+# Install
+cmake --install build
+```
 
 ## Next Steps
 
-- **New to SCL-Core?** Start with [Getting Started](/cpp/getting-started/)
-- **Want to contribute?** Read the [Contributing Guide](/cpp/getting-started/contributing)
-- **Need API docs?** Browse the [Core Modules](/cpp/core/) or [Kernels](/cpp/kernels/)
-- **Curious about design?** Explore the [Architecture](/cpp/architecture/)
+- **New to SCL-Core?** Start with [Getting Started](./getting-started/)
+- **Using the library?** Read [Core Types](./core/) and [Kernels](./kernels/)
+- **Contributing?** See [Contributing Guide](./contributing/)
+- **Need API reference?** Browse [API Documentation](./api/)
+
+## Getting Help
+
+- **GitHub Issues**: Report bugs and request features
+- **GitHub Discussions**: Ask questions and share ideas
+- **Documentation**: Browse this guide for detailed information
 
 ---
 
-::: tip Development Status
-SCL-Core is actively developed and welcomes contributions! Check the [GitHub repository](https://github.com/krkawzq/scl-core) for the latest updates.
+::: tip Version
+SCL-Core version 0.4.0 - Built with C++20
 :::
-

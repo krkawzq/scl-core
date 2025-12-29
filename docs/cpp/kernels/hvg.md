@@ -1,253 +1,224 @@
-# hvg.hpp
+---
+title: Highly Variable Genes
+description: Selection of highly variable genes for downstream analysis
+---
 
-> scl/kernel/hvg.hpp · Highly variable gene selection kernels
+# Highly Variable Genes
+
+The `hvg` kernel provides efficient selection of highly variable genes (HVGs) using dispersion-based methods, optimized with SIMD and parallelization.
 
 ## Overview
 
-This file provides efficient methods for selecting highly variable genes (HVGs) in single-cell RNA-seq analysis. HVG selection is a critical preprocessing step that identifies genes with high biological variability for downstream analysis.
+Highly variable gene selection is essential for:
+- Reducing dimensionality before downstream analysis
+- Focusing on informative genes
+- Improving clustering and visualization quality
 
-This file provides:
-- Dispersion-based gene selection (variance/mean ratio)
-- Variance-stabilizing transformation (VST) method
-- SIMD-accelerated computation
-- Partial sorting for efficient top-k selection
+The implementation uses dispersion (variance/mean) as the variability metric.
 
-**Header**: `#include "scl/kernel/hvg.hpp"`
+## Functions
 
----
+### `compute_dispersion`
 
-## Main APIs
+Compute dispersion (variance/mean) for each gene.
 
-### select_by_dispersion
+```cpp
+template <typename T, bool IsCSR>
+void compute_dispersion(
+    const Sparse<T, IsCSR>& matrix,
+    Array<const Real> means,
+    Array<const Real> vars,
+    Array<Real> out_dispersion
+);
+```
 
-::: source_code file="scl/kernel/hvg.hpp" symbol="select_by_dispersion" collapsed
-:::
+**Parameters**:
+- `matrix` [in]: Expression matrix (cells × genes)
+- `means` [in]: Mean expression per gene
+- `vars` [in]: Variance per gene
+- `out_dispersion` [out]: Dispersion values (length = matrix.cols())
 
-**Algorithm Description**
+**Mathematical Operation**: `dispersion = variance / mean` (for mean > ε)
 
-Select highly variable genes by dispersion (variance/mean ratio):
-
-1. **Compute moments**: For each gene in parallel:
-   - Compute mean: mean[g] = sum(expression[g, :]) / n_cells
-   - Compute variance: var[g] = sum((expression[g, :] - mean[g])^2) / (n_cells - ddof)
-   - Uses SIMD-optimized vectorized operations
-
-2. **Compute dispersion**: For each gene:
-   - dispersion[g] = var[g] / mean[g] if mean[g] > epsilon
-   - dispersion[g] = 0 if mean[g] <= epsilon (avoid division by zero)
-   - Uses 4-way SIMD unroll with prefetch
-
-3. **Select top k**: Use partial sort to select n_top genes with highest dispersion:
-   - O(n_genes + n_top * log(n_top)) complexity
-   - Outputs indices and binary mask
-
-**Edge Cases**
-
-- **Zero mean genes**: Genes with mean <= epsilon have dispersion = 0 (excluded)
-- **Constant genes**: Genes with zero variance have dispersion = 0
-- **Empty matrix**: Returns empty selection if matrix has no non-zeros
-- **n_top > n_genes**: Clamped to n_genes, all genes selected
-
-**Data Guarantees (Preconditions)**
-
-- `out_indices.len >= n_top`
-- `out_mask.len >= n_genes`
-- `out_dispersions.len >= n_genes`
-- Matrix must be valid CSR/CSC format
-
-**Complexity Analysis**
-
-- **Time**: O(nnz + n_genes * log(n_top))
-  - O(nnz) for computing moments
-  - O(n_genes) for dispersion computation
-  - O(n_genes + n_top * log(n_top)) for partial sort
-- **Space**: O(n_genes) for intermediate buffers (means, variances, dispersions)
-
-**Example**
-
+**Example**:
 ```cpp
 #include "scl/kernel/hvg.hpp"
 
-// Expression matrix: genes x cells
-Sparse<Real, true> expression = /* ... */;
-Index n_genes = expression.rows();
-Size n_top = 2000;
+// Compute statistics
+auto means = memory::aligned_alloc<Real>(matrix.cols());
+auto vars = memory::aligned_alloc<Real>(matrix.cols());
+Array<Real> means_view = {means.get(), static_cast<Size>(matrix.cols())};
+Array<Real> vars_view = {vars.get(), static_cast<Size>(matrix.cols())};
 
-// Pre-allocate output
-Array<Index> selected_indices(n_top);
-Array<uint8_t> mask(n_genes, 0);
-Array<Real> dispersions(n_genes);
+compute_gene_statistics(matrix, means_view, vars_view);
 
-// Select top 2000 highly variable genes
-scl::kernel::hvg::select_by_dispersion(
-    expression,
-    n_top,
-    selected_indices,
-    mask,
-    dispersions
+// Compute dispersion
+auto dispersions = memory::aligned_alloc<Real>(matrix.cols());
+Array<Real> disp_view = {dispersions.get(), static_cast<Size>(matrix.cols())};
+kernel::hvg::compute_dispersion(matrix, means_view, vars_view, disp_view);
+```
+
+### `normalize_dispersion`
+
+Normalize dispersion values using z-score.
+
+```cpp
+void normalize_dispersion(
+    Array<Real> dispersions,
+    Real min_mean,
+    Real max_mean,
+    Array<const Real> means
 );
+```
+
+**Parameters**:
+- `dispersions` [in,out]: Dispersion values (modified in-place)
+- `min_mean` [in]: Minimum mean expression threshold
+- `max_mean` [in]: Maximum mean expression threshold
+- `means` [in]: Mean expression values
+
+**Operation**: Z-score normalization of dispersions for genes within mean range
+
+**Example**:
+```cpp
+// Normalize dispersions
+Real min_mean = 0.01;
+Real max_mean = 3.0;
+kernel::hvg::normalize_dispersion(disp_view, min_mean, max_mean, means_view);
+```
+
+### `select_hvg`
+
+Select top N highly variable genes.
+
+```cpp
+template <typename T, bool IsCSR>
+void select_hvg(
+    const Sparse<T, IsCSR>& matrix,
+    Array<const Real> dispersions,
+    Index n_top,
+    Array<Index> out_indices
+);
+```
+
+**Parameters**:
+- `matrix` [in]: Expression matrix
+- `dispersions` [in]: Dispersion values
+- `n_top` [in]: Number of top genes to select
+- `out_indices` [out]: Indices of selected genes (length = n_top)
+
+**Example**:
+```cpp
+// Select top 2000 HVGs
+constexpr Index N_TOP = 2000;
+auto hvg_indices = memory::aligned_alloc<Index>(N_TOP);
+Array<Index> hvg_view = {hvg_indices.get(), N_TOP};
+
+kernel::hvg::select_hvg(matrix, disp_view, N_TOP, hvg_view);
 
 // Use selected genes
-for (Size i = 0; i < n_top; ++i) {
-    Index gene_idx = selected_indices[i];
-    Real dispersion = dispersions[gene_idx];
-    // Process highly variable gene
+for (Index i = 0; i < N_TOP; ++i) {
+    Index gene_idx = hvg_view[i];
+    // Process gene gene_idx
 }
 ```
 
----
+## Common Patterns
 
-### select_by_vst
-
-::: source_code file="scl/kernel/hvg.hpp" symbol="select_by_vst" collapsed
-:::
-
-**Algorithm Description**
-
-Select highly variable genes using variance-stabilizing transformation (VST) method:
-
-1. **Clip values**: For each gene g:
-   - Clip expression values to clip_vals[g] before computing variance
-   - Prevents high-expression outlier genes from dominating selection
-
-2. **Compute clipped moments**: For each gene in parallel:
-   - Compute mean and variance after clipping
-   - Uses SIMD-optimized accumulation
-
-3. **Select top k**: Partial sort to select n_top genes with highest clipped variance
-
-**Edge Cases**
-
-- **Zero clip values**: If clip_val[g] = 0, all values clipped to 0, variance = 0
-- **Very large clip values**: If clip_val >> max(expression), no clipping occurs
-- **Empty matrix**: Returns empty selection
-
-**Data Guarantees (Preconditions)**
-
-- `clip_vals.len >= n_genes`
-- `out_indices.len >= n_top`
-- `out_mask.len >= n_genes`
-- `out_variances.len >= n_genes`
-
-**Complexity Analysis**
-
-- **Time**: O(nnz + n_genes * log(n_top))
-  - O(nnz) for clipped moment computation
-  - O(n_genes + n_top * log(n_top)) for partial sort
-- **Space**: O(n_genes) for intermediate buffers
-
-**Example**
+### Complete HVG Selection Pipeline
 
 ```cpp
-// Compute clip values (e.g., from previous analysis)
-Array<Real> clip_vals(n_genes);
-// ... compute clip values per gene ...
-
-Array<Index> selected_indices(n_top);
-Array<uint8_t> mask(n_genes);
-Array<Real> variances(n_genes);
-
-scl::kernel::hvg::select_by_vst(
-    expression,
-    clip_vals,
-    n_top,
-    selected_indices,
-    mask,
-    variances
-);
+void select_hvg_pipeline(
+    const CSR& matrix,
+    Index n_top,
+    Real min_mean,
+    Real max_mean,
+    Array<Index>& hvg_indices
+) {
+    Index n_genes = matrix.cols();
+    
+    // 1. Compute means
+    auto means = memory::aligned_alloc<Real>(n_genes);
+    Array<Real> means_view = {means.get(), static_cast<Size>(n_genes)};
+    compute_gene_means(matrix, means_view);
+    
+    // 2. Compute variances
+    auto vars = memory::aligned_alloc<Real>(n_genes);
+    Array<Real> vars_view = {vars.get(), static_cast<Size>(n_genes)};
+    compute_gene_variances(matrix, means_view, vars_view);
+    
+    // 3. Compute dispersion
+    auto dispersions = memory::aligned_alloc<Real>(n_genes);
+    Array<Real> disp_view = {dispersions.get(), static_cast<Size>(n_genes)};
+    kernel::hvg::compute_dispersion(matrix, means_view, vars_view, disp_view);
+    
+    // 4. Normalize dispersion
+    kernel::hvg::normalize_dispersion(disp_view, min_mean, max_mean, means_view);
+    
+    // 5. Select top genes
+    hvg_indices = memory::aligned_alloc<Index>(n_top);
+    Array<Index> hvg_view = {hvg_indices.get(), n_top};
+    kernel::hvg::select_hvg(matrix, disp_view, n_top, hvg_view);
+}
 ```
 
----
+### Filtering by Mean Expression
 
-## Utility Functions
+```cpp
+void filter_by_mean(
+    Array<Real> dispersions,
+    Array<const Real> means,
+    Real min_mean,
+    Real max_mean
+) {
+    for (Index i = 0; i < dispersions.size(); ++i) {
+        Real mean = means[i];
+        if (mean < min_mean || mean > max_mean) {
+            dispersions[i] = -std::numeric_limits<Real>::infinity();
+        }
+    }
+}
+```
 
-### detail::dispersion_simd
+## Performance Considerations
 
-Compute dispersion = var / mean with SIMD optimization.
+### SIMD Optimization
 
-::: source_code file="scl/kernel/hvg.hpp" symbol="detail::dispersion_simd" collapsed
-:::
+Dispersion computation uses SIMD for vectorized operations:
 
-**Complexity**
+```cpp
+// SIMD-accelerated dispersion
+namespace s = scl::simd;
+auto v_mean = s::Load(d, means.ptr + k);
+auto v_var = s::Load(d, vars.ptr + k);
+auto mask = s::Gt(v_mean, v_eps);
+auto v_div = s::Div(v_var, v_mean);
+auto v_res = s::IfThenElse(mask, v_div, v_zero);
+s::Store(v_res, d, out_dispersion.ptr + k);
+```
 
-- Time: O(n)
-- Space: O(1)
+### Parallelization
 
----
+Statistics computation is parallelized:
 
-### detail::normalize_dispersion_simd
+```cpp
+// Parallel gene statistics
+threading::parallel_for(0, n_genes, [&](size_t g) {
+    compute_gene_stats(matrix, g, means[g], vars[g]);
+});
+```
 
-Z-score normalize dispersions within a mean range.
+## Configuration
 
-::: source_code file="scl/kernel/hvg.hpp" symbol="detail::normalize_dispersion_simd" collapsed
-:::
+```cpp
+namespace scl::kernel::hvg::config {
+    constexpr Real EPSILON = 1e-12;
+    constexpr Size PREFETCH_DISTANCE = 16;
+}
+```
 
-**Complexity**
+## Related Documentation
 
-- Time: O(n)
-- Space: O(1)
-
----
-
-### detail::select_top_k_partial
-
-Select top k elements using partial sort.
-
-::: source_code file="scl/kernel/hvg.hpp" symbol="detail::select_top_k_partial" collapsed
-:::
-
-**Complexity**
-
-- Time: O(n + k log k)
-- Space: O(k)
-
----
-
-### detail::compute_moments
-
-Compute mean and variance for each gene.
-
-::: source_code file="scl/kernel/hvg.hpp" symbol="detail::compute_moments" collapsed
-:::
-
-**Complexity**
-
-- Time: O(nnz)
-- Space: O(n_genes)
-
----
-
-### detail::compute_clipped_moments
-
-Compute mean and variance with per-gene value clipping.
-
-::: source_code file="scl/kernel/hvg.hpp" symbol="detail::compute_clipped_moments" collapsed
-:::
-
-**Complexity**
-
-- Time: O(nnz)
-- Space: O(n_genes)
-
----
-
-## Notes
-
-**Dispersion vs VST**:
-- Dispersion method: Simple variance/mean ratio, fast and effective
-- VST method: Clips high values before variance computation, more robust to outliers
-
-**Performance**:
-- SIMD-accelerated for mean/variance computation
-- Partial sorting for efficient top-k selection
-- Parallelized over genes
-
-**Typical Usage**:
-- Select 2000-3000 highly variable genes for downstream analysis
-- Use dispersion for standard workflows
-- Use VST when dealing with highly expressed outlier genes
-
-## See Also
-
-- [Feature Selection](/cpp/kernels/feature) - Additional feature selection methods
-- [Statistics](/cpp/kernels/statistics) - Statistical operations
+- [Normalization](./normalize.md) - Normalization operations
+- [Feature Selection](./feature.md) - General feature selection
+- [Kernels Overview](./overview.md) - General kernel usage

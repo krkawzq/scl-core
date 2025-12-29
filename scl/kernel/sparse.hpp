@@ -46,7 +46,7 @@ SCL_FORCE_INLINE void simd_sum_sumsq_fused(
     T& out_sumsq
 ) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    const s::SimdTagFor<T> d;
     const Size lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_sum0 = s::Zero(d);

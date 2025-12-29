@@ -156,7 +156,9 @@ void weight_sum(
     const Size n_threads = scl::threading::Scheduler::get_num_threads();
     scl::threading::WorkspacePool<T> partial_sums;
     partial_sums.init(n_threads, 1);
-    partial_sums.zero_all();
+    for (Size t = 0; t < n_threads; ++t) {
+        partial_sums.zero(t);
+    }
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p, size_t thread_rank) {
         const auto idx = static_cast<Index>(p);

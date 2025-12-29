@@ -97,103 +97,198 @@ struct FastRNG {
 #if defined(__AVX2__) || defined(__AVX__)
 #include <immintrin.h>
 
+namespace detail {
+    // Helper for double
+    SCL_FORCE_INLINE double dot_product_impl(const double* a, const double* b, Index n) noexcept {
+        __m256d sum = _mm256_setzero_pd();
+        Index i = 0;
+        for (; i + 4 <= n; i += 4) {
+            __m256d va = _mm256_loadu_pd(a + i);
+            __m256d vb = _mm256_loadu_pd(b + i);
+            sum = _mm256_fmadd_pd(va, vb, sum);
+        }
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+        alignas(32) double temp[4];
+        _mm256_store_pd(temp, sum);
+        double result = temp[0] + temp[1] + temp[2] + temp[3];
+        for (; i < n; ++i) {
+            result += a[i] * b[i];
+        }
+        return result;
+    }
+
+    // Helper for float
+    SCL_FORCE_INLINE float dot_product_impl(const float* a, const float* b, Index n) noexcept {
+        __m256 sum = _mm256_setzero_ps();
+        Index i = 0;
+        for (; i + 8 <= n; i += 8) {
+            __m256 va = _mm256_loadu_ps(a + i);
+            __m256 vb = _mm256_loadu_ps(b + i);
+            sum = _mm256_fmadd_ps(va, vb, sum);
+        }
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+        alignas(32) float temp[8];
+        _mm256_store_ps(temp, sum);
+        float result = temp[0] + temp[1] + temp[2] + temp[3] + temp[4] + temp[5] + temp[6] + temp[7];
+        for (; i < n; ++i) {
+            result += a[i] * b[i];
+        }
+        return result;
+    }
+}
+
 SCL_FORCE_INLINE Real dot_product(const Real* a, const Real* b, Index n) noexcept {
-    __m256d sum = _mm256_setzero_pd();
-    Index i = 0;
-
-    for (; i + 4 <= n; i += 4) {
-        __m256d va = _mm256_loadu_pd(a + i);
-        __m256d vb = _mm256_loadu_pd(b + i);
-        sum = _mm256_fmadd_pd(va, vb, sum);
-    }
-
-    // PERFORMANCE: Aligned storage for SIMD reduction
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-    alignas(32) double temp[4];
-    _mm256_store_pd(temp, sum);
-    Real result = temp[0] + temp[1] + temp[2] + temp[3];
-
-    for (; i < n; ++i) {
-        result += a[i] * b[i];
-    }
-
-    return result;
+    return detail::dot_product_impl(a, b, n);
 }
 
 SCL_FORCE_INLINE Real vector_norm(const Real* v, Index n) noexcept {
     return std::sqrt(dot_product(v, v, n));
 }
 
+namespace detail {
+    SCL_FORCE_INLINE double vector_sum_impl(const double* v, Index n) noexcept {
+        __m256d sum = _mm256_setzero_pd();
+        Index i = 0;
+        for (; i + 4 <= n; i += 4) {
+            sum = _mm256_add_pd(sum, _mm256_loadu_pd(v + i));
+        }
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+        alignas(32) double temp[4];
+        _mm256_store_pd(temp, sum);
+        double result = temp[0] + temp[1] + temp[2] + temp[3];
+        for (; i < n; ++i) {
+            result += v[i];
+        }
+        return result;
+    }
+
+    SCL_FORCE_INLINE float vector_sum_impl(const float* v, Index n) noexcept {
+        __m256 sum = _mm256_setzero_ps();
+        Index i = 0;
+        for (; i + 8 <= n; i += 8) {
+            sum = _mm256_add_ps(sum, _mm256_loadu_ps(v + i));
+        }
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+        alignas(32) float temp[8];
+        _mm256_store_ps(temp, sum);
+        float result = temp[0] + temp[1] + temp[2] + temp[3] + temp[4] + temp[5] + temp[6] + temp[7];
+        for (; i < n; ++i) {
+            result += v[i];
+        }
+        return result;
+    }
+}
+
 SCL_FORCE_INLINE Real vector_sum(const Real* v, Index n) noexcept {
-    __m256d sum = _mm256_setzero_pd();
-    Index i = 0;
+    return detail::vector_sum_impl(v, n);
+}
 
-    for (; i + 4 <= n; i += 4) {
-        sum = _mm256_add_pd(sum, _mm256_loadu_pd(v + i));
+namespace detail {
+    SCL_FORCE_INLINE void scale_vector_impl(double* v, double s, Index n) noexcept {
+        __m256d sv = _mm256_set1_pd(s);
+        Index i = 0;
+        for (; i + 4 <= n; i += 4) {
+            _mm256_storeu_pd(v + i, _mm256_mul_pd(_mm256_loadu_pd(v + i), sv));
+        }
+        for (; i < n; ++i) {
+            v[i] *= s;
+        }
     }
 
-    // PERFORMANCE: Aligned storage for SIMD reduction
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
-    alignas(32) double temp[4];
-    _mm256_store_pd(temp, sum);
-    Real result = temp[0] + temp[1] + temp[2] + temp[3];
-
-    for (; i < n; ++i) {
-        result += v[i];
+    SCL_FORCE_INLINE void scale_vector_impl(float* v, float s, Index n) noexcept {
+        __m256 sv = _mm256_set1_ps(s);
+        Index i = 0;
+        for (; i + 8 <= n; i += 8) {
+            _mm256_storeu_ps(v + i, _mm256_mul_ps(_mm256_loadu_ps(v + i), sv));
+        }
+        for (; i < n; ++i) {
+            v[i] *= s;
+        }
     }
-
-    return result;
 }
 
 SCL_FORCE_INLINE void scale_vector(Real* v, Real s, Index n) noexcept {
-    __m256d sv = _mm256_set1_pd(s);
-    Index i = 0;
+    detail::scale_vector_impl(v, s, n);
+}
 
-    for (; i + 4 <= n; i += 4) {
-        _mm256_storeu_pd(v + i, _mm256_mul_pd(_mm256_loadu_pd(v + i), sv));
+namespace detail {
+    SCL_FORCE_INLINE void axpy_impl(double* y, double a, const double* x, Index n) noexcept {
+        __m256d av = _mm256_set1_pd(a);
+        Index i = 0;
+        for (; i + 4 <= n; i += 4) {
+            __m256d yv = _mm256_loadu_pd(y + i);
+            __m256d xv = _mm256_loadu_pd(x + i);
+            _mm256_storeu_pd(y + i, _mm256_fmadd_pd(av, xv, yv));
+        }
+        for (; i < n; ++i) {
+            y[i] += a * x[i];
+        }
     }
 
-    for (; i < n; ++i) {
-        v[i] *= s;
+    SCL_FORCE_INLINE void axpy_impl(float* y, float a, const float* x, Index n) noexcept {
+        __m256 av = _mm256_set1_ps(a);
+        Index i = 0;
+        for (; i + 8 <= n; i += 8) {
+            __m256 yv = _mm256_loadu_ps(y + i);
+            __m256 xv = _mm256_loadu_ps(x + i);
+            _mm256_storeu_ps(y + i, _mm256_fmadd_ps(av, xv, yv));
+        }
+        for (; i < n; ++i) {
+            y[i] += a * x[i];
+        }
     }
 }
 
 SCL_FORCE_INLINE void axpy(Real* y, Real a, const Real* x, Index n) noexcept {
-    __m256d av = _mm256_set1_pd(a);
-    Index i = 0;
+    detail::axpy_impl(y, a, x, n);
+}
 
-    for (; i + 4 <= n; i += 4) {
-        __m256d yv = _mm256_loadu_pd(y + i);
-        __m256d xv = _mm256_loadu_pd(x + i);
-        _mm256_storeu_pd(y + i, _mm256_fmadd_pd(av, xv, yv));
+namespace detail {
+    SCL_FORCE_INLINE double max_abs_diff_impl(const double* a, const double* b, Index n) noexcept {
+        __m256d max_d = _mm256_setzero_pd();
+        const __m256d sign = _mm256_set1_pd(-0.0);
+        Index i = 0;
+        for (; i + 4 <= n; i += 4) {
+            __m256d diff = _mm256_sub_pd(_mm256_loadu_pd(a + i), _mm256_loadu_pd(b + i));
+            max_d = _mm256_max_pd(max_d, _mm256_andnot_pd(sign, diff));
+        }
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+        alignas(32) double temp[4];
+        _mm256_store_pd(temp, max_d);
+        double result = scl::algo::max2(scl::algo::max2(temp[0], temp[1]), 
+                                                 scl::algo::max2(temp[2], temp[3]));
+        for (; i < n; ++i) {
+            double d = std::abs(a[i] - b[i]);
+            result = scl::algo::max2(result, d);
+        }
+        return result;
     }
 
-    for (; i < n; ++i) {
-        y[i] += a * x[i];
+    SCL_FORCE_INLINE float max_abs_diff_impl(const float* a, const float* b, Index n) noexcept {
+        __m256 max_f = _mm256_setzero_ps();
+        const __m256 sign = _mm256_set1_ps(-0.0f);
+        Index i = 0;
+        for (; i + 8 <= n; i += 8) {
+            __m256 diff = _mm256_sub_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i));
+            max_f = _mm256_max_ps(max_f, _mm256_andnot_ps(sign, diff));
+        }
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+        alignas(32) float temp[8];
+        _mm256_store_ps(temp, max_f);
+        float result = scl::algo::max2(scl::algo::max2(scl::algo::max2(temp[0], temp[1]), 
+                                                        scl::algo::max2(temp[2], temp[3])),
+                                       scl::algo::max2(scl::algo::max2(temp[4], temp[5]), 
+                                                        scl::algo::max2(temp[6], temp[7])));
+        for (; i < n; ++i) {
+            float d = std::abs(a[i] - b[i]);
+            result = scl::algo::max2(result, d);
+        }
+        return result;
     }
 }
 
 SCL_FORCE_INLINE Real max_abs_diff(const Real* a, const Real* b, Index n) noexcept {
-    __m256d max_d = _mm256_setzero_pd();
-    const __m256d sign = _mm256_set1_pd(-0.0);
-    Index i = 0;
-
-    for (; i + 4 <= n; i += 4) {
-        __m256d diff = _mm256_sub_pd(_mm256_loadu_pd(a + i), _mm256_loadu_pd(b + i));
-        max_d = _mm256_max_pd(max_d, _mm256_andnot_pd(sign, diff));
-    }
-
-    alignas(32) double temp[4];
-    _mm256_store_pd(temp, max_d);
-    Real result = scl::algo::max2(scl::algo::max2(temp[0], temp[1]), 
-                                   scl::algo::max2(temp[2], temp[3]));
-
-    for (; i < n; ++i) {
-        Real d = std::abs(a[i] - b[i]);
-        result = scl::algo::max2(result, d);
-    }
-
-    return result;
+    return detail::max_abs_diff_impl(a, b, n);
 }
 
 #else  // Scalar fallback

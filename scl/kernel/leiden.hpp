@@ -462,8 +462,13 @@ SCL_HOT bool parallel_local_moving(
     const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Atomic sigma_tot for parallel updates
-    auto atomic_sigma_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
-    std::atomic<int64_t>* atomic_sigma = atomic_sigma_ptr.get();
+    // Note: std::atomic is not trivially constructible, use Byte allocation + placement new
+    auto raw_mem_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<int64_t>) * N, SCL_ALIGNMENT);
+    Byte* raw_mem = raw_mem_ptr.release();
+    auto* atomic_sigma = reinterpret_cast<std::atomic<int64_t>*>(raw_mem);
+    for (Size i = 0; i < N; ++i) {
+        new (&atomic_sigma[i]) std::atomic<int64_t>(0);
+    }
 
     // Convert sigma_tot to fixed-point for atomic operations
     constexpr int64_t SCALE = 1000000;
@@ -582,7 +587,12 @@ SCL_HOT bool parallel_local_moving(
         state.sigma_tot[i] = static_cast<Real>(atomic_sigma[i].load()) / SCALE;
     }
 
-    // atomic_sigma_ptr will automatically free memory via unique_ptr destructor
+    // Cleanup: manually destruct atomics and free memory
+    for (Size i = 0; i < N; ++i) {
+        atomic_sigma[i].~atomic();
+    }
+    scl::memory::aligned_free(raw_mem, SCL_ALIGNMENT);
+
     return any_move;
 }
 
@@ -771,7 +781,9 @@ AggregatedGraph<T> aggregate_graph(
     }
 
     // Compute offsets
-    result.indptr = scl::memory::aligned_alloc<Index>(n_communities + 1, SCL_ALIGNMENT);
+    auto indptr_ptr = scl::memory::aligned_alloc<Index>(n_communities + 1, SCL_ALIGNMENT);
+    result.indptr = indptr_ptr.release();
+    result.owns_data = true;
     result.indptr[0] = 0;
     for (Index c = 0; c < n_communities; ++c) {
         result.indptr[c + 1] = result.indptr[c] + edge_counts[c];
@@ -779,8 +791,10 @@ AggregatedGraph<T> aggregate_graph(
     result.n_edges = static_cast<Size>(result.indptr[n_communities]);
 
     // Allocate edge arrays
-    result.indices = scl::memory::aligned_alloc<Index>(result.n_edges, SCL_ALIGNMENT);
-    result.values = scl::memory::aligned_alloc<T>(result.n_edges, SCL_ALIGNMENT);
+    auto indices_ptr = scl::memory::aligned_alloc<Index>(result.n_edges, SCL_ALIGNMENT);
+    auto values_ptr = scl::memory::aligned_alloc<T>(result.n_edges, SCL_ALIGNMENT);
+    result.indices = indices_ptr.release();
+    result.values = values_ptr.release();
 
     // Second pass: fill edges
     for (Index c = 0; c < n_communities; ++c) {

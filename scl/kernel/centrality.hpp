@@ -313,13 +313,15 @@ SCL_HOT void parallel_distribute(
 
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         // Use atomic accumulation for parallel distribution
-        auto atomic_scores_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(n, SCL_ALIGNMENT);
-        std::atomic<int64_t>* atomic_scores = atomic_scores_ptr.release();
+        // Note: std::atomic is not trivially constructible, use Byte allocation + placement new
+        auto raw_mem_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<int64_t>) * n, SCL_ALIGNMENT);
+        Byte* raw_mem = raw_mem_ptr.release();
+        auto* atomic_scores = reinterpret_cast<std::atomic<int64_t>*>(raw_mem);
         Array<std::atomic<int64_t>> atomic_scores_arr(atomic_scores, n);
 
-        // Initialize
+        // Initialize with placement new
         for (Size i = 0; i < n; ++i) {
-            atomic_scores_arr[static_cast<Index>(i)].store(0, std::memory_order_relaxed);
+            new (&atomic_scores[i]) std::atomic<int64_t>(0);
         }
 
         constexpr int64_t SCALE = 1000000000LL;
@@ -347,7 +349,11 @@ SCL_HOT void parallel_distribute(
             scores_new[static_cast<Index>(i)] += static_cast<Real>(atomic_scores_arr[static_cast<Index>(i)].load()) * inv_scale;
         }
 
-        scl::memory::aligned_free(reinterpret_cast<int64_t*>(atomic_scores), SCL_ALIGNMENT);
+        // Cleanup: manually destruct atomics and free memory
+        for (Size i = 0; i < n; ++i) {
+            atomic_scores[i].~atomic();
+        }
+        scl::memory::aligned_free(raw_mem, SCL_ALIGNMENT);
     } else {
         // Sequential distribution
         for (Size i = 0; i < n; ++i) {

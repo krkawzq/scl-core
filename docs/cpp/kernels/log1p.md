@@ -1,224 +1,206 @@
-# log1p.hpp
+---
+title: Logarithmic Transforms
+description: Log(1+x) and related transformations
+---
 
-> scl/kernel/log1p.hpp · Logarithmic transform kernels with SIMD optimization
+# Logarithmic Transforms
+
+The `log1p` kernel provides efficient logarithmic transformations for sparse matrices, including `log1p`, `log2p1`, and `expm1` operations.
 
 ## Overview
 
-This file provides efficient logarithmic transform operations for sparse matrices. All operations are SIMD-accelerated, parallelized over rows, and modify matrices in-place without memory allocation.
+Logarithmic transforms are essential in single-cell analysis for:
+- Stabilizing variance in count data
+- Preparing data for downstream analysis
+- Reversing log transformations
 
-**Header**: `#include "scl/kernel/log1p.hpp"`
+All operations are SIMD-optimized and parallelized.
 
----
+## Functions
 
-## Main APIs
+### `log1p_inplace`
 
-### log1p_inplace
+Apply log(1+x) transformation in-place.
 
-::: source_code file="scl/kernel/log1p.hpp" symbol="log1p_inplace" collapsed
-:::
+```cpp
+template <typename T, bool IsCSR>
+void log1p_inplace(Sparse<T, IsCSR>& matrix);
+```
 
-**Algorithm Description**
+**Parameters**:
+- `matrix` [in,out]: Matrix to transform (modified in-place)
 
-Apply log(1 + x) transform to all non-zero values in sparse matrix:
+**Mathematical Operation**: `x → log(1 + x)`
 
-1. For each row in parallel:
-   - Load values using 4-way SIMD unrolling with prefetch
-   - Apply SIMD Log1p operation to value vectors
-   - Store transformed values back
-   - Handle tail elements with scalar operations
-
-2. Uses numerical stable log1p implementation for accuracy near zero
-
-3. Zero values remain zero (not stored in sparse format)
-
-**Edge Cases**
-
-- **Empty matrix**: Returns immediately without modification
-- **Values < -1**: Results in NaN (log1p domain requirement)
-- **Values = -1**: Results in -infinity
-- **Very small values**: More accurate than log(1+x) for x near zero
-- **Large values**: log1p(x) ≈ log(x) for large x
-
-**Data Guarantees (Preconditions)**
-
-- Matrix values must be >= -1 (log1p domain requirement)
-- For expression data: values should be non-negative counts
-- Matrix must be valid CSR or CSC format
-- Matrix values must be mutable
-
-**Complexity Analysis**
-
-- **Time**: O(nnz) - process each non-zero element once
-- **Space**: O(1) auxiliary - only SIMD registers and temporary variables
-
-**Example**
-
+**Example**:
 ```cpp
 #include "scl/kernel/log1p.hpp"
 
-// Load or create sparse matrix
-Sparse<Real, true> expression = /* ... */;  // CSR format
+auto matrix = CSR::create(1000, 2000, 10000);
+// ... populate matrix ...
 
-// Apply log1p transform in-place
-scl::kernel::log1p::log1p_inplace(expression);
-
-// All non-zero values v are now log(1 + v)
-// Matrix structure (indices, indptr) unchanged
-// Ready for downstream analysis (PCA, clustering, etc.)
-
-// Standard preprocessing pipeline
-scl::kernel::normalize::normalize_total_inplace(expression, 1e4);
-scl::kernel::log1p::log1p_inplace(expression);
-// Now ready for PCA, clustering, etc.
+// Apply log1p transformation
+kernel::log1p::log1p_inplace(matrix);
 ```
 
----
+**Complexity**: O(nnz) time, O(1) space
 
-### log2p1_inplace
+**Thread Safety**: Thread-safe (each row processed independently)
 
-::: source_code file="scl/kernel/log1p.hpp" symbol="log2p1_inplace" collapsed
-:::
+### `log2p1_inplace`
 
-**Algorithm Description**
-
-Apply log2(1 + x) transform to all non-zero values in sparse matrix:
-
-1. For each row in parallel:
-   - Load values using 4-way SIMD unrolling with prefetch
-   - Apply SIMD Log1p operation
-   - Multiply by INV_LN2 (1/ln(2)) to convert to base-2
-   - Store transformed values
-   - Handle tail elements with scalar operations
-
-2. Computed as log(1+x) * (1/ln(2)) for efficiency
-
-3. Base-2 logarithm is common in information theory applications
-
-**Edge Cases**
-
-- **Empty matrix**: Returns immediately
-- **Values < -1**: Results in NaN
-- **Values = -1**: Results in -infinity
-- **Very small values**: More accurate than log2(1+x) for x near zero
-
-**Data Guarantees (Preconditions)**
-
-- Matrix values must be >= -1
-- For expression data: values should be non-negative counts
-- Matrix must be valid CSR or CSC format
-- Matrix values must be mutable
-
-**Complexity Analysis**
-
-- **Time**: O(nnz) - process each non-zero element once
-- **Space**: O(1) auxiliary - only SIMD registers
-
-**Example**
+Apply log₂(1+x) transformation in-place.
 
 ```cpp
-#include "scl/kernel/log1p.hpp"
-
-Sparse<Real, true> matrix = /* ... */;
-
-// Apply base-2 log transform
-scl::kernel::log1p::log2p1_inplace(matrix);
-
-// All non-zero values v are now log2(1 + v)
-// Useful for information-theoretic measures (entropy, mutual information)
+template <typename T, bool IsCSR>
+void log2p1_inplace(Sparse<T, IsCSR>& matrix);
 ```
 
----
+**Parameters**:
+- `matrix` [in,out]: Matrix to transform (modified in-place)
 
-### expm1_inplace
+**Mathematical Operation**: `x → log₂(1 + x) = log(1 + x) / log(2)`
 
-::: source_code file="scl/kernel/log1p.hpp" symbol="expm1_inplace" collapsed
-:::
+**Example**:
+```cpp
+// Apply log2p1 transformation
+kernel::log1p::log2p1_inplace(matrix);
+```
 
-**Algorithm Description**
+**Note**: Computed as `log1p(x) * inv_ln2` for efficiency.
 
-Apply exp(x) - 1 transform to all non-zero values in sparse matrix:
+### `expm1_inplace`
 
-1. For each row in parallel:
-   - Load values using 4-way SIMD unrolling with prefetch
-   - Apply SIMD Expm1 operation to value vectors
-   - Store transformed values back
-   - Handle tail elements with scalar operations
-
-2. Uses numerically stable expm1 implementation for accuracy near zero
-
-3. Inverse of log1p: expm1(log1p(x)) = x
-
-**Edge Cases**
-
-- **Empty matrix**: Returns immediately
-- **Very large values**: May overflow to infinity
-- **Very small values**: More accurate than exp(x)-1 for x near zero
-- **Values = 0**: Results in 0 (exp(0) - 1 = 0)
-- **Negative large values**: Results in -1 (exp(-inf) - 1 = -1)
-
-**Data Guarantees (Preconditions)**
-
-- Values should be in reasonable range to avoid overflow
-- Typically used to reverse log1p transform
-- Matrix must be valid CSR or CSC format
-- Matrix values must be mutable
-
-**Complexity Analysis**
-
-- **Time**: O(nnz) - process each non-zero element once
-- **Space**: O(1) auxiliary - only SIMD registers
-
-**Example**
+Apply exp(x) - 1 transformation in-place (inverse of log1p).
 
 ```cpp
-#include "scl/kernel/log1p.hpp"
-
-Sparse<Real, true> matrix = /* ... */;
-
-// Apply log1p transform
-scl::kernel::log1p::log1p_inplace(matrix);
-
-// ... perform analysis on log-transformed data ...
-
-// Reverse transform to original scale
-scl::kernel::log1p::expm1_inplace(matrix);
-
-// Matrix values are now back to original scale (approximately)
-// expm1(log1p(x)) = x (exact for small x)
+template <typename T, bool IsCSR>
+void expm1_inplace(Sparse<T, IsCSR>& matrix);
 ```
 
----
+**Parameters**:
+- `matrix` [in,out]: Matrix to transform (modified in-place)
+
+**Mathematical Operation**: `x → exp(x) - 1`
+
+**Example**:
+```cpp
+// Reverse log1p transformation
+kernel::log1p::expm1_inplace(matrix);
+```
+
+**Note**: `expm1` is the inverse of `log1p` for small values, providing better numerical stability than `exp(x) - 1`.
+
+## Common Patterns
+
+### Standard Log-Normalization Pipeline
+
+```cpp
+void log_normalize(CSR& matrix, Real target_sum) {
+    // 1. Total count normalization
+    normalize_total(matrix, target_sum);
+    
+    // 2. Log transform
+    kernel::log1p::log1p_inplace(matrix);
+}
+```
+
+### Log2 Normalization
+
+```cpp
+void log2_normalize(CSR& matrix, Real target_sum) {
+    // Normalize to target sum
+    normalize_total(matrix, target_sum);
+    
+    // Apply log2 transform
+    kernel::log1p::log2p1_inplace(matrix);
+}
+```
+
+### Reversing Log Transform
+
+```cpp
+void reverse_log1p(CSR& matrix) {
+    // Convert back from log space
+    kernel::log1p::expm1_inplace(matrix);
+    
+    // Optionally renormalize
+    normalize_total(matrix, target_sum);
+}
+```
+
+## Performance Considerations
+
+### SIMD Optimization
+
+All operations use SIMD for vectorized computation:
+
+```cpp
+// SIMD-accelerated log1p
+namespace s = scl::simd;
+auto v = s::Load(d, vals + k);
+s::Store(s::Log1p(d, v), d, vals + k);
+```
+
+### Parallelization
+
+Operations are automatically parallelized:
+
+```cpp
+// Each row processed in parallel
+threading::parallel_for(0, matrix.rows(), [&](size_t i) {
+    // Process row i
+});
+```
+
+### Prefetching
+
+Prefetching reduces memory latency:
+
+```cpp
+if (k + PREFETCH_DISTANCE < len) {
+    SCL_PREFETCH_READ(vals + k + PREFETCH_DISTANCE, 0);
+}
+```
+
+## Numerical Stability
+
+### Why log1p?
+
+For small values of x, `log(1 + x)` is more accurate than `log(1.0 + x)`:
+
+```cpp
+// Good: Accurate for small x
+Real result = std::log1p(x);
+
+// Avoid: May lose precision for small x
+Real result = std::log(1.0 + x);  // 1.0 + x may round to 1.0
+```
+
+### Why expm1?
+
+Similarly, `expm1(x)` is more accurate than `exp(x) - 1`:
+
+```cpp
+// Good: Accurate for small x
+Real result = std::expm1(x);
+
+// Avoid: May lose precision for small x
+Real result = std::exp(x) - 1.0;  // exp(x) ≈ 1.0, subtraction loses precision
+```
 
 ## Configuration
-
-### Default Parameters
 
 ```cpp
 namespace scl::kernel::log1p::config {
     constexpr Size PREFETCH_DISTANCE = 64;
-    constexpr double INV_LN2 = 1.44269504088896340736;  // 1/ln(2)
-    constexpr double LN2 = 0.6931471805599453;          // ln(2)
+    constexpr double INV_LN2 = 1.44269504088896340736;  // 1 / ln(2)
+    constexpr double LN2 = 0.6931471805599453;
 }
 ```
 
----
+## Related Documentation
 
-## Notes
-
-**Numerical Stability**: log1p and expm1 are more accurate than log(1+x) and exp(x)-1 for small values near zero. This is critical for expression data where many values are small counts.
-
-**Performance**: SIMD acceleration provides 4-8x speedup on modern CPUs. Parallelization scales linearly with CPU cores. All operations are in-place with zero allocations.
-
-**Matrix Format**: For best performance, use CSR format (row-major) for row-wise operations. The implementation is optimized for CSR but works with CSC as well.
-
-**Use Cases**:
-- **log1p**: Standard preprocessing for single-cell RNA-seq data
-- **log2p1**: Information-theoretic measures (entropy, mutual information)
-- **expm1**: Reversing log transforms, converting back to count scale
-
----
-
-## See Also
-
-- [Normalize](/cpp/kernels/normalize) - Normalization before log transform
-- [Softmax](/cpp/kernels/softmax) - Softmax normalization
+- [Normalization](./normalize.md) - Normalization operations
+- [Kernels Overview](./overview.md) - General kernel usage
+- [SIMD](../core/simd.md) - SIMD operations
