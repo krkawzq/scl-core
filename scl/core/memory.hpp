@@ -11,6 +11,7 @@
 #include <new>
 #include <utility>
 #include <memory>
+#include <algorithm>
 
 // =============================================================================
 // FILE: scl/core/memory.hpp
@@ -183,35 +184,25 @@ private:
 // Initialization (Fill / Zero)
 // =============================================================================
 
-// Modernized: Accept Array<T> instead of raw pointer
+// Modernized: Delegate to optimized libc/compiler implementations
+// Rationale: Modern glibc/musl memset and compiler std::fill use AVX-512/AVX2
+// with non-temporal stores, outperforming hand-written SIMD in most cases
 template <typename T>
 SCL_FORCE_INLINE void fill(Array<T> arr, T value) {
-    namespace s = scl::simd;
+    if (SCL_UNLIKELY(arr.size() == 0)) return;
 
-    using SimdTag = s::SimdTagFor<T>;
-    const SimdTag d;
-    const Size N = arr.size();
-    const Size lanes = static_cast<Size>(s::Lanes(d));
-
-    const auto v_val = s::Set(d, value);
-
-    Size i = 0;
-
-    // 4-way unrolled SIMD loop
-    for (; SCL_LIKELY(i + 4 * lanes <= N); i += 4 * lanes) {
-        s::Store(v_val, d, arr.data() + i);
-        s::Store(v_val, d, arr.data() + i + lanes);
-        s::Store(v_val, d, arr.data() + i + 2 * lanes);
-        s::Store(v_val, d, arr.data() + i + 3 * lanes);
-    }
-
-    for (; SCL_LIKELY(i + lanes <= N); i += lanes) {
-        s::Store(v_val, d, arr.data() + i);
-    }
-
-    // Scalar tail
-    for (; i < N; ++i) {
-        arr[i] = value;
+    if constexpr (std::is_trivially_copyable_v<T> && sizeof(T) == 1) {
+        // Single-byte types: memset is optimal (uses AVX-512 + NT stores internally)
+        std::memset(arr.data(), static_cast<unsigned char>(value), arr.size());
+    } else if constexpr (std::is_trivially_copyable_v<T>) {
+        // Multi-byte trivially copyable types: let compiler optimize
+        // GCC/Clang will auto-vectorize this with optimal instruction selection
+        std::fill(arr.begin(), arr.end(), value);
+    } else {
+        // Non-trivially copyable types: manual loop required
+        for (Size i = 0; i < arr.size(); ++i) {
+            arr[i] = value;
+        }
     }
 }
 
@@ -270,9 +261,19 @@ SCL_FORCE_INLINE void copy(Array<const T> src, Array<T> dst) {
 }
 
 // Modernized: Accept Array<const T> and Array<T> instead of raw pointers
+// Note: Not FORCE_INLINE due to function body size - let compiler decide
+// Non-temporal stores bypass cache, beneficial only for large arrays (> L2 cache)
 template <typename T>
-SCL_FORCE_INLINE void stream_copy(Array<const T> src, Array<T> dst) {
+void stream_copy(Array<const T> src, Array<T> dst) {
     SCL_ASSERT(src.size() == dst.size(), "stream_copy: Size mismatch");
+
+    const std::size_t byte_size = static_cast<std::size_t>(src.size()) * sizeof(T);
+
+    // Small arrays: use regular memcpy (non-temporal stores have overhead for small data)
+    if (SCL_LIKELY(byte_size < STREAM_THRESHOLD)) {
+        copy_fast(src, dst);
+        return;
+    }
 
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<T>;
@@ -421,8 +422,9 @@ SCL_FORCE_INLINE void swap(T& a, T& b) noexcept {
 }
 
 // Modernized: Accept Array<T> instead of raw pointers
+// Note: Not FORCE_INLINE due to function body size - let compiler decide
 template <typename T>
-SCL_FORCE_INLINE void swap_ranges(Array<T> a, Array<T> b) {
+void swap_ranges(Array<T> a, Array<T> b) {
     SCL_ASSERT(a.size() == b.size(), "swap_ranges: Size mismatch");
 
     if (SCL_UNLIKELY(a.data() == b.data())) return;
@@ -457,17 +459,44 @@ SCL_FORCE_INLINE void swap_ranges(Array<T> a, Array<T> b) {
 // =============================================================================
 
 // Modernized: Accept Array<T> instead of raw pointer
+// SIMD-optimized reverse using Highway's Reverse instruction
 template <typename T>
-SCL_FORCE_INLINE void reverse(Array<T> arr) {
+void reverse(Array<T> arr) {
     if (SCL_UNLIKELY(arr.size() <= 1)) return;
 
-    T* SCL_RESTRICT left = arr.data();
-    T* SCL_RESTRICT right = arr.data() + arr.size() - 1;
+    namespace s = scl::simd;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
+    const Size lanes = static_cast<Size>(s::Lanes(d));
+    const Size N = arr.size();
 
-    while (left < right) {
-        swap(*left, *right);
+    T* left = arr.data();
+    T* right = arr.data() + N - lanes;
+
+    // SIMD reverse: load from both ends, reverse within vector, swap and store
+    while (left + lanes <= right) {
+        auto v_left = s::Load(d, left);
+        auto v_right = s::Load(d, right);
+
+        // Reverse element order within each vector
+        auto v_left_rev = s::Reverse(d, v_left);
+        auto v_right_rev = s::Reverse(d, v_right);
+
+        // Store swapped and reversed vectors
+        s::Store(v_right_rev, d, left);
+        s::Store(v_left_rev, d, right);
+
+        left += lanes;
+        right -= lanes;
+    }
+
+    // Scalar tail: handle remaining middle elements
+    // After SIMD loop, unprocessed elements are in range [left, right + lanes)
+    T* scalar_right = right + lanes - 1;
+    while (left < scalar_right) {
+        swap(*left, *scalar_right);
         ++left;
-        --right;
+        --scalar_right;
     }
 }
 

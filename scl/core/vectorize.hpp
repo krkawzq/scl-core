@@ -44,7 +44,7 @@ concept IndexType = std::integral<IdxT>;
 // =============================================================================
 
 template <Arithmetic T>
-SCL_FORCE_INLINE T sum(Array<const T> span) {
+SCL_FORCE_INLINE T sum(Array<T> span) {
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<T>;
     const SimdTag d;
