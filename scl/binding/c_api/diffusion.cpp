@@ -9,279 +9,393 @@
 #include "scl/core/type.hpp"
 #include "scl/core/error.hpp"
 
-#include <exception>
+using namespace scl;
+using namespace scl::binding;
+
+// =============================================================================
+// Configuration Constants
+// =============================================================================
+
+namespace {
+    constexpr Real DEFAULT_ALPHA = Real(0.85);
+    constexpr Real DEFAULT_TOL = Real(1e-6);
+    constexpr Index DEFAULT_MAX_ITER = 100;
+    constexpr Index DEFAULT_N_STEPS = 3;
+    constexpr Index DEFAULT_N_ITER = 50;
+    constexpr Real DEFAULT_T = Real(1.0);
+    constexpr Index DEFAULT_N_STEPS_HKS = 10;
+    constexpr Real DEFAULT_LAZINESS = Real(0.5);
+} // anonymous namespace
 
 extern "C" {
 
-namespace {
-    using namespace scl::kernel::diffusion;
-    constexpr scl::Real DEFAULT_ALPHA = scl::Real(0.85);
-    constexpr scl::Real DEFAULT_TOL = scl::Real(1e-6);
-    constexpr scl::Index DEFAULT_MAX_ITER = 100;
-    constexpr scl::Index DEFAULT_N_STEPS = 3;
-    constexpr scl::Index DEFAULT_N_ITER = 50;
-    constexpr scl::Real DEFAULT_T = scl::Real(1.0);
-    constexpr scl::Index DEFAULT_N_STEPS_HKS = 10;
-    constexpr scl::Real DEFAULT_LAZINESS = scl::Real(0.5);
-}
+// =============================================================================
+// Transition Matrix
+// =============================================================================
 
-scl_error_t scl_diffusion_compute_transition_matrix(
+SCL_EXPORT scl_error_t scl_diffusion_compute_transition_matrix(
     scl_sparse_t adjacency,
-    int symmetric
-) {
-    if (!adjacency) return SCL_ERROR_NULL_POINTER;
-    try {
+    const int symmetric) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    
+    SCL_C_API_TRY
         adjacency->visit([&](auto& mat) {
             using MatType = std::remove_reference_t<decltype(mat)>;
             using T = typename MatType::ValueType;
             constexpr bool IsCSR = MatType::is_csr;
             
-            // compute_transition_matrix modifies matrix in-place
-            scl::kernel::diffusion::compute_transition_matrix<T, IsCSR>(mat, symmetric != 0);
+            // Note: compute_transition_matrix requires output buffer
+            // This API modifies the adjacency matrix values in-place
+            // by passing contiguous_data() as the output buffer
+            Real* values = mat.contiguous_data();
+            SCL_CHECK_ARG(values != nullptr, 
+                         "Matrix must be contiguous for transition matrix computation");
+            
+            scl::kernel::diffusion::compute_transition_matrix<T, IsCSR>(
+                mat, values, symmetric != 0
+            );
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_diffuse_vector(
+// =============================================================================
+// Vector Diffusion
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_diffuse_vector(
     scl_sparse_t transition,
     scl_real_t* x,
-    scl_size_t n_nodes,
-    scl_index_t n_steps
-) {
-    if (!transition || !x) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Array<scl::Real> x_arr(reinterpret_cast<scl::Real*>(x), n_nodes);
+    const scl_size_t n_nodes,
+    const scl_index_t n_steps) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(x, "Vector x is null");
+    SCL_C_API_CHECK(n_nodes > 0 && n_steps > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
+    
+    SCL_C_API_TRY
+        Array<Real> x_arr(reinterpret_cast<Real*>(x), n_nodes);
+        
         transition->visit([&](auto& mat) {
-            diffuse_vector(mat, x_arr, n_steps);
+            scl::kernel::diffusion::diffuse_vector(mat, x_arr, n_steps);
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_diffuse_matrix(
+// =============================================================================
+// Matrix Diffusion
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_diffuse_matrix(
     scl_sparse_t transition,
     scl_real_t* X,
-    scl_index_t n_nodes,
-    scl_index_t n_features,
-    scl_index_t n_steps
-) {
-    if (!transition || !X) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Size total = static_cast<scl::Size>(n_nodes) * static_cast<scl::Size>(n_features);
-        scl::Array<scl::Real> X_arr(reinterpret_cast<scl::Real*>(X), total);
+    const scl_index_t n_nodes,
+    const scl_index_t n_features,
+    const scl_index_t n_steps) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(X, "Matrix X is null");
+    SCL_C_API_CHECK(n_nodes > 0 && n_features > 0 && n_steps > 0,
+                   SCL_ERROR_INVALID_ARGUMENT, "Dimensions must be positive");
+    
+    SCL_C_API_TRY
+        const Size total = static_cast<Size>(n_nodes) * static_cast<Size>(n_features);
+        Array<Real> X_arr(reinterpret_cast<Real*>(X), total);
+        
         transition->visit([&](auto& mat) {
-            diffuse_matrix(mat, X_arr, n_nodes, n_features, n_steps);
+            scl::kernel::diffusion::diffuse_matrix(mat, X_arr, n_nodes, n_features, n_steps);
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_compute_dpt(
+// =============================================================================
+// Diffusion Pseudotime (DPT)
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_compute_dpt(
     scl_sparse_t transition,
-    scl_index_t root_cell,
+    const scl_index_t root_cell,
     scl_real_t* pseudotime,
-    scl_size_t n_nodes,
-    scl_index_t max_iter,
-    scl_real_t tol
-) {
-    if (!transition || !pseudotime) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Array<scl::Real> pt_arr(reinterpret_cast<scl::Real*>(pseudotime), n_nodes);
-        scl::Index max_it = (max_iter == 0) ? DEFAULT_MAX_ITER : max_iter;
-        scl::Real tolerance = (tol == scl::Real(0)) ? DEFAULT_TOL : tol;
+    const scl_size_t n_nodes,
+    const scl_index_t max_iter,
+    const scl_real_t tol) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(pseudotime, "Output pseudotime array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    
+    SCL_C_API_TRY
+        Array<Real> pt_arr(reinterpret_cast<Real*>(pseudotime), n_nodes);
+        const Index max_it = (max_iter == 0) ? DEFAULT_MAX_ITER : max_iter;
+        const Real tolerance = (tol == static_cast<scl_real_t>(0)) ? DEFAULT_TOL : static_cast<Real>(tol);
+        
         transition->visit([&](auto& mat) {
-            compute_dpt(mat, root_cell, pt_arr, max_it, tolerance);
+            scl::kernel::diffusion::compute_dpt(mat, root_cell, pt_arr, max_it, tolerance);
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_compute_dpt_multi_root(
+SCL_EXPORT scl_error_t scl_diffusion_compute_dpt_multi_root(
     scl_sparse_t transition,
     const scl_index_t* root_cells,
-    scl_size_t n_roots,
+    const scl_size_t n_roots,
     scl_real_t* pseudotime,
-    scl_size_t n_nodes,
-    scl_index_t max_iter
-) {
-    if (!transition || !root_cells || !pseudotime) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Array<const scl::Index> roots(
-            reinterpret_cast<const scl::Index*>(root_cells), n_roots
-        );
-        scl::Array<scl::Real> pt_arr(reinterpret_cast<scl::Real*>(pseudotime), n_nodes);
-        scl::Index max_it = (max_iter == 0) ? DEFAULT_MAX_ITER : max_iter;
+    const scl_size_t n_nodes,
+    const scl_index_t max_iter) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(root_cells, "Root cells array is null");
+    SCL_C_API_CHECK_NULL(pseudotime, "Output pseudotime array is null");
+    SCL_C_API_CHECK(n_roots > 0 && n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
+    
+    SCL_C_API_TRY
+        Array<const Index> roots(root_cells, n_roots);
+        Array<Real> pt_arr(reinterpret_cast<Real*>(pseudotime), n_nodes);
+        const Index max_it = (max_iter == 0) ? DEFAULT_MAX_ITER : max_iter;
+        
         transition->visit([&](auto& mat) {
-            compute_dpt_multi_root(mat, roots, pt_arr, max_it);
+            scl::kernel::diffusion::compute_dpt_multi_root(mat, roots, pt_arr, max_it);
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_random_walk_with_restart(
+// =============================================================================
+// Random Walk with Restart
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_random_walk_with_restart(
     scl_sparse_t transition,
     const scl_index_t* seed_nodes,
-    scl_size_t n_seeds,
+    const scl_size_t n_seeds,
     scl_real_t* scores,
-    scl_size_t n_nodes,
-    scl_real_t alpha,
-    scl_index_t max_iter,
-    scl_real_t tol
-) {
-    if (!transition || !seed_nodes || !scores) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Array<const scl::Index> seeds(
-            reinterpret_cast<const scl::Index*>(seed_nodes), n_seeds
-        );
-        scl::Array<scl::Real> scores_arr(reinterpret_cast<scl::Real*>(scores), n_nodes);
-        scl::Real a = (alpha == scl::Real(0)) ? DEFAULT_ALPHA : alpha;
-        scl::Index max_it = (max_iter == 0) ? DEFAULT_MAX_ITER : max_iter;
-        scl::Real tolerance = (tol == scl::Real(0)) ? DEFAULT_TOL : tol;
+    const scl_size_t n_nodes,
+    const scl_real_t alpha,
+    const scl_index_t max_iter,
+    const scl_real_t tol) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(seed_nodes, "Seed nodes array is null");
+    SCL_C_API_CHECK_NULL(scores, "Output scores array is null");
+    SCL_C_API_CHECK(n_seeds > 0 && n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
+    SCL_C_API_CHECK(alpha >= 0 && alpha <= 1, SCL_ERROR_INVALID_ARGUMENT,
+                   "Alpha must be in [0, 1]");
+    
+    SCL_C_API_TRY
+        Array<const Index> seeds(seed_nodes, n_seeds);
+        Array<Real> scores_arr(reinterpret_cast<Real*>(scores), n_nodes);
+        const Real alpha_val = (alpha == static_cast<scl_real_t>(0)) ? DEFAULT_ALPHA : static_cast<Real>(alpha);
+        const Index max_it = (max_iter == 0) ? DEFAULT_MAX_ITER : max_iter;
+        const Real tolerance = (tol == static_cast<scl_real_t>(0)) ? DEFAULT_TOL : static_cast<Real>(tol);
+        
         transition->visit([&](auto& mat) {
-            random_walk_with_restart(mat, seeds, scores_arr, a, max_it, tolerance);
+            scl::kernel::diffusion::random_walk_with_restart(
+                mat, seeds, scores_arr, alpha_val, max_it, tolerance
+            );
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_personalized_pagerank(
+// =============================================================================
+// Personalized PageRank
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_personalized_pagerank(
     scl_sparse_t transition,
-    scl_index_t seed_node,
+    const scl_index_t seed_node,
     scl_real_t* scores,
-    scl_size_t n_nodes,
-    scl_real_t alpha,
-    scl_index_t max_iter,
-    scl_real_t tol
-) {
-    if (!transition || !scores) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Array<scl::Real> scores_arr(reinterpret_cast<scl::Real*>(scores), n_nodes);
-        scl::Real a = (alpha == scl::Real(0)) ? DEFAULT_ALPHA : alpha;
-        scl::Index max_it = (max_iter == 0) ? DEFAULT_MAX_ITER : max_iter;
-        scl::Real tolerance = (tol == scl::Real(0)) ? DEFAULT_TOL : tol;
+    const scl_size_t n_nodes,
+    const scl_real_t alpha,
+    const scl_index_t max_iter,
+    const scl_real_t tol) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(scores, "Output scores array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    SCL_C_API_CHECK(alpha >= 0 && alpha <= 1, SCL_ERROR_INVALID_ARGUMENT,
+                   "Alpha must be in [0, 1]");
+    
+    SCL_C_API_TRY
+        Array<Real> scores_arr(reinterpret_cast<Real*>(scores), n_nodes);
+        const Real alpha_val = (alpha == static_cast<scl_real_t>(0)) ? DEFAULT_ALPHA : static_cast<Real>(alpha);
+        const Index max_it = (max_iter == 0) ? DEFAULT_MAX_ITER : max_iter;
+        const Real tolerance = (tol == static_cast<scl_real_t>(0)) ? DEFAULT_TOL : static_cast<Real>(tol);
+        
         transition->visit([&](auto& mat) {
-            personalized_pagerank(mat, seed_node, scores_arr, a, max_it, tolerance);
+            scl::kernel::diffusion::personalized_pagerank(
+                mat, seed_node, scores_arr, alpha_val, max_it, tolerance
+            );
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_diffusion_map_embedding(
+// =============================================================================
+// Diffusion Map Embedding
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_diffusion_map_embedding(
     scl_sparse_t transition,
     scl_real_t* embedding,
-    scl_index_t n_nodes,
-    scl_index_t n_components,
-    scl_index_t n_iter
-) {
-    if (!transition || !embedding) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Size total = static_cast<scl::Size>(n_nodes) * static_cast<scl::Size>(n_components);
-        scl::Array<scl::Real> emb_arr(reinterpret_cast<scl::Real*>(embedding), total);
-        scl::Index n_it = (n_iter == 0) ? DEFAULT_N_ITER : n_iter;
+    const scl_index_t n_nodes,
+    const scl_index_t n_components,
+    const scl_index_t n_iter) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(embedding, "Output embedding array is null");
+    SCL_C_API_CHECK(n_nodes > 0 && n_components > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
+    
+    SCL_C_API_TRY
+        const Size embed_size = static_cast<Size>(n_nodes) * static_cast<Size>(n_components);
+        Array<Real> embed_arr(reinterpret_cast<Real*>(embedding), embed_size);
+        const Index n_it = (n_iter == 0) ? DEFAULT_N_ITER : n_iter;
+        
         transition->visit([&](auto& mat) {
-            diffusion_map_embedding(mat, emb_arr, n_components, n_it);
+            scl::kernel::diffusion::diffusion_map_embedding(
+                mat, embed_arr, n_components, n_it
+            );
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_heat_kernel_signature(
+// =============================================================================
+// Heat Kernel Signature
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_heat_kernel_signature(
     scl_sparse_t transition,
     scl_real_t* signature,
-    scl_size_t n_nodes,
-    scl_real_t t,
-    scl_index_t n_steps
-) {
-    if (!transition || !signature) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Array<scl::Real> sig_arr(reinterpret_cast<scl::Real*>(signature), n_nodes);
-        scl::Real time = (t == scl::Real(0)) ? DEFAULT_T : t;
-        scl::Index steps = (n_steps == 0) ? DEFAULT_N_STEPS_HKS : n_steps;
+    const scl_size_t n_nodes,
+    const scl_real_t t,
+    const scl_index_t n_steps) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(signature, "Output signature array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    SCL_C_API_CHECK(t > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Time parameter t must be positive");
+    
+    SCL_C_API_TRY
+        Array<Real> sig_arr(reinterpret_cast<Real*>(signature), n_nodes);
+        const Real time_val = (t == static_cast<scl_real_t>(0)) ? DEFAULT_T : static_cast<Real>(t);
+        const Index steps = (n_steps == 0) ? DEFAULT_N_STEPS_HKS : n_steps;
+        
         transition->visit([&](auto& mat) {
-            heat_kernel_signature(mat, sig_arr, time, steps);
+            scl::kernel::diffusion::heat_kernel_signature(
+                mat, sig_arr, time_val, steps
+            );
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_magic_impute(
+// =============================================================================
+// MAGIC Imputation
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_magic_impute(
     scl_sparse_t transition,
     scl_real_t* X,
-    scl_index_t n_nodes,
-    scl_index_t n_features,
-    scl_index_t t
-) {
-    if (!transition || !X) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Size total = static_cast<scl::Size>(n_nodes) * static_cast<scl::Size>(n_features);
-        scl::Array<scl::Real> X_arr(reinterpret_cast<scl::Real*>(X), total);
-        scl::Index steps = (t == 0) ? DEFAULT_N_STEPS : t;
+    const scl_index_t n_nodes,
+    const scl_index_t n_features,
+    const scl_index_t t) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(X, "Matrix X is null");
+    SCL_C_API_CHECK(n_nodes > 0 && n_features > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
+    
+    SCL_C_API_TRY
+        const Size total = static_cast<Size>(n_nodes) * static_cast<Size>(n_features);
+        Array<Real> X_arr(reinterpret_cast<Real*>(X), total);
+        const Index steps = (t == 0) ? DEFAULT_N_STEPS : t;
+        
         transition->visit([&](auto& mat) {
-            magic_impute(mat, X_arr, n_nodes, n_features, steps);
+            scl::kernel::diffusion::magic_impute(mat, X_arr, n_nodes, n_features, steps);
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_diffusion_distance(
+// =============================================================================
+// Diffusion Distance
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_diffusion_distance(
     scl_sparse_t transition,
     scl_real_t* distances,
-    scl_size_t n_nodes,
-    scl_index_t n_steps
-) {
-    if (!transition || !distances) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Size total = static_cast<scl::Size>(n_nodes) * static_cast<scl::Size>(n_nodes);
-        scl::Array<scl::Real> dist_arr(reinterpret_cast<scl::Real*>(distances), total);
-        scl::Index steps = (n_steps == 0) ? DEFAULT_N_STEPS : n_steps;
+    const scl_size_t n_nodes,
+    const scl_index_t n_steps) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(distances, "Output distances array is null");
+    SCL_C_API_CHECK(n_nodes > 0 && n_steps > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
+    
+    SCL_C_API_TRY
+        const Size total = static_cast<Size>(n_nodes) * static_cast<Size>(n_nodes);
+        Array<Real> dist_arr(reinterpret_cast<Real*>(distances), total);
+        const Index steps = (n_steps == 0) ? DEFAULT_N_STEPS : n_steps;
+        
         transition->visit([&](auto& mat) {
-            diffusion_distance(mat, dist_arr, steps);
+            scl::kernel::diffusion::diffusion_distance(mat, dist_arr, steps);
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_diffusion_lazy_random_walk(
+// =============================================================================
+// Lazy Random Walk
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_diffusion_lazy_random_walk(
     scl_sparse_t transition,
     scl_real_t* x,
-    scl_size_t n_nodes,
-    scl_index_t n_steps,
-    scl_real_t laziness
-) {
-    if (!transition || !x) return SCL_ERROR_NULL_POINTER;
-    try {
-        scl::Array<scl::Real> x_arr(reinterpret_cast<scl::Real*>(x), n_nodes);
-        scl::Real laz = (laziness == scl::Real(0)) ? DEFAULT_LAZINESS : laziness;
+    const scl_size_t n_nodes,
+    const scl_index_t n_steps,
+    const scl_real_t laziness) {
+    
+    SCL_C_API_CHECK_NULL(transition, "Transition matrix is null");
+    SCL_C_API_CHECK_NULL(x, "Vector x is null");
+    SCL_C_API_CHECK(n_nodes > 0 && n_steps > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
+    SCL_C_API_CHECK(laziness >= 0 && laziness <= 1, SCL_ERROR_INVALID_ARGUMENT,
+                   "Laziness must be in [0, 1]");
+    
+    SCL_C_API_TRY
+        Array<Real> x_arr(reinterpret_cast<Real*>(x), n_nodes);
+        const Real lazy_val = (laziness == static_cast<scl_real_t>(0)) ? DEFAULT_LAZINESS : static_cast<Real>(laziness);
+        
         transition->visit([&](auto& mat) {
-            lazy_random_walk(mat, x_arr, n_steps, laz);
+            scl::kernel::diffusion::lazy_random_walk(mat, x_arr, n_steps, lazy_val);
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"

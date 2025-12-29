@@ -5,7 +5,6 @@
 
 #include "scl/binding/c_api/sparse_kernel.h"
 #include "scl/binding/c_api/core/internal.hpp"
-#include "scl/binding/c_api/core/sparse.h"
 #include "scl/kernel/sparse.hpp"
 #include "scl/core/sparse.hpp"
 #include "scl/core/registry.hpp"
@@ -15,74 +14,47 @@ using namespace scl::binding;
 
 extern "C" {
 
-scl_error_t scl_sparse_kernel_primary_sums(
+SCL_EXPORT scl_error_t scl_sparse_kernel_primary_sums(
     scl_sparse_t matrix,
     scl_real_t* output,
-    scl_size_t primary_dim)
-{
-    if (!matrix || !output) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t primary_dim) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle is null");
+    SCL_C_API_CHECK_NULL(output, "Output array is null");
+    SCL_C_API_CHECK(primary_dim > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Primary dimension must be positive");
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
-        
-        Index pdim = wrapper->rows();
-        if (static_cast<scl_size_t>(pdim) != primary_dim) {
-            set_last_error(SCL_ERROR_DIMENSION_MISMATCH, "Primary dimension mismatch");
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        }
+    SCL_C_API_TRY
+        Array<Real> output_arr(reinterpret_cast<Real*>(output), primary_dim);
 
-        Array<Real> output_arr(
-            reinterpret_cast<Real*>(output),
-            primary_dim
-        );
-
-        wrapper->visit([&](const auto& m) {
+        matrix->visit([&](const auto& m) {
             scl::kernel::sparse::primary_sums(m, output_arr);
         });
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_sparse_kernel_primary_means(
+SCL_EXPORT scl_error_t scl_sparse_kernel_primary_means(
     scl_sparse_t matrix,
     scl_real_t* output,
     scl_size_t primary_dim)
 {
-    if (!matrix || !output) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle is null");
+    SCL_C_API_CHECK_NULL(output, "Output array is null");
+    SCL_C_API_CHECK(primary_dim > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Primary dimension must be positive");
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
-        
-        Index pdim = wrapper->rows();
-        if (static_cast<scl_size_t>(pdim) != primary_dim) {
-            set_last_error(SCL_ERROR_DIMENSION_MISMATCH, "Primary dimension mismatch");
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        }
+    SCL_C_API_TRY
+        Array<Real> output_arr(reinterpret_cast<Real*>(output), primary_dim);
 
-        Array<Real> output_arr(
-            reinterpret_cast<Real*>(output),
-            primary_dim
-        );
-
-        wrapper->visit([&](const auto& m) {
+        matrix->visit([&](const auto& m) {
             scl::kernel::sparse::primary_means(m, output_arr);
         });
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 scl_error_t scl_sparse_kernel_primary_variances(
@@ -156,99 +128,71 @@ scl_error_t scl_sparse_kernel_primary_nnz(
     }
 }
 
-scl_error_t scl_sparse_kernel_eliminate_zeros(
+SCL_EXPORT scl_error_t scl_sparse_kernel_eliminate_zeros(
     scl_sparse_t matrix,
     scl_sparse_t* out_matrix,
-    scl_real_t tolerance)
-{
-    if (!matrix || !out_matrix) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_real_t tolerance) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle is null");
+    SCL_C_API_CHECK_NULL(out_matrix, "Output matrix pointer is null");
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
-        
+    SCL_C_API_TRY
         auto& reg = get_registry();
-        auto* result_wrapper = reg.new_object<SparseWrapper>();
-        if (!result_wrapper) {
-            set_last_error(SCL_ERROR_OUT_OF_MEMORY, "Failed to allocate wrapper");
-            return SCL_ERROR_OUT_OF_MEMORY;
+        auto* handle = reg.new_object<scl_sparse_matrix>();
+        SCL_CHECK_NULL(handle, "Failed to allocate result matrix handle");
+        
+        handle->is_csr = matrix->is_csr;
+        
+        if (matrix->is_csr) {
+            auto& m = matrix->as_csr();
+            handle->matrix = scl::kernel::sparse::eliminate_zeros(m, static_cast<Real>(tolerance));
+        } else {
+            auto& m = matrix->as_csc();
+            handle->matrix = scl::kernel::sparse::eliminate_zeros(m, static_cast<Real>(tolerance));
         }
-
-        wrapper->visit([&](const auto& m) {
-            auto result = scl::kernel::sparse::eliminate_zeros(m, static_cast<Real>(tolerance));
-            if (wrapper->is_csr) {
-                result_wrapper->matrix = CSR(std::move(result));
-                result_wrapper->is_csr = true;
-            } else {
-                result_wrapper->matrix = CSC(std::move(result));
-                result_wrapper->is_csr = false;
-            }
-        });
-
-        if (!result_wrapper->valid()) {
-            reg.unregister_ptr(result_wrapper);
-            set_last_error(SCL_ERROR_INTERNAL, "Failed to create result matrix");
-            return SCL_ERROR_INTERNAL;
-        }
-
-        *out_matrix = result_wrapper;
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_CHECK_ARG(handle->valid(), "Failed to eliminate zeros");
+        
+        *out_matrix = handle;
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_sparse_kernel_prune(
+SCL_EXPORT scl_error_t scl_sparse_kernel_prune(
     scl_sparse_t matrix,
     scl_sparse_t* out_matrix,
-    scl_real_t threshold,
-    int keep_structure)
-{
-    if (!matrix || !out_matrix) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_real_t threshold,
+    const int keep_structure) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle is null");
+    SCL_C_API_CHECK_NULL(out_matrix, "Output matrix pointer is null");
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
-        
+    SCL_C_API_TRY
         auto& reg = get_registry();
-        auto* result_wrapper = reg.new_object<SparseWrapper>();
-        if (!result_wrapper) {
-            set_last_error(SCL_ERROR_OUT_OF_MEMORY, "Failed to allocate wrapper");
-            return SCL_ERROR_OUT_OF_MEMORY;
-        }
-
-        wrapper->visit([&](const auto& m) {
-            auto result = scl::kernel::sparse::prune(
-                m,
-                static_cast<Real>(threshold),
-                keep_structure != 0
+        auto* handle = reg.new_object<scl_sparse_matrix>();
+        SCL_CHECK_NULL(handle, "Failed to allocate result matrix handle");
+        
+        handle->is_csr = matrix->is_csr;
+        
+        if (matrix->is_csr) {
+            auto& m = matrix->as_csr();
+            handle->matrix = scl::kernel::sparse::prune(
+                m, static_cast<Real>(threshold), keep_structure != 0
             );
-            if (wrapper->is_csr) {
-                result_wrapper->matrix = CSR(std::move(result));
-                result_wrapper->is_csr = true;
-            } else {
-                result_wrapper->matrix = CSC(std::move(result));
-                result_wrapper->is_csr = false;
-            }
-        });
-
-        if (!result_wrapper->valid()) {
-            reg.unregister_ptr(result_wrapper);
-            set_last_error(SCL_ERROR_INTERNAL, "Failed to create result matrix");
-            return SCL_ERROR_INTERNAL;
+        } else {
+            auto& m = matrix->as_csc();
+            handle->matrix = scl::kernel::sparse::prune(
+                m, static_cast<Real>(threshold), keep_structure != 0
+            );
         }
-
-        *out_matrix = result_wrapper;
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_CHECK_ARG(handle->valid(), "Failed to prune matrix");
+        
+        *out_matrix = handle;
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"

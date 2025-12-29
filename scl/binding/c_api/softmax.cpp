@@ -11,7 +11,6 @@
 
 using namespace scl;
 using namespace scl::binding;
-using namespace scl::kernel::softmax;
 
 extern "C" {
 
@@ -19,119 +18,96 @@ extern "C" {
 // Dense Array Softmax
 // =============================================================================
 
-scl_error_t scl_softmax_array(
+SCL_EXPORT scl_error_t scl_softmax_array(
     scl_real_t* values,
-    scl_size_t n,
-    scl_real_t temperature)
-{
-    if (!values) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n,
+    const scl_real_t temperature) {
+    
+    SCL_C_API_CHECK_NULL(values, "Values array is null");
+    SCL_C_API_CHECK(n > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Array size must be positive");
 
-    try {
+    SCL_C_API_TRY
         Real* vals = reinterpret_cast<Real*>(values);
         
-        if (temperature == 1.0f || temperature == 1.0) {
-            softmax_inplace(vals, n);
+        if (temperature == static_cast<scl_real_t>(1.0)) {
+            scl::kernel::softmax::softmax_inplace(vals, n);
         } else {
-            softmax_inplace(vals, n, static_cast<Real>(temperature));
+            scl::kernel::softmax::softmax_inplace(vals, n, static_cast<Real>(temperature));
         }
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_log_softmax_array(
+SCL_EXPORT scl_error_t scl_log_softmax_array(
     scl_real_t* values,
-    scl_size_t n,
-    scl_real_t temperature)
-{
-    if (!values) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n,
+    const scl_real_t temperature) {
+    
+    SCL_C_API_CHECK_NULL(values, "Values array is null");
+    SCL_C_API_CHECK(n > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Array size must be positive");
 
-    try {
+    SCL_C_API_TRY
         Real* vals = reinterpret_cast<Real*>(values);
         
-        if (temperature == 1.0f || temperature == 1.0) {
-            log_softmax_inplace(vals, n);
+        if (temperature == static_cast<scl_real_t>(1.0)) {
+            scl::kernel::softmax::log_softmax_inplace(vals, n);
         } else {
-            log_softmax_inplace(vals, n, static_cast<Real>(temperature));
+            scl::kernel::softmax::log_softmax_inplace(vals, n, static_cast<Real>(temperature));
         }
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 // =============================================================================
 // Sparse Matrix Softmax
 // =============================================================================
 
-scl_error_t scl_softmax_matrix(
+SCL_EXPORT scl_error_t scl_softmax_matrix(
     scl_sparse_t* matrix,
-    scl_real_t temperature)
-{
-    if (!matrix || !*matrix) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_real_t temperature) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix pointer is null");
+    SCL_C_API_CHECK_NULL(*matrix, "Matrix handle is null");
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(*matrix);
-        
-        if (temperature == 1.0f || temperature == 1.0) {
-            wrapper->visit([&](auto& m) {
-                softmax_inplace(m);
+    SCL_C_API_TRY
+        if (temperature == static_cast<scl_real_t>(1.0)) {
+            (*matrix)->visit([&](auto& m) {
+                scl::kernel::softmax::softmax_inplace(m);
             });
         } else {
-            wrapper->visit([&](auto& m) {
-                softmax_inplace(m, static_cast<Real>(temperature));
+            (*matrix)->visit([&](auto& m) {
+                scl::kernel::softmax::softmax_inplace(m, static_cast<Real>(temperature));
             });
         }
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_log_softmax_matrix(
+SCL_EXPORT scl_error_t scl_log_softmax_matrix(
     scl_sparse_t* matrix,
-    scl_real_t temperature)
-{
-    if (!matrix || !*matrix) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_real_t temperature) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix pointer is null");
+    SCL_C_API_CHECK_NULL(*matrix, "Matrix handle is null");
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(*matrix);
-        
-        if (temperature == 1.0f || temperature == 1.0) {
-            wrapper->visit([&](auto& m) {
-                log_softmax_inplace(m);
+    SCL_C_API_TRY
+        if (temperature == static_cast<scl_real_t>(1.0)) {
+            (*matrix)->visit([&](auto& m) {
+                scl::kernel::softmax::log_softmax_inplace(m);
             });
         } else {
-            wrapper->visit([&](auto& m) {
-                log_softmax_inplace(m, static_cast<Real>(temperature));
+            (*matrix)->visit([&](auto& m) {
+                scl::kernel::softmax::log_softmax_inplace(m, static_cast<Real>(temperature));
             });
         }
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"
-

@@ -12,27 +12,29 @@ using namespace scl::binding;
 
 extern "C" {
 
-scl_error_t scl_hotspot_local_morans_i(
+// =============================================================================
+// Local Moran's I
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_hotspot_local_morans_i(
     scl_sparse_t spatial_weights,
     const scl_real_t* values,
-    scl_index_t n,
+    const scl_index_t n,
     scl_real_t* local_i,
     scl_real_t* z_scores,
     scl_real_t* p_values,
-    scl_index_t n_permutations,
-    uint64_t seed)
-{
-    if (!spatial_weights || !values || !local_i || !z_scores || !p_values) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_index_t n_permutations,
+    const uint64_t seed) {
     
-    try {
-        if (!spatial_weights->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
+    SCL_C_API_CHECK_NULL(spatial_weights, "Spatial weights matrix is null");
+    SCL_C_API_CHECK_NULL(values, "Values array is null");
+    SCL_C_API_CHECK_NULL(local_i, "Output local I array is null");
+    SCL_C_API_CHECK_NULL(z_scores, "Output z-scores array is null");
+    SCL_C_API_CHECK_NULL(p_values, "Output p-values array is null");
+    SCL_C_API_CHECK(n > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Array size must be positive");
+    
+    SCL_C_API_TRY
         Array<const Real> values_arr(
             reinterpret_cast<const Real*>(values),
             static_cast<Size>(n)
@@ -52,46 +54,38 @@ scl_error_t scl_hotspot_local_morans_i(
         
         spatial_weights->visit([&](auto& w) {
             scl::kernel::hotspot::local_morans_i(
-                w,
-                values_arr,
-                n,
-                local_i_arr,
-                z_scores_arr,
-                p_values_arr,
-                n_permutations,
-                seed
+                w, values_arr, n,
+                local_i_arr, z_scores_arr, p_values_arr,
+                n_permutations, seed
             );
         });
         
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_hotspot_getis_ord_g_star(
+// =============================================================================
+// Getis-Ord G*
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_hotspot_getis_ord_g_star(
     scl_sparse_t spatial_weights,
     const scl_real_t* values,
-    scl_index_t n,
+    const scl_index_t n,
     scl_real_t* g_star,
     scl_real_t* z_scores,
     scl_real_t* p_values,
-    int include_self,
-    scl_index_t n_permutations,
-    uint64_t seed)
-{
-    if (!spatial_weights || !values || !g_star || !z_scores || !p_values) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const int include_self) {
     
-    try {
-        if (!spatial_weights->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
+    SCL_C_API_CHECK_NULL(spatial_weights, "Spatial weights matrix is null");
+    SCL_C_API_CHECK_NULL(values, "Values array is null");
+    SCL_C_API_CHECK_NULL(g_star, "Output G* array is null");
+    SCL_C_API_CHECK_NULL(z_scores, "Output z-scores array is null");
+    SCL_C_API_CHECK_NULL(p_values, "Output p-values array is null");
+    SCL_C_API_CHECK(n > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Array size must be positive");
+    
+    SCL_C_API_TRY
         Array<const Real> values_arr(
             reinterpret_cast<const Real*>(values),
             static_cast<Size>(n)
@@ -111,44 +105,39 @@ scl_error_t scl_hotspot_getis_ord_g_star(
         
         spatial_weights->visit([&](auto& w) {
             scl::kernel::hotspot::getis_ord_g_star(
-                w,
-                values_arr,
-                n,
-                g_star_arr,
-                z_scores_arr,
-                p_values_arr,
+                w, values_arr, n,
+                g_star_arr, z_scores_arr, p_values_arr,
                 include_self != 0
             );
         });
         
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_hotspot_local_gearys_c(
+// =============================================================================
+// Local Geary's C
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_hotspot_local_gearys_c(
     scl_sparse_t spatial_weights,
     const scl_real_t* values,
-    scl_index_t n,
+    const scl_index_t n,
     scl_real_t* local_c,
     scl_real_t* z_scores,
     scl_real_t* p_values,
-    scl_index_t n_permutations,
-    uint64_t seed)
-{
-    if (!spatial_weights || !values || !local_c || !z_scores || !p_values) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_index_t n_permutations,
+    const uint64_t seed) {
     
-    try {
-        if (!spatial_weights->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
+    SCL_C_API_CHECK_NULL(spatial_weights, "Spatial weights matrix is null");
+    SCL_C_API_CHECK_NULL(values, "Values array is null");
+    SCL_C_API_CHECK_NULL(local_c, "Output local C array is null");
+    SCL_C_API_CHECK_NULL(z_scores, "Output z-scores array is null");
+    SCL_C_API_CHECK_NULL(p_values, "Output p-values array is null");
+    SCL_C_API_CHECK(n > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Array size must be positive");
+    
+    SCL_C_API_TRY
         Array<const Real> values_arr(
             reinterpret_cast<const Real*>(values),
             static_cast<Size>(n)
@@ -168,119 +157,98 @@ scl_error_t scl_hotspot_local_gearys_c(
         
         spatial_weights->visit([&](auto& w) {
             scl::kernel::hotspot::local_gearys_c(
-                w,
-                values_arr,
-                n,
-                local_c_arr,
-                z_scores_arr,
-                p_values_arr,
-                n_permutations,
-                seed
+                w, values_arr, n,
+                local_c_arr, z_scores_arr, p_values_arr,
+                n_permutations, seed
             );
         });
         
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_hotspot_global_morans_i(
+// =============================================================================
+// Global Moran's I
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_hotspot_global_morans_i(
     scl_sparse_t spatial_weights,
     const scl_real_t* values,
-    scl_index_t n,
+    const scl_index_t n,
     scl_real_t* moran_i,
     scl_real_t* z_score,
-    scl_real_t* p_value)
-{
-    if (!spatial_weights || !values || !moran_i || !z_score || !p_value) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    scl_real_t* p_value) {
     
-    try {
-        if (!spatial_weights->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
+    SCL_C_API_CHECK_NULL(spatial_weights, "Spatial weights matrix is null");
+    SCL_C_API_CHECK_NULL(values, "Values array is null");
+    SCL_C_API_CHECK_NULL(moran_i, "Output Moran's I pointer is null");
+    SCL_C_API_CHECK_NULL(z_score, "Output z-score pointer is null");
+    SCL_C_API_CHECK_NULL(p_value, "Output p-value pointer is null");
+    SCL_C_API_CHECK(n > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Array size must be positive");
+    
+    SCL_C_API_TRY
         Array<const Real> values_arr(
             reinterpret_cast<const Real*>(values),
             static_cast<Size>(n)
         );
         
-        Real moran_i_val, z_score_val, p_value_val;
+        Real mi = Real(0);
+        Real z = Real(0);
+        Real p = Real(0);
         
         spatial_weights->visit([&](auto& w) {
-            scl::kernel::hotspot::global_morans_i(
-                w,
-                values_arr,
-                n,
-                moran_i_val,
-                z_score_val,
-                p_value_val
-            );
+            scl::kernel::hotspot::global_morans_i(w, values_arr, n, mi, z, p);
         });
         
-        *moran_i = static_cast<scl_real_t>(moran_i_val);
-        *z_score = static_cast<scl_real_t>(z_score_val);
-        *p_value = static_cast<scl_real_t>(p_value_val);
+        *moran_i = static_cast<scl_real_t>(mi);
+        *z_score = static_cast<scl_real_t>(z);
+        *p_value = static_cast<scl_real_t>(p);
         
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_hotspot_global_gearys_c(
+// =============================================================================
+// Global Geary's C
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_hotspot_global_gearys_c(
     scl_sparse_t spatial_weights,
     const scl_real_t* values,
-    scl_index_t n,
+    const scl_index_t n,
     scl_real_t* geary_c,
     scl_real_t* z_score,
-    scl_real_t* p_value)
-{
-    if (!spatial_weights || !values || !geary_c || !z_score || !p_value) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    scl_real_t* p_value) {
     
-    try {
-        if (!spatial_weights->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
+    SCL_C_API_CHECK_NULL(spatial_weights, "Spatial weights matrix is null");
+    SCL_C_API_CHECK_NULL(values, "Values array is null");
+    SCL_C_API_CHECK_NULL(geary_c, "Output Geary's C pointer is null");
+    SCL_C_API_CHECK_NULL(z_score, "Output z-score pointer is null");
+    SCL_C_API_CHECK_NULL(p_value, "Output p-value pointer is null");
+    SCL_C_API_CHECK(n > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Array size must be positive");
+    
+    SCL_C_API_TRY
         Array<const Real> values_arr(
             reinterpret_cast<const Real*>(values),
             static_cast<Size>(n)
         );
         
-        Real geary_c_val, z_score_val, p_value_val;
+        Real gc = Real(0);
+        Real z = Real(0);
+        Real p = Real(0);
         
         spatial_weights->visit([&](auto& w) {
-            scl::kernel::hotspot::global_gearys_c(
-                w,
-                values_arr,
-                n,
-                geary_c_val,
-                z_score_val,
-                p_value_val
-            );
+            scl::kernel::hotspot::global_gearys_c(w, values_arr, n, gc, z, p);
         });
         
-        *geary_c = static_cast<scl_real_t>(geary_c_val);
-        *z_score = static_cast<scl_real_t>(z_score_val);
-        *p_value = static_cast<scl_real_t>(p_value_val);
+        *geary_c = static_cast<scl_real_t>(gc);
+        *z_score = static_cast<scl_real_t>(z);
+        *p_value = static_cast<scl_real_t>(p);
         
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"
-

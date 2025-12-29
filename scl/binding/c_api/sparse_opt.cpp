@@ -170,7 +170,7 @@ scl_error_t scl_sparse_opt_fista_lasso(
                                       static_cast<scl::Size>(n_features));
 
         wrapper->visit([&](auto& m) {
-            scl::kernel::sparse_opt::fista_lasso(
+            scl::kernel::sparse_opt::fista(
                 m, y_arr, static_cast<scl::Real>(alpha), coef_arr,
                 max_iter, static_cast<scl::Real>(tol)
             );
@@ -236,7 +236,6 @@ scl_error_t scl_sparse_opt_lasso_path(
         auto* wrapper = static_cast<scl::binding::SparseWrapper*>(X);
         
         scl::Index n_samples = wrapper->rows();
-        scl::Index n_features = wrapper->cols();
         
         scl::Array<const scl::Real> y_arr(
             reinterpret_cast<const scl::Real*>(y),

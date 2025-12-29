@@ -7,123 +7,115 @@
 #include "scl/binding/c_api/core/internal.hpp"
 #include "scl/kernel/ttest.hpp"
 #include "scl/core/type.hpp"
-#include "scl/core/error.hpp"
 
-#include <exception>
+using namespace scl;
+using namespace scl::binding;
 
 extern "C" {
 
-static scl_error_t get_sparse_matrix(
-    scl_sparse_t handle,
-    scl::binding::SparseWrapper*& wrapper
-) {
-    if (!handle) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-    wrapper = static_cast<scl::binding::SparseWrapper*>(handle);
-    if (!wrapper->valid()) {
-        return SCL_ERROR_INVALID_ARGUMENT;
-    }
-    return SCL_OK;
-}
+// =============================================================================
+// T-Test
+// =============================================================================
 
-scl_error_t scl_ttest(
+SCL_EXPORT scl_error_t scl_ttest(
     scl_sparse_t matrix,
     const int32_t* group_ids,
-    scl_size_t n_cells,
+    const scl_size_t n_cells,
     scl_real_t* out_t_stats,
-    scl_size_t t_stats_size,
+    const scl_size_t t_stats_size,
     scl_real_t* out_p_values,
-    scl_size_t p_values_size,
+    const scl_size_t p_values_size,
     scl_real_t* out_log2_fc,
-    scl_size_t log2_fc_size,
-    int use_welch
-) {
-    if (!matrix || !group_ids || !out_t_stats || !out_p_values || !out_log2_fc) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t log2_fc_size,
+    const int use_welch) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle is null");
+    SCL_C_API_CHECK_NULL(group_ids, "Group IDs pointer is null");
+    SCL_C_API_CHECK_NULL(out_t_stats, "Output t-statistics pointer is null");
+    SCL_C_API_CHECK_NULL(out_p_values, "Output p-values pointer is null");
+    SCL_C_API_CHECK_NULL(out_log2_fc, "Output log2 fold change pointer is null");
+    SCL_C_API_CHECK(n_cells > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of cells must be positive");
 
-    try {
-        scl::binding::SparseWrapper* wrapper;
-        scl_error_t err = get_sparse_matrix(matrix, wrapper);
-        if (err != SCL_OK) return err;
+    SCL_C_API_TRY
+        const Index primary_dim = matrix->rows();
+        const Size primary_dim_sz = static_cast<Size>(primary_dim);
+        const Size n_cells_sz = static_cast<Size>(n_cells);
 
-        wrapper->visit([&](auto& mat) {
-            scl::kernel::ttest::ttest(
-                mat,
-                scl::Array<const int32_t>(
-                    group_ids,
-                    static_cast<scl::Size>(n_cells)
-                ),
-                scl::Array<scl::Real>(
-                    reinterpret_cast<scl::Real*>(out_t_stats),
-                    static_cast<scl::Size>(t_stats_size)
-                ),
-                scl::Array<scl::Real>(
-                    reinterpret_cast<scl::Real*>(out_p_values),
-                    static_cast<scl::Size>(p_values_size)
-                ),
-                scl::Array<scl::Real>(
-                    reinterpret_cast<scl::Real*>(out_log2_fc),
-                    static_cast<scl::Size>(log2_fc_size)
-                ),
-                use_welch != 0
-            );
+        // Validate output array sizes
+        SCL_C_API_CHECK(t_stats_size == primary_dim_sz, SCL_ERROR_DIMENSION_MISMATCH,
+                       "t_stats_size must match primary dimension");
+        SCL_C_API_CHECK(p_values_size == primary_dim_sz, SCL_ERROR_DIMENSION_MISMATCH,
+                       "p_values_size must match primary dimension");
+        SCL_C_API_CHECK(log2_fc_size == primary_dim_sz, SCL_ERROR_DIMENSION_MISMATCH,
+                       "log2_fc_size must match primary dimension");
+
+        // Wrap C arrays with Array views
+        Array<const int32_t> groups_arr(group_ids, n_cells_sz);
+        Array<Real> t_arr(reinterpret_cast<Real*>(out_t_stats), primary_dim_sz);
+        Array<Real> p_arr(reinterpret_cast<Real*>(out_p_values), primary_dim_sz);
+        Array<Real> fc_arr(reinterpret_cast<Real*>(out_log2_fc), primary_dim_sz);
+        
+        const bool use_welch_flag = (use_welch != 0);
+        
+        // Dispatch to kernel implementation
+        matrix->visit([&](auto& m) {
+            scl::kernel::ttest::ttest(m, groups_arr, t_arr, p_arr, fc_arr, use_welch_flag);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_ttest_compute_group_stats(
+// =============================================================================
+// Compute Group Statistics
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_ttest_compute_group_stats(
     scl_sparse_t matrix,
     const int32_t* group_ids,
-    scl_size_t n_cells,
-    scl_size_t n_groups,
+    const scl_size_t n_cells,
+    const scl_size_t n_groups,
     scl_real_t* out_means,
-    scl_size_t means_size,
+    const scl_size_t means_size,
     scl_real_t* out_vars,
-    scl_size_t vars_size,
-    scl_size_t* out_counts
-) {
-    if (!matrix || !group_ids || !out_means || !out_vars || !out_counts) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t vars_size,
+    scl_size_t* out_counts) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle is null");
+    SCL_C_API_CHECK_NULL(group_ids, "Group IDs pointer is null");
+    SCL_C_API_CHECK_NULL(out_means, "Output means pointer is null");
+    SCL_C_API_CHECK_NULL(out_vars, "Output variances pointer is null");
+    SCL_C_API_CHECK_NULL(out_counts, "Output counts pointer is null");
+    SCL_C_API_CHECK(n_cells > 0 && n_groups > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
 
-    try {
-        scl::binding::SparseWrapper* wrapper;
-        scl_error_t err = get_sparse_matrix(matrix, wrapper);
-        if (err != SCL_OK) return err;
+    SCL_C_API_TRY
+        const Index primary_dim = matrix->rows();
+        const Size primary_dim_sz = static_cast<Size>(primary_dim);
+        const Size n_cells_sz = static_cast<Size>(n_cells);
+        const Size n_groups_sz = static_cast<Size>(n_groups);
+        const Size expected_size = primary_dim_sz * n_groups_sz;
 
-        wrapper->visit([&](auto& mat) {
-            scl::kernel::ttest::compute_group_stats(
-                mat,
-                scl::Array<const int32_t>(
-                    group_ids,
-                    static_cast<scl::Size>(n_cells)
-                ),
-                static_cast<scl::Size>(n_groups),
-                scl::Array<scl::Real>(
-                    reinterpret_cast<scl::Real*>(out_means),
-                    static_cast<scl::Size>(means_size)
-                ),
-                scl::Array<scl::Real>(
-                    reinterpret_cast<scl::Real*>(out_vars),
-                    static_cast<scl::Size>(vars_size)
-                ),
-                scl::Array<scl::Size>(
-                    out_counts,
-                    static_cast<scl::Size>(vars_size)
-                )
-            );
+        // Validate output array sizes
+        SCL_C_API_CHECK(means_size == expected_size, SCL_ERROR_DIMENSION_MISMATCH,
+                       "means_size must be primary_dim * n_groups");
+        SCL_C_API_CHECK(vars_size == expected_size, SCL_ERROR_DIMENSION_MISMATCH,
+                       "vars_size must be primary_dim * n_groups");
+
+        // Wrap C arrays with Array views
+        Array<const int32_t> groups_arr(group_ids, n_cells_sz);
+        Array<Real> means_arr(reinterpret_cast<Real*>(out_means), expected_size);
+        Array<Real> vars_arr(reinterpret_cast<Real*>(out_vars), expected_size);
+        Array<Size> counts_arr(out_counts, expected_size);
+        
+        // Dispatch to kernel implementation
+        matrix->visit([&](auto& m) {
+            scl::kernel::ttest::compute_group_stats(m, groups_arr, n_groups_sz, means_arr, vars_arr, counts_arr);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"

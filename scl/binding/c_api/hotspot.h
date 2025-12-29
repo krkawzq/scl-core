@@ -25,6 +25,7 @@ scl_error_t scl_hotspot_local_morans_i(
 );
 
 // Getis-Ord Gi*
+// Note: Current kernel implementation does not support permutation testing
 scl_error_t scl_hotspot_getis_ord_g_star(
     scl_sparse_t spatial_weights,
     const scl_real_t* values,
@@ -32,9 +33,7 @@ scl_error_t scl_hotspot_getis_ord_g_star(
     scl_real_t* g_star,
     scl_real_t* z_scores,
     scl_real_t* p_values,
-    int include_self,
-    scl_index_t n_permutations,
-    uint64_t seed
+    int include_self
 );
 
 // Local Geary's C

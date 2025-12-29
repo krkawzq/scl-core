@@ -7,7 +7,6 @@
 #include "scl/binding/c_api/core/internal.hpp"
 #include "scl/kernel/subpopulation.hpp"
 #include "scl/core/type.hpp"
-#include "scl/core/error.hpp"
 
 #include <exception>
 
@@ -41,7 +40,7 @@ scl_error_t scl_subpopulation_subclustering(
     }
 
     try {
-        scl::binding::SparseWrapper* wrapper;
+        scl::binding::SparseWrapper* wrapper{};
         scl_error_t err = get_sparse_matrix(expression, wrapper);
         if (err != SCL_OK) return err;
 
@@ -82,7 +81,7 @@ scl_error_t scl_subpopulation_cluster_stability(
     }
 
     try {
-        scl::binding::SparseWrapper* wrapper;
+        scl::binding::SparseWrapper* wrapper{};
         scl_error_t err = get_sparse_matrix(expression, wrapper);
         if (err != SCL_OK) return err;
 
@@ -140,40 +139,13 @@ scl_error_t scl_subpopulation_cluster_purity(
     }
 }
 
-scl_error_t scl_subpopulation_rare_cell_detection(
-    scl_sparse_t expression,
-    scl_sparse_t neighbors,
-    scl_real_t* rarity_scores
-) {
-    if (!expression || !neighbors || !rarity_scores) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        scl::binding::SparseWrapper* wrapper_expr;
-        scl::binding::SparseWrapper* wrapper_neigh;
-        scl_error_t err1 = get_sparse_matrix(expression, wrapper_expr);
-        scl_error_t err2 = get_sparse_matrix(neighbors, wrapper_neigh);
-        if (err1 != SCL_OK) return err1;
-        if (err2 != SCL_OK) return err2;
-
-        wrapper_expr->visit([&](auto& expr) {
-            wrapper_neigh->visit([&](auto& neigh) {
-                scl::kernel::subpopulation::rare_cell_detection(
-                    expr,
-                    neigh,
-                    scl::Array<scl::Real>(
-                        reinterpret_cast<scl::Real*>(rarity_scores),
-                        static_cast<scl::Size>(expr.rows())
-                    )
-                );
-            });
-        });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+// Rare cell detection - NOT YET IMPLEMENTED
+// TODO: Requires Sparse<Index, IsCSR> for neighbors matrix
+// Commented out to prevent type mismatch errors
+/*
+scl_error_t scl_subpopulation_rare_cell_detection(...) {
+    // Implementation pending type system extension
 }
+*/
 
 } // extern "C"

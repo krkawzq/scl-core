@@ -8,235 +8,105 @@
 #include "scl/kernel/niche.hpp"
 #include "scl/core/type.hpp"
 
+using namespace scl;
+using namespace scl::binding;
+
 extern "C" {
 
-scl_error_t scl_niche_neighborhood_composition(
+// =============================================================================
+// Neighborhood Composition
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_niche_neighborhood_composition(
     scl_sparse_t spatial_neighbors,
     const scl_index_t* cell_type_labels,
-    scl_index_t n_cell_types,
-    scl_real_t* composition_output
-) {
-    if (!spatial_neighbors || !cell_type_labels || !composition_output) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_index_t n_cell_types,
+    scl_real_t* composition_output) {
+    
+    SCL_C_API_CHECK_NULL(spatial_neighbors, "Spatial neighbors matrix is null");
+    SCL_C_API_CHECK_NULL(cell_type_labels, "Cell type labels array is null");
+    SCL_C_API_CHECK_NULL(composition_output, "Composition output array is null");
+    SCL_C_API_CHECK(n_cell_types > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of cell types must be positive");
 
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(spatial_neighbors);
-        scl::Index n_cells = sparse->rows();
-        scl::Array<const scl::Index> labels(cell_type_labels, static_cast<scl::Size>(n_cells));
-        scl::Array<scl::Real> output(reinterpret_cast<scl::Real*>(composition_output),
-                                     static_cast<scl::Size>(n_cells) * n_cell_types);
+    SCL_C_API_TRY
+        const Index n_cells = spatial_neighbors->rows();
+        Array<const Index> labels(cell_type_labels, static_cast<Size>(n_cells));
+        Array<Real> output(
+            reinterpret_cast<Real*>(composition_output),
+            static_cast<Size>(n_cells) * static_cast<Size>(n_cell_types)
+        );
 
-        sparse->visit([&](auto& m) {
-            scl::kernel::niche::neighborhood_composition(
-                m, labels, n_cell_types, output
-            );
+        spatial_neighbors->visit([&](auto& m) {
+            scl::kernel::niche::neighborhood_composition(m, labels, n_cell_types, output);
         });
 
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_niche_neighborhood_enrichment(
+// =============================================================================
+// Neighborhood Enrichment
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_niche_neighborhood_enrichment(
     scl_sparse_t spatial_neighbors,
     const scl_index_t* cell_type_labels,
-    scl_index_t n_cell_types,
+    const scl_index_t n_cell_types,
     scl_real_t* enrichment_scores,
     scl_real_t* p_values,
-    scl_index_t n_permutations
-) {
-    if (!spatial_neighbors || !cell_type_labels || !enrichment_scores || !p_values) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_index_t n_permutations) {
+    
+    SCL_C_API_CHECK_NULL(spatial_neighbors, "Spatial neighbors matrix is null");
+    SCL_C_API_CHECK_NULL(cell_type_labels, "Cell type labels array is null");
+    SCL_C_API_CHECK_NULL(enrichment_scores, "Enrichment scores array is null");
+    SCL_C_API_CHECK_NULL(p_values, "P-values array is null");
+    SCL_C_API_CHECK(n_cell_types > 0 && n_permutations > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
 
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(spatial_neighbors);
-        scl::Size n_pairs = static_cast<scl::Size>(n_cell_types) * n_cell_types;
-        scl::Array<const scl::Index> labels(cell_type_labels, static_cast<scl::Size>(sparse->rows()));
-        scl::Array<scl::Real> scores(reinterpret_cast<scl::Real*>(enrichment_scores), n_pairs);
-        scl::Array<scl::Real> pvals(reinterpret_cast<scl::Real*>(p_values), n_pairs);
+    SCL_C_API_TRY
+        const Size n_pairs = static_cast<Size>(n_cell_types) * static_cast<Size>(n_cell_types);
+        Array<const Index> labels(cell_type_labels, static_cast<Size>(spatial_neighbors->rows()));
+        Array<Real> scores(reinterpret_cast<Real*>(enrichment_scores), n_pairs);
+        Array<Real> pvals(reinterpret_cast<Real*>(p_values), n_pairs);
 
-        sparse->visit([&](auto& m) {
+        spatial_neighbors->visit([&](auto& m) {
             scl::kernel::niche::neighborhood_enrichment(
                 m, labels, n_cell_types, scores, pvals, n_permutations
             );
         });
 
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_niche_cell_cell_contact(
+// =============================================================================
+// Cell-Cell Contact
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_niche_cell_cell_contact(
     scl_sparse_t spatial_neighbors,
     const scl_index_t* cell_type_labels,
-    scl_index_t n_cell_types,
-    scl_real_t* contact_matrix
-) {
-    if (!spatial_neighbors || !cell_type_labels || !contact_matrix) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_index_t n_cell_types,
+    scl_real_t* contact_matrix) {
+    
+    SCL_C_API_CHECK_NULL(spatial_neighbors, "Spatial neighbors matrix is null");
+    SCL_C_API_CHECK_NULL(cell_type_labels, "Cell type labels array is null");
+    SCL_C_API_CHECK_NULL(contact_matrix, "Contact matrix array is null");
+    SCL_C_API_CHECK(n_cell_types > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of cell types must be positive");
 
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(spatial_neighbors);
-        scl::Size n_pairs = static_cast<scl::Size>(n_cell_types) * n_cell_types;
-        scl::Array<const scl::Index> labels(cell_type_labels, static_cast<scl::Size>(sparse->rows()));
-        scl::Array<scl::Real> matrix(reinterpret_cast<scl::Real*>(contact_matrix), n_pairs);
+    SCL_C_API_TRY
+        const Size n_pairs = static_cast<Size>(n_cell_types) * static_cast<Size>(n_cell_types);
+        Array<const Index> labels(cell_type_labels, static_cast<Size>(spatial_neighbors->rows()));
+        Array<Real> contact(reinterpret_cast<Real*>(contact_matrix), n_pairs);
 
-        sparse->visit([&](auto& m) {
-            scl::kernel::niche::cell_cell_contact(m, labels, n_cell_types, matrix);
+        spatial_neighbors->visit([&](auto& m) {
+            scl::kernel::niche::cell_cell_contact(m, labels, n_cell_types, contact);
         });
 
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
-}
-
-scl_error_t scl_niche_colocalization_score(
-    scl_sparse_t spatial_neighbors,
-    const scl_index_t* cell_type_labels,
-    scl_index_t n_cell_types,
-    scl_index_t type_a,
-    scl_index_t type_b,
-    scl_real_t* colocalization,
-    scl_real_t* p_value,
-    scl_index_t n_permutations
-) {
-    if (!spatial_neighbors || !cell_type_labels || !colocalization || !p_value) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(spatial_neighbors);
-        scl::Array<const scl::Index> labels(cell_type_labels, static_cast<scl::Size>(sparse->rows()));
-        scl::Real coloc, pval;
-
-        sparse->visit([&](auto& m) {
-            scl::kernel::niche::colocalization_score(
-                m, labels, n_cell_types, type_a, type_b, coloc, pval, n_permutations
-            );
-        });
-
-        *colocalization = static_cast<scl_real_t>(coloc);
-        *p_value = static_cast<scl_real_t>(pval);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
-}
-
-scl_error_t scl_niche_colocalization_matrix(
-    scl_sparse_t spatial_neighbors,
-    const scl_index_t* cell_type_labels,
-    scl_index_t n_cell_types,
-    scl_real_t* coloc_matrix
-) {
-    if (!spatial_neighbors || !cell_type_labels || !coloc_matrix) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(spatial_neighbors);
-        scl::Size n_pairs = static_cast<scl::Size>(n_cell_types) * n_cell_types;
-        scl::Array<const scl::Index> labels(cell_type_labels, static_cast<scl::Size>(sparse->rows()));
-        scl::Array<scl::Real> matrix(reinterpret_cast<scl::Real*>(coloc_matrix), n_pairs);
-
-        sparse->visit([&](auto& m) {
-            scl::kernel::niche::colocalization_matrix(m, labels, n_cell_types, matrix);
-        });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
-}
-
-scl_error_t scl_niche_similarity(
-    scl_sparse_t spatial_neighbors,
-    const scl_index_t* cell_type_labels,
-    scl_index_t n_cell_types,
-    const scl_index_t* query_cells,
-    scl_size_t n_query,
-    scl_real_t* similarity_output
-) {
-    if (!spatial_neighbors || !cell_type_labels || !query_cells || !similarity_output) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(spatial_neighbors);
-        scl::Array<const scl::Index> labels(cell_type_labels, static_cast<scl::Size>(sparse->rows()));
-        scl::Array<scl::Real> output(reinterpret_cast<scl::Real*>(similarity_output),
-                                    static_cast<scl::Size>(n_query) * n_query);
-
-        sparse->visit([&](auto& m) {
-            scl::kernel::niche::niche_similarity(
-                m, labels, n_cell_types, query_cells, n_query, output
-            );
-        });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
-}
-
-scl_error_t scl_niche_diversity(
-    scl_sparse_t spatial_neighbors,
-    const scl_index_t* cell_type_labels,
-    scl_index_t n_cell_types,
-    scl_real_t* diversity_output
-) {
-    if (!spatial_neighbors || !cell_type_labels || !diversity_output) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(spatial_neighbors);
-        scl::Index n_cells = sparse->rows();
-        scl::Array<const scl::Index> labels(cell_type_labels, static_cast<scl::Size>(n_cells));
-        scl::Array<scl::Real> output(reinterpret_cast<scl::Real*>(diversity_output),
-                                    static_cast<scl::Size>(n_cells));
-
-        sparse->visit([&](auto& m) {
-            scl::kernel::niche::niche_diversity(m, labels, n_cell_types, output);
-        });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
-}
-
-scl_error_t scl_niche_boundary_score(
-    scl_sparse_t spatial_neighbors,
-    const scl_index_t* cell_type_labels,
-    scl_index_t n_cell_types,
-    scl_real_t* boundary_scores
-) {
-    if (!spatial_neighbors || !cell_type_labels || !boundary_scores) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(spatial_neighbors);
-        scl::Index n_cells = sparse->rows();
-        scl::Array<const scl::Index> labels(cell_type_labels, static_cast<scl::Size>(n_cells));
-        scl::Array<scl::Real> scores(reinterpret_cast<scl::Real*>(boundary_scores),
-                                     static_cast<scl::Size>(n_cells));
-
-        sparse->visit([&](auto& m) {
-            scl::kernel::niche::niche_boundary_score(m, labels, n_cell_types, scores);
-        });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"

@@ -6,7 +6,7 @@
 // =============================================================================
 
 #include "scl/binding/c_api/core/core.h"
-#include <stdint.h>
+#include <cstdint>
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,6 +25,7 @@ scl_error_t scl_propagation_label_propagation(
 scl_error_t scl_propagation_label_spreading(
     scl_sparse_t adjacency,
     scl_real_t* label_probs,          // [n * n_classes] input/output
+    const unsigned char* is_labeled,  // [n] boolean mask: 1=labeled, 0=unlabeled
     scl_index_t n,
     scl_index_t n_classes,
     scl_real_t alpha,
@@ -35,20 +36,22 @@ scl_error_t scl_propagation_label_spreading(
 // Harmonic function (semi-supervised learning)
 scl_error_t scl_propagation_harmonic_function(
     scl_sparse_t adjacency,
-    scl_real_t* label_probs,          // [n * n_classes] input/output
+    scl_real_t* values,               // [n] input/output
+    const unsigned char* is_known,    // [n] boolean mask: 1=known, 0=unknown
     scl_index_t n,
-    scl_index_t n_classes,
-    scl_real_t alpha
+    scl_index_t max_iter,
+    scl_real_t tolerance
 );
 
 // Confidence propagation
 scl_error_t scl_propagation_confidence(
     scl_sparse_t adjacency,
-    scl_real_t* confidences,          // [n] output
+    scl_index_t* labels,              // [n] input/output: initial labels
+    scl_real_t* confidences,          // [n] output: confidence scores
     scl_index_t n,
+    scl_index_t n_classes,
     scl_real_t alpha,
-    scl_index_t max_iter,
-    scl_real_t tolerance
+    scl_index_t max_iter
 );
 
 #ifdef __cplusplus

@@ -43,7 +43,7 @@ scl_error_t scl_projection_project(
             total_size
         );
         
-        scl::kernel::projection::ProjectionType proj_type;
+        scl::kernel::projection::ProjectionType proj_type{};
         switch (type) {
             case SCL_PROJECTION_GAUSSIAN:
                 proj_type = scl::kernel::projection::ProjectionType::Gaussian;

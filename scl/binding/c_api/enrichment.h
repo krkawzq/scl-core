@@ -50,7 +50,6 @@ scl_error_t scl_enrichment_gsea(
     scl_index_t n_genes,
     scl_real_t* enrichment_score_out,
     scl_real_t* p_value_out,
-    scl_real_t* nes_out,              // Normalized enrichment score
     scl_index_t n_permutations,       // 0 = use default 1000
     uint64_t seed
 );

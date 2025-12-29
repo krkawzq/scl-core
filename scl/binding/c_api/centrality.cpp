@@ -1,6 +1,6 @@
 // =============================================================================
-// FILE: scl/binding/c_api/centrality/centrality.cpp
-// BRIEF: C API implementation for centrality measures
+// FILE: scl/binding/c_api/centrality.cpp
+// BRIEF: C API implementation for graph centrality measures
 // =============================================================================
 
 #include "scl/binding/c_api/centrality.h"
@@ -9,304 +9,405 @@
 #include "scl/core/type.hpp"
 #include "scl/core/error.hpp"
 
-#include <exception>
-
 using namespace scl;
 using namespace scl::binding;
-using namespace scl::kernel::centrality;
 
 extern "C" {
 
-scl_error_t scl_degree_centrality(
+// =============================================================================
+// Degree Centrality
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_centrality_degree(
     scl_sparse_t adjacency,
     scl_real_t* centrality,
-    int normalize)
-{
-    if (!adjacency || !centrality) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_bool_t normalize) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> cent_arr(reinterpret_cast<Real*>(centrality), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            degree_centrality(m, cent_arr, normalize != 0);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(centrality, "Output centrality array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> cent_arr(
+                reinterpret_cast<Real*>(centrality),
+                n_nodes
+            );
+            scl::kernel::centrality::degree_centrality(
+                m, cent_arr, normalize != SCL_FALSE
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_weighted_degree_centrality(
+SCL_EXPORT scl_error_t scl_centrality_weighted_degree(
     scl_sparse_t adjacency,
     scl_real_t* centrality,
-    int normalize)
-{
-    if (!adjacency || !centrality) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_bool_t normalize) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> cent_arr(reinterpret_cast<Real*>(centrality), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            weighted_degree_centrality(m, cent_arr, normalize != 0);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(centrality, "Output centrality array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> cent_arr(
+                reinterpret_cast<Real*>(centrality),
+                n_nodes
+            );
+            scl::kernel::centrality::weighted_degree_centrality(
+                m, cent_arr, normalize != SCL_FALSE
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_pagerank(
+// =============================================================================
+// PageRank
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_centrality_pagerank(
     scl_sparse_t adjacency,
     scl_real_t* scores,
-    scl_real_t damping,
-    scl_index_t max_iter,
-    scl_real_t tolerance)
-{
-    if (!adjacency || !scores) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_real_t damping,
+    const scl_index_t max_iter,
+    const scl_real_t tolerance) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> scores_arr(reinterpret_cast<Real*>(scores), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            pagerank(m, scores_arr, damping, max_iter, tolerance);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(scores, "Output scores array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    SCL_C_API_CHECK(damping >= 0 && damping <= 1, SCL_ERROR_INVALID_ARGUMENT,
+                   "Damping factor must be in [0, 1]");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> scores_arr(
+                reinterpret_cast<Real*>(scores),
+                n_nodes
+            );
+            scl::kernel::centrality::pagerank(
+                m, scores_arr,
+                static_cast<Real>(damping),
+                max_iter,
+                static_cast<Real>(tolerance)
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_personalized_pagerank(
+SCL_EXPORT scl_error_t scl_centrality_personalized_pagerank(
     scl_sparse_t adjacency,
     const scl_index_t* seed_nodes,
-    scl_size_t n_seeds,
+    const scl_size_t n_seeds,
     scl_real_t* scores,
-    scl_real_t damping,
-    scl_index_t max_iter,
-    scl_real_t tolerance)
-{
-    if (!adjacency || !seed_nodes || !scores) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_real_t damping,
+    const scl_index_t max_iter,
+    const scl_real_t tolerance) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<const Index> seeds_arr(reinterpret_cast<const Index*>(seed_nodes), n_seeds);
-        Array<Real> scores_arr(reinterpret_cast<Real*>(scores), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            personalized_pagerank(m, seeds_arr, scores_arr, damping, max_iter, tolerance);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(seed_nodes, "Seed nodes array is null");
+    SCL_C_API_CHECK_NULL(scores, "Output scores array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    SCL_C_API_CHECK(n_seeds > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of seed nodes must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            const Array<const Index> seeds_arr(
+                reinterpret_cast<const Index*>(seed_nodes),
+                n_seeds
+            );
+            Array<Real> scores_arr(
+                reinterpret_cast<Real*>(scores),
+                n_nodes
+            );
+            scl::kernel::centrality::personalized_pagerank(
+                m, seeds_arr, scores_arr,
+                static_cast<Real>(damping),
+                max_iter,
+                static_cast<Real>(tolerance)
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_hits(
+// =============================================================================
+// HITS Algorithm
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_centrality_hits(
     scl_sparse_t adjacency,
     scl_real_t* hub_scores,
     scl_real_t* authority_scores,
-    scl_index_t max_iter,
-    scl_real_t tolerance)
-{
-    if (!adjacency || !hub_scores || !authority_scores) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_index_t max_iter,
+    const scl_real_t tolerance) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> hub_arr(reinterpret_cast<Real*>(hub_scores), static_cast<Size>(n));
-        Array<Real> auth_arr(reinterpret_cast<Real*>(authority_scores), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            hits(m, hub_arr, auth_arr, max_iter, tolerance);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(hub_scores, "Output hub scores array is null");
+    SCL_C_API_CHECK_NULL(authority_scores, "Output authority scores array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> hub_arr(
+                reinterpret_cast<Real*>(hub_scores),
+                n_nodes
+            );
+            Array<Real> auth_arr(
+                reinterpret_cast<Real*>(authority_scores),
+                n_nodes
+            );
+            scl::kernel::centrality::hits(
+                m, hub_arr, auth_arr,
+                max_iter,
+                static_cast<Real>(tolerance)
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_eigenvector_centrality(
+// =============================================================================
+// Eigenvector Centrality
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_centrality_eigenvector(
     scl_sparse_t adjacency,
     scl_real_t* centrality,
-    scl_index_t max_iter,
-    scl_real_t tolerance)
-{
-    if (!adjacency || !centrality) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_index_t max_iter,
+    const scl_real_t tolerance) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> cent_arr(reinterpret_cast<Real*>(centrality), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            eigenvector_centrality(m, cent_arr, max_iter, tolerance);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(centrality, "Output centrality array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> cent_arr(
+                reinterpret_cast<Real*>(centrality),
+                n_nodes
+            );
+            scl::kernel::centrality::eigenvector_centrality(
+                m, cent_arr, max_iter, static_cast<Real>(tolerance)
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_katz_centrality(
+// =============================================================================
+// Katz Centrality
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_centrality_katz(
     scl_sparse_t adjacency,
     scl_real_t* centrality,
-    scl_real_t alpha,
-    scl_real_t beta,
-    scl_index_t max_iter,
-    scl_real_t tolerance)
-{
-    if (!adjacency || !centrality) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_real_t alpha,
+    const scl_real_t beta,
+    const scl_index_t max_iter,
+    const scl_real_t tolerance) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> cent_arr(reinterpret_cast<Real*>(centrality), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            katz_centrality(m, cent_arr, alpha, beta, max_iter, tolerance);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(centrality, "Output centrality array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> cent_arr(
+                reinterpret_cast<Real*>(centrality),
+                n_nodes
+            );
+            scl::kernel::centrality::katz_centrality(
+                m, cent_arr,
+                static_cast<Real>(alpha),
+                static_cast<Real>(beta),
+                max_iter,
+                static_cast<Real>(tolerance)
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_closeness_centrality(
+// =============================================================================
+// Closeness Centrality
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_centrality_closeness(
     scl_sparse_t adjacency,
     scl_real_t* centrality,
-    int normalize)
-{
-    if (!adjacency || !centrality) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_bool_t normalize) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> cent_arr(reinterpret_cast<Real*>(centrality), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            closeness_centrality(m, cent_arr, normalize != 0);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(centrality, "Output centrality array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> cent_arr(
+                reinterpret_cast<Real*>(centrality),
+                n_nodes
+            );
+            scl::kernel::centrality::closeness_centrality(
+                m, cent_arr, normalize != SCL_FALSE
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_betweenness_centrality(
+// =============================================================================
+// Betweenness Centrality
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_centrality_betweenness(
     scl_sparse_t adjacency,
     scl_real_t* centrality,
-    int normalize)
-{
-    if (!adjacency || !centrality) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_bool_t normalize) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> cent_arr(reinterpret_cast<Real*>(centrality), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            betweenness_centrality(m, cent_arr, normalize != 0);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(centrality, "Output centrality array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> cent_arr(
+                reinterpret_cast<Real*>(centrality),
+                n_nodes
+            );
+            scl::kernel::centrality::betweenness_centrality(
+                m, cent_arr, normalize != SCL_FALSE
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_betweenness_centrality_sampled(
+SCL_EXPORT scl_error_t scl_centrality_betweenness_sampled(
     scl_sparse_t adjacency,
     scl_real_t* centrality,
-    scl_index_t n_samples,
-    int normalize,
-    uint64_t seed)
-{
-    if (!adjacency || !centrality) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_index_t n_samples,
+    const scl_bool_t normalize,
+    const uint64_t seed) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> cent_arr(reinterpret_cast<Real*>(centrality), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            betweenness_centrality_sampled(m, cent_arr, n_samples, normalize != 0, seed);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(centrality, "Output centrality array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    SCL_C_API_CHECK(n_samples > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of samples must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> cent_arr(
+                reinterpret_cast<Real*>(centrality),
+                n_nodes
+            );
+            scl::kernel::centrality::betweenness_centrality_sampled(
+                m, cent_arr, n_samples, normalize != SCL_FALSE, seed
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_harmonic_centrality(
+// =============================================================================
+// Harmonic Centrality
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_centrality_harmonic(
     scl_sparse_t adjacency,
     scl_real_t* centrality,
-    int normalize)
-{
-    if (!adjacency || !centrality) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_bool_t normalize) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(adjacency);
-        const Index n = wrapper->rows();
-        Array<Real> cent_arr(reinterpret_cast<Real*>(centrality), static_cast<Size>(n));
-        
-        wrapper->visit([&](auto& m) {
-            harmonic_centrality(m, cent_arr, normalize != 0);
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(centrality, "Output centrality array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> cent_arr(
+                reinterpret_cast<Real*>(centrality),
+                n_nodes
+            );
+            scl::kernel::centrality::harmonic_centrality(
+                m, cent_arr, normalize != SCL_FALSE
+            );
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
+}
+
+// =============================================================================
+// Current Flow Betweenness (Approximate)
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_centrality_current_flow_approx(
+    scl_sparse_t adjacency,
+    scl_real_t* centrality,
+    const scl_size_t n_nodes,
+    const scl_index_t n_walks,
+    const scl_index_t walk_length,
+    const uint64_t seed) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(centrality, "Output centrality array is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
+    SCL_C_API_CHECK(n_walks > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of walks must be positive");
+    SCL_C_API_CHECK(walk_length > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Walk length must be positive");
+    
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& m) {
+            Array<Real> cent_arr(
+                reinterpret_cast<Real*>(centrality),
+                n_nodes
+            );
+            scl::kernel::centrality::current_flow_betweenness_approx(
+                m, cent_arr, n_walks, walk_length, seed
+            );
+        });
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"
-

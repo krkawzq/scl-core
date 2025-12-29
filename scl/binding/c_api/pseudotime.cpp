@@ -41,7 +41,7 @@ scl_error_t scl_pseudotime_compute(
             static_cast<Size>(n)
         );
         
-        scl::kernel::pseudotime::PseudotimeMethod method_enum;
+        scl::kernel::pseudotime::PseudotimeMethod method_enum{};
         switch (method) {
             case SCL_PSEUDOTIME_DIFFUSION:
                 method_enum = scl::kernel::pseudotime::PseudotimeMethod::DiffusionPseudotime;
@@ -167,8 +167,7 @@ scl_error_t scl_pseudotime_multi_source(
     scl_sparse_t adjacency,
     const scl_index_t* source_cells,
     scl_index_t n_sources,
-    scl_real_t* distances,
-    scl_index_t n)
+    scl_real_t* distances)
 {
     if (!adjacency || !source_cells || !distances) {
         set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
@@ -190,18 +189,12 @@ scl_error_t scl_pseudotime_multi_source(
             reinterpret_cast<const Index*>(source_cells),
             static_cast<Size>(n_sources)
         );
-        Array<Real> distances_arr(
-            reinterpret_cast<Real*>(distances),
-            static_cast<Size>(n)
-        );
         
         adjacency->visit([&](auto& adj) {
             scl::kernel::pseudotime::dijkstra_multi_source(
                 adj,
                 source_cells_arr,
-                n_sources,
-                distances_arr,
-                n
+                reinterpret_cast<Real*>(distances)  // Kernel expects Real*, not Array
             );
         });
         

@@ -21,15 +21,27 @@ scl_error_t scl_outlier_isolation_score(
 );
 
 // =============================================================================
-// Local Outlier Factor (LOF)
+// Local Outlier Factor (LOF) - NOT YET IMPLEMENTED
 // =============================================================================
-
-scl_error_t scl_outlier_local_outlier_factor(
-    scl_sparse_t data,
-    scl_sparse_t neighbors,               // Neighbor graph
-    scl_sparse_t distances,                // Distance matrix
-    scl_real_t* lof_scores                 // Output [n_cells]
-);
+//
+// TODO: Implement LOF support
+// REASON: Kernel LOF requires Sparse<Index, IsCSR> for neighbors and 
+//         Sparse<Real, IsCSR> for distances, but current C API only supports
+//         generic Sparse<Real, IsCSR> matrices.
+//
+// OPTIONS TO IMPLEMENT:
+//   1. Add type-specific sparse matrix types to C API (scl_sparse_index_t, etc.)
+//   2. Modify kernel LOF to accept generic Sparse<T, IsCSR>
+//   3. Add conversion layer in C API (performance overhead)
+//
+// Currently commented out to prevent API misuse:
+//
+// scl_error_t scl_outlier_local_outlier_factor(
+//     scl_sparse_t data,
+//     scl_sparse_t neighbors,               // Would need: Sparse<Index>
+//     scl_sparse_t distances,               // Would need: Sparse<Real>
+//     scl_real_t* lof_scores
+// );
 
 // =============================================================================
 // Ambient RNA Detection

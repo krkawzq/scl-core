@@ -12,24 +12,22 @@ using namespace scl::binding;
 
 extern "C" {
 
-scl_error_t scl_hvg_compute_moments(
+// =============================================================================
+// Moments Computation
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_hvg_compute_moments(
     scl_sparse_t matrix,
     scl_real_t* out_means,
     scl_real_t* out_vars,
-    int ddof)
-{
-    if (!matrix || !out_means || !out_vars) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const int ddof) {
     
-    try {
-        if (!matrix->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
-        Index primary_dim = matrix->is_csr ? matrix->rows() : matrix->cols();
+    SCL_C_API_CHECK_NULL(matrix, "Matrix is null");
+    SCL_C_API_CHECK_NULL(out_means, "Output means array is null");
+    SCL_C_API_CHECK_NULL(out_vars, "Output variances array is null");
+    
+    SCL_C_API_TRY
+        const Index primary_dim = matrix->is_csr ? matrix->rows() : matrix->cols();
         
         Array<Real> out_means_arr(
             reinterpret_cast<Real*>(out_means),
@@ -42,38 +40,27 @@ scl_error_t scl_hvg_compute_moments(
         
         matrix->visit([&](auto& m) {
             scl::kernel::hvg::detail::compute_moments(
-                m,
-                out_means_arr,
-                out_vars_arr,
-                ddof
+                m, out_means_arr, out_vars_arr, ddof
             );
         });
         
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_hvg_compute_clipped_moments(
+SCL_EXPORT scl_error_t scl_hvg_compute_clipped_moments(
     scl_sparse_t matrix,
     const scl_real_t* clip_vals,
     scl_real_t* out_means,
-    scl_real_t* out_vars)
-{
-    if (!matrix || !clip_vals || !out_means || !out_vars) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    scl_real_t* out_vars) {
     
-    try {
-        if (!matrix->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
-        Index primary_dim = matrix->is_csr ? matrix->rows() : matrix->cols();
+    SCL_C_API_CHECK_NULL(matrix, "Matrix is null");
+    SCL_C_API_CHECK_NULL(clip_vals, "Clip values array is null");
+    SCL_C_API_CHECK_NULL(out_means, "Output means array is null");
+    SCL_C_API_CHECK_NULL(out_vars, "Output variances array is null");
+    
+    SCL_C_API_TRY
+        const Index primary_dim = matrix->is_csr ? matrix->rows() : matrix->cols();
         
         Array<const Real> clip_vals_arr(
             reinterpret_cast<const Real*>(clip_vals),
@@ -90,145 +77,94 @@ scl_error_t scl_hvg_compute_clipped_moments(
         
         matrix->visit([&](auto& m) {
             scl::kernel::hvg::detail::compute_clipped_moments(
-                m,
-                clip_vals_arr,
-                out_means_arr,
-                out_vars_arr
+                m, clip_vals_arr, out_means_arr, out_vars_arr
             );
         });
         
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_hvg_select_by_dispersion(
+// =============================================================================
+// HVG Selection by Dispersion
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_hvg_select_by_dispersion(
     scl_sparse_t matrix,
-    scl_size_t n_top,
+    const scl_size_t n_top,
     scl_index_t* out_indices,
     uint8_t* out_mask,
-    scl_real_t* out_dispersions)
-{
-    if (!matrix || !out_indices || !out_mask || !out_dispersions) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    scl_real_t* out_dispersions) {
     
-    if (n_top == 0) {
-        set_last_error(SCL_ERROR_INVALID_ARGUMENT, "n_top must be > 0");
-        return SCL_ERROR_INVALID_ARGUMENT;
-    }
+    SCL_C_API_CHECK_NULL(matrix, "Matrix is null");
+    SCL_C_API_CHECK_NULL(out_indices, "Output indices array is null");
+    SCL_C_API_CHECK_NULL(out_mask, "Output mask array is null");
+    SCL_C_API_CHECK_NULL(out_dispersions, "Output dispersions array is null");
+    SCL_C_API_CHECK(n_top > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of top genes must be positive");
     
-    try {
-        if (!matrix->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    SCL_C_API_TRY
+        const Index primary_dim = matrix->is_csr ? matrix->rows() : matrix->cols();
         
-        Index primary_dim = matrix->is_csr ? matrix->rows() : matrix->cols();
-        
-        if (static_cast<scl_size_t>(primary_dim) < n_top) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "n_top exceeds primary dimension");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
-        Array<Index> out_indices_arr(
-            reinterpret_cast<Index*>(out_indices),
-            static_cast<Size>(n_top)
-        );
-        Array<uint8_t> out_mask_arr(
-            out_mask,
-            static_cast<Size>(primary_dim)
-        );
-        Array<Real> out_dispersions_arr(
+        Array<Index> indices_arr(out_indices, n_top);
+        Array<uint8_t> mask_arr(out_mask, static_cast<Size>(primary_dim));
+        Array<Real> disps_arr(
             reinterpret_cast<Real*>(out_dispersions),
             static_cast<Size>(primary_dim)
         );
         
         matrix->visit([&](auto& m) {
             scl::kernel::hvg::select_by_dispersion(
-                m,
-                static_cast<Size>(n_top),
-                out_indices_arr,
-                out_mask_arr,
-                out_dispersions_arr
+                m, n_top, indices_arr, mask_arr, disps_arr
             );
         });
         
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_hvg_select_by_vst(
+// =============================================================================
+// HVG Selection by VST
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_hvg_select_by_vst(
     scl_sparse_t matrix,
     const scl_real_t* clip_vals,
-    scl_size_t n_top,
+    const scl_size_t n_top,
     scl_index_t* out_indices,
     uint8_t* out_mask,
-    scl_real_t* out_variances)
-{
-    if (!matrix || !clip_vals || !out_indices || !out_mask || !out_variances) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    scl_real_t* out_variances) {
     
-    if (n_top == 0) {
-        set_last_error(SCL_ERROR_INVALID_ARGUMENT, "n_top must be > 0");
-        return SCL_ERROR_INVALID_ARGUMENT;
-    }
+    SCL_C_API_CHECK_NULL(matrix, "Matrix is null");
+    SCL_C_API_CHECK_NULL(clip_vals, "Clip values array is null");
+    SCL_C_API_CHECK_NULL(out_indices, "Output indices array is null");
+    SCL_C_API_CHECK_NULL(out_mask, "Output mask array is null");
+    SCL_C_API_CHECK_NULL(out_variances, "Output variances array is null");
+    SCL_C_API_CHECK(n_top > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of top genes must be positive");
     
-    try {
-        if (!matrix->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
-        Index primary_dim = matrix->is_csr ? matrix->rows() : matrix->cols();
-        
-        if (static_cast<scl_size_t>(primary_dim) < n_top) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "n_top exceeds primary dimension");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
+    SCL_C_API_TRY
+        const Index primary_dim = matrix->is_csr ? matrix->rows() : matrix->cols();
         
         Array<const Real> clip_vals_arr(
             reinterpret_cast<const Real*>(clip_vals),
             static_cast<Size>(primary_dim)
         );
-        Array<Index> out_indices_arr(
-            reinterpret_cast<Index*>(out_indices),
-            static_cast<Size>(n_top)
-        );
-        Array<uint8_t> out_mask_arr(
-            out_mask,
-            static_cast<Size>(primary_dim)
-        );
-        Array<Real> out_variances_arr(
+        Array<Index> indices_arr(out_indices, n_top);
+        Array<uint8_t> mask_arr(out_mask, static_cast<Size>(primary_dim));
+        Array<Real> vars_arr(
             reinterpret_cast<Real*>(out_variances),
             static_cast<Size>(primary_dim)
         );
         
         matrix->visit([&](auto& m) {
             scl::kernel::hvg::select_by_vst(
-                m,
-                clip_vals_arr,
-                static_cast<Size>(n_top),
-                out_indices_arr,
-                out_mask_arr,
-                out_variances_arr
+                m, clip_vals_arr, n_top, indices_arr, mask_arr, vars_arr
             );
         });
         
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"
-

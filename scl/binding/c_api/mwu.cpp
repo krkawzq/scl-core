@@ -1,5 +1,5 @@
 // =============================================================================
-// FILE: scl/binding/c_api/mwu/mwu.cpp
+// FILE: scl/binding/c_api/mwu.cpp
 // BRIEF: C API implementation for Mann-Whitney U Test
 // =============================================================================
 
@@ -7,58 +7,57 @@
 #include "scl/binding/c_api/core/internal.hpp"
 #include "scl/kernel/mwu.hpp"
 #include "scl/core/type.hpp"
-#include "scl/core/error.hpp"
-
-#include <exception>
 
 using namespace scl;
 using namespace scl::binding;
-using namespace scl::kernel::mwu;
 
 extern "C" {
 
-scl_error_t scl_mwu_test(
+// =============================================================================
+// Mann-Whitney U Test
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_mwu_test(
     scl_sparse_t matrix,
     const int32_t* group_ids,
-    scl_size_t n_samples,
+    const scl_size_t n_samples,
     scl_real_t* out_u_stats,
     scl_real_t* out_p_values,
     scl_real_t* out_log2_fc,
-    scl_real_t* out_auroc)
-{
-    if (!matrix || !group_ids || !out_u_stats || !out_p_values || !out_log2_fc) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    scl_real_t* out_auroc) {
     
-    try {
-        auto* wrapper = static_cast<scl_sparse_matrix*>(matrix);
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle is null");
+    SCL_C_API_CHECK_NULL(group_ids, "Group IDs pointer is null");
+    SCL_C_API_CHECK_NULL(out_u_stats, "Output U statistics pointer is null");
+    SCL_C_API_CHECK_NULL(out_p_values, "Output p-values pointer is null");
+    SCL_C_API_CHECK_NULL(out_log2_fc, "Output log2 fold change pointer is null");
+    SCL_C_API_CHECK(n_samples > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of samples must be positive");
+
+    SCL_C_API_TRY
+        const Index n_features = matrix->rows();
+        const Size n_samples_sz = static_cast<Size>(n_samples);
+        const Size n_features_sz = static_cast<Size>(n_features);
+
+        // Wrap C arrays with Array views
+        Array<const int32_t> groups_arr(group_ids, n_samples_sz);
+        Array<Real> u_arr(reinterpret_cast<Real*>(out_u_stats), n_features_sz);
+        Array<Real> p_arr(reinterpret_cast<Real*>(out_p_values), n_features_sz);
+        Array<Real> fc_arr(reinterpret_cast<Real*>(out_log2_fc), n_features_sz);
         
-        if (!wrapper->valid()) {
-            set_last_error(SCL_ERROR_INVALID_ARGUMENT, "Invalid sparse matrix");
-            return SCL_ERROR_INVALID_ARGUMENT;
-        }
-        
-        const Index n_features = wrapper->rows();
-        Array<const int32_t> groups_arr(group_ids, n_samples);
-        Array<Real> u_arr(reinterpret_cast<Real*>(out_u_stats), static_cast<Size>(n_features));
-        Array<Real> p_arr(reinterpret_cast<Real*>(out_p_values), static_cast<Size>(n_features));
-        Array<Real> fc_arr(reinterpret_cast<Real*>(out_log2_fc), static_cast<Size>(n_features));
-        
+        // Optional AUROC output
         Array<Real> auroc_arr;
-        if (out_auroc) {
-            auroc_arr = Array<Real>(reinterpret_cast<Real*>(out_auroc), static_cast<Size>(n_features));
+        if (out_auroc != nullptr) {
+            auroc_arr = Array<Real>(reinterpret_cast<Real*>(out_auroc), n_features_sz);
         }
         
-        wrapper->visit([&](auto& m) {
-            mwu_test(m, groups_arr, u_arr, p_arr, fc_arr, auroc_arr);
+        // Dispatch to kernel implementation
+        matrix->visit([&](auto& m) {
+            scl::kernel::mwu::mwu_test(m, groups_arr, u_arr, p_arr, fc_arr, auroc_arr);
         });
         
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"
-

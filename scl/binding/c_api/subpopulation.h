@@ -55,11 +55,9 @@ scl_error_t scl_subpopulation_cluster_purity(
 // Rare Cell Detection
 // =============================================================================
 
-scl_error_t scl_subpopulation_rare_cell_detection(
-    scl_sparse_t expression,
-    scl_sparse_t neighbors,
-    scl_real_t* rarity_scores          // Output [n_cells]
-);
+// Rare cell detection - NOT YET IMPLEMENTED
+// TODO: Requires Sparse<Index> type support for neighbors
+// scl_error_t scl_subpopulation_rare_cell_detection(...);
 
 #ifdef __cplusplus
 }

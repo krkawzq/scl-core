@@ -9,11 +9,8 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/type.hpp"
 
-#include <span>
-
 using namespace scl;
 using namespace scl::binding;
-using namespace scl::kernel::feature;
 
 extern "C" {
 
@@ -21,27 +18,24 @@ extern "C" {
 // Standard Moments
 // =============================================================================
 
-scl_error_t scl_feature_standard_moments(
+SCL_EXPORT scl_error_t scl_feature_standard_moments(
     scl_sparse_t matrix,
     scl_real_t* out_means,
     scl_real_t* out_vars,
-    scl_size_t n_features,
-    int ddof)
-{
-    if (!matrix || !out_means || !out_vars) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
+    const scl_size_t n_features,
+    const int ddof) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix is null");
+    SCL_C_API_CHECK_NULL(out_means, "Output means array is null");
+    SCL_C_API_CHECK_NULL(out_vars, "Output variances array is null");
+    SCL_C_API_CHECK(n_features > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of features must be positive");
+    
+    SCL_C_API_TRY
+        const Index primary_dim = matrix->rows();
+        SCL_C_API_CHECK(static_cast<scl_size_t>(primary_dim) == n_features,
+                       SCL_ERROR_DIMENSION_MISMATCH, "Feature count mismatch");
         
-        Index primary_dim = wrapper->rows();
-        if (static_cast<scl_size_t>(primary_dim) != n_features) {
-            set_last_error(SCL_ERROR_DIMENSION_MISMATCH, "Feature count mismatch");
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        }
-
         Array<Real> means_arr(
             reinterpret_cast<Real*>(out_means),
             n_features
@@ -50,43 +44,38 @@ scl_error_t scl_feature_standard_moments(
             reinterpret_cast<Real*>(out_vars),
             n_features
         );
-
-        wrapper->visit([&](auto& m) {
-            standard_moments(m, means_arr, vars_arr, ddof);
+        
+        matrix->visit([&](auto& m) {
+            scl::kernel::feature::standard_moments(m, means_arr, vars_arr, ddof);
         });
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 // =============================================================================
 // Clipped Moments
 // =============================================================================
 
-scl_error_t scl_feature_clipped_moments(
+SCL_EXPORT scl_error_t scl_feature_clipped_moments(
     scl_sparse_t matrix,
     const scl_real_t* clip_vals,
     scl_real_t* out_means,
     scl_real_t* out_vars,
-    scl_size_t n_features)
-{
-    if (!matrix || !clip_vals || !out_means || !out_vars) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
+    const scl_size_t n_features) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix is null");
+    SCL_C_API_CHECK_NULL(clip_vals, "Clip values array is null");
+    SCL_C_API_CHECK_NULL(out_means, "Output means array is null");
+    SCL_C_API_CHECK_NULL(out_vars, "Output variances array is null");
+    SCL_C_API_CHECK(n_features > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of features must be positive");
+    
+    SCL_C_API_TRY
+        const Index primary_dim = matrix->rows();
+        SCL_C_API_CHECK(static_cast<scl_size_t>(primary_dim) == n_features,
+                       SCL_ERROR_DIMENSION_MISMATCH, "Feature count mismatch");
         
-        Index primary_dim = wrapper->rows();
-        if (static_cast<scl_size_t>(primary_dim) != n_features) {
-            set_last_error(SCL_ERROR_DIMENSION_MISMATCH, "Feature count mismatch");
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        }
-
         Array<const Real> clip_arr(
             reinterpret_cast<const Real*>(clip_vals),
             n_features
@@ -99,73 +88,64 @@ scl_error_t scl_feature_clipped_moments(
             reinterpret_cast<Real*>(out_vars),
             n_features
         );
-
-        wrapper->visit([&](auto& m) {
-            clipped_moments(m, clip_arr, means_arr, vars_arr);
+        
+        matrix->visit([&](auto& m) {
+            scl::kernel::feature::clipped_moments(m, clip_arr, means_arr, vars_arr);
         });
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 // =============================================================================
 // Detection Rate
 // =============================================================================
 
-scl_error_t scl_feature_detection_rate(
+SCL_EXPORT scl_error_t scl_feature_detection_rate(
     scl_sparse_t matrix,
     scl_real_t* out_rates,
-    scl_size_t n_features)
-{
-    if (!matrix || !out_rates) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(matrix);
+    const scl_size_t n_features) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix is null");
+    SCL_C_API_CHECK_NULL(out_rates, "Output rates array is null");
+    SCL_C_API_CHECK(n_features > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of features must be positive");
+    
+    SCL_C_API_TRY
+        const Index primary_dim = matrix->rows();
+        SCL_C_API_CHECK(static_cast<scl_size_t>(primary_dim) == n_features,
+                       SCL_ERROR_DIMENSION_MISMATCH, "Feature count mismatch");
         
-        Index primary_dim = wrapper->rows();
-        if (static_cast<scl_size_t>(primary_dim) != n_features) {
-            set_last_error(SCL_ERROR_DIMENSION_MISMATCH, "Feature count mismatch");
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        }
-
         Array<Real> rates_arr(
             reinterpret_cast<Real*>(out_rates),
             n_features
         );
-
-        wrapper->visit([&](auto& m) {
-            detection_rate(m, rates_arr);
+        
+        matrix->visit([&](auto& m) {
+            scl::kernel::feature::detection_rate(m, rates_arr);
         });
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 // =============================================================================
 // Dispersion
 // =============================================================================
 
-scl_error_t scl_feature_dispersion(
+SCL_EXPORT scl_error_t scl_feature_dispersion(
     const scl_real_t* means,
     const scl_real_t* vars,
     scl_real_t* out_dispersion,
-    scl_size_t n_features)
-{
-    if (!means || !vars || !out_dispersion) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
+    const scl_size_t n_features) {
+    
+    SCL_C_API_CHECK_NULL(means, "Means array is null");
+    SCL_C_API_CHECK_NULL(vars, "Variances array is null");
+    SCL_C_API_CHECK_NULL(out_dispersion, "Output dispersion array is null");
+    SCL_C_API_CHECK(n_features > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of features must be positive");
+    
+    SCL_C_API_TRY
         Array<const Real> means_arr(
             reinterpret_cast<const Real*>(means),
             n_features
@@ -178,15 +158,11 @@ scl_error_t scl_feature_dispersion(
             reinterpret_cast<Real*>(out_dispersion),
             n_features
         );
-
-        dispersion(means_arr, vars_arr, dispersion_arr);
-
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        
+        scl::kernel::feature::dispersion(means_arr, vars_arr, dispersion_arr);
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"
-

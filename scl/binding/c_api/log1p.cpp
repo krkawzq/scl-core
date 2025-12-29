@@ -1,78 +1,69 @@
 // =============================================================================
-// FILE: scl/binding/c_api/log1p/log1p.cpp
+// FILE: scl/binding/c_api/log1p.cpp
 // BRIEF: C API implementation for logarithmic transforms
 // =============================================================================
 
 #include "scl/binding/c_api/log1p.h"
 #include "scl/binding/c_api/core/internal.hpp"
 #include "scl/kernel/log1p.hpp"
-#include "scl/core/sparse.hpp"
 
 using namespace scl;
 using namespace scl::binding;
-using namespace scl::kernel::log1p;
 
 extern "C" {
 
-scl_error_t scl_log1p_inplace(scl_sparse_t* matrix)
-{
-    if (!matrix || !*matrix) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+// =============================================================================
+// Log1p In-Place
+// =============================================================================
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(*matrix);
-        wrapper->visit([&](auto& m) {
-            log1p_inplace(m);
+SCL_EXPORT scl_error_t scl_log1p_inplace(scl_sparse_t* matrix) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle pointer is null");
+    SCL_C_API_CHECK_NULL(*matrix, "Matrix handle is null");
+
+    SCL_C_API_TRY
+        (*matrix)->visit([&](auto& m) {
+            scl::kernel::log1p::log1p_inplace(m);
         });
 
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_log2p1_inplace(scl_sparse_t* matrix)
-{
-    if (!matrix || !*matrix) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+// =============================================================================
+// Log2p1 In-Place
+// =============================================================================
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(*matrix);
-        wrapper->visit([&](auto& m) {
-            log2p1_inplace(m);
+SCL_EXPORT scl_error_t scl_log2p1_inplace(scl_sparse_t* matrix) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle pointer is null");
+    SCL_C_API_CHECK_NULL(*matrix, "Matrix handle is null");
+
+    SCL_C_API_TRY
+        (*matrix)->visit([&](auto& m) {
+            scl::kernel::log1p::log2p1_inplace(m);
         });
 
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_expm1_inplace(scl_sparse_t* matrix)
-{
-    if (!matrix || !*matrix) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+// =============================================================================
+// Expm1 In-Place
+// =============================================================================
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(*matrix);
-        wrapper->visit([&](auto& m) {
-            expm1_inplace(m);
+SCL_EXPORT scl_error_t scl_expm1_inplace(scl_sparse_t* matrix) {
+    
+    SCL_C_API_CHECK_NULL(matrix, "Matrix handle pointer is null");
+    SCL_C_API_CHECK_NULL(*matrix, "Matrix handle is null");
+
+    SCL_C_API_TRY
+        (*matrix)->visit([&](auto& m) {
+            scl::kernel::log1p::expm1_inplace(m);
         });
 
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"
-

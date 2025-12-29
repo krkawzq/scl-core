@@ -25,17 +25,24 @@ scl_error_t scl_sampling_geometric_sketching(
 );
 
 // =============================================================================
-// Density-Preserving Sampling
+// Density-Preserving Sampling - NOT YET IMPLEMENTED
 // =============================================================================
-
-// Density-preserving downsampling using neighbor graph
-scl_error_t scl_sampling_density_preserving(
-    scl_sparse_t data,                  // Expression matrix (cells x genes, CSR)
-    scl_sparse_t neighbors,             // Neighbor graph (cells x cells, CSR)
-    scl_size_t target_size,
-    scl_index_t* selected_indices,
-    scl_size_t* n_selected
-);
+//
+// TODO: This function is declared for future support when the C API type
+// system can represent typed neighbor graphs. Currently, scl_sparse_t only
+// supports Sparse<Real, IsCSR>, but the kernel expects the neighbor graph
+// as Sparse<Index, IsCSR>. Implementation is pending type system extension.
+//
+// The target implementation signature is:
+//   scl_error_t scl_sampling_density_preserving(
+//       scl_sparse_t data,                  // Expression matrix (cells x genes, CSR)
+//       scl_sparse_t neighbors,             // Neighbor graph (cells x cells, CSR/Index type)
+//       scl_size_t target_size,
+//       scl_index_t* selected_indices,
+//       scl_size_t* n_selected
+//   );
+//
+// This function is currently a stub and not implemented.
 
 // =============================================================================
 // Landmark Selection

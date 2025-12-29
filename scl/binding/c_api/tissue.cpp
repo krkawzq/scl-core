@@ -7,7 +7,6 @@
 #include "scl/binding/c_api/core/internal.hpp"
 #include "scl/kernel/tissue.hpp"
 #include "scl/core/type.hpp"
-#include "scl/core/error.hpp"
 
 #include <exception>
 
@@ -133,7 +132,7 @@ scl_error_t scl_tissue_zonation_score(
     }
 
     try {
-        scl::binding::SparseWrapper* wrapper;
+        scl::binding::SparseWrapper* wrapper{};
         scl_error_t err = get_sparse_matrix(expression, wrapper);
         if (err != SCL_OK) return err;
 

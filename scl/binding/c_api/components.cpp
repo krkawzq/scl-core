@@ -8,474 +8,475 @@
 #include "scl/kernel/components.hpp"
 #include "scl/core/type.hpp"
 
+using namespace scl;
+using namespace scl::binding;
+
 extern "C" {
 
-scl_error_t scl_comp_connected_components(
+// =============================================================================
+// Connected Components
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_connected_components(
     scl_sparse_t adjacency,
     scl_index_t* component_labels,
-    scl_index_t* n_components
-) {
-    if (!adjacency || !component_labels || !n_components) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_comp = 0;
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> labels(component_labels, static_cast<scl::Size>(m.primary_dim()));
+    scl_index_t* n_components) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(component_labels, "Output component labels array is null");
+    SCL_C_API_CHECK_NULL(n_components, "Output n_components pointer is null");
+    
+    SCL_C_API_TRY
+        Index n_comp = 0;
+        
+        adjacency->visit([&](auto& m) {
+            Array<Index> labels(component_labels, static_cast<Size>(m.primary_dim()));
             scl::kernel::components::connected_components(m, labels, n_comp);
         });
-
+        
         *n_components = n_comp;
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_is_connected(
+// =============================================================================
+// Graph Connectivity
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_is_connected(
     scl_sparse_t adjacency,
-    int* is_connected
-) {
-    if (!adjacency || !is_connected) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
+    int* is_connected) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(is_connected, "Output is_connected pointer is null");
+    
+    SCL_C_API_TRY
         bool connected = false;
-
-        sparse->visit([&](auto& m) {
+        
+        adjacency->visit([&](auto& m) {
             connected = scl::kernel::components::is_connected(m);
         });
-
+        
         *is_connected = connected ? 1 : 0;
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_largest_component(
+SCL_EXPORT scl_error_t scl_comp_largest_component(
     scl_sparse_t adjacency,
     scl_index_t* node_mask,
-    scl_index_t* component_size
-) {
-    if (!adjacency || !node_mask || !component_size) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index size = 0;
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> mask(node_mask, static_cast<scl::Size>(m.primary_dim()));
+    scl_index_t* component_size) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(node_mask, "Output node mask array is null");
+    SCL_C_API_CHECK_NULL(component_size, "Output component size pointer is null");
+    
+    SCL_C_API_TRY
+        Index size = 0;
+        
+        adjacency->visit([&](auto& m) {
+            Array<Index> mask(node_mask, static_cast<Size>(m.primary_dim()));
             scl::kernel::components::largest_component(m, mask, size);
         });
-
+        
         *component_size = size;
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_component_sizes(
+SCL_EXPORT scl_error_t scl_comp_component_sizes(
     scl_sparse_t adjacency,
     scl_index_t* sizes,
-    scl_index_t* n_components
-) {
-    if (!adjacency || !sizes || !n_components) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_comp = 0;
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> sizes_arr(sizes, 0);
+    scl_index_t* n_components) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(sizes, "Output sizes array is null");
+    SCL_C_API_CHECK_NULL(n_components, "Output n_components pointer is null");
+    
+    SCL_C_API_TRY
+        Index n_comp = 0;
+        
+        adjacency->visit([&](auto& m) {
+            // Size determined internally by kernel
+            Array<Index> sizes_arr(sizes, 0);
             scl::kernel::components::component_sizes(m, sizes_arr, n_comp);
         });
-
+        
         *n_components = n_comp;
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_bfs(
+// =============================================================================
+// Breadth-First Search
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_bfs(
     scl_sparse_t adjacency,
-    scl_index_t source,
+    const scl_index_t source,
     scl_index_t* distances,
-    scl_index_t* predecessors
-) {
-    if (!adjacency || !distances) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_nodes = sparse->rows();
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> dist(distances, static_cast<scl::Size>(n_nodes));
-            scl::Array<scl::Index> pred;
+    scl_index_t* predecessors) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(distances, "Output distances array is null");
+    
+    SCL_C_API_TRY
+        const Index n_nodes = adjacency->rows();
+        
+        adjacency->visit([&](auto& m) {
+            Array<Index> dist(distances, static_cast<Size>(n_nodes));
+            Array<Index> pred;
             if (predecessors) {
-                pred = scl::Array<scl::Index>(predecessors, static_cast<scl::Size>(n_nodes));
+                pred = Array<Index>(predecessors, static_cast<Size>(n_nodes));
             }
             scl::kernel::components::bfs(m, source, dist, pred);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_multi_source_bfs(
+SCL_EXPORT scl_error_t scl_comp_multi_source_bfs(
     scl_sparse_t adjacency,
     const scl_index_t* sources,
-    scl_size_t n_sources,
-    scl_index_t* distances
-) {
-    if (!adjacency || !sources || !distances) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_nodes = sparse->rows();
-
-        sparse->visit([&](auto& m) {
-            scl::Array<const scl::Index> srcs(sources, n_sources);
-            scl::Array<scl::Index> dist(distances, static_cast<scl::Size>(n_nodes));
+    const scl_size_t n_sources,
+    scl_index_t* distances) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(sources, "Sources array is null");
+    SCL_C_API_CHECK_NULL(distances, "Output distances array is null");
+    SCL_C_API_CHECK(n_sources > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of sources must be positive");
+    
+    SCL_C_API_TRY
+        const Index n_nodes = adjacency->rows();
+        
+        adjacency->visit([&](auto& m) {
+            Array<const Index> srcs(sources, n_sources);
+            Array<Index> dist(distances, static_cast<Size>(n_nodes));
             scl::kernel::components::multi_source_bfs(m, srcs, dist);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_parallel_bfs(
+SCL_EXPORT scl_error_t scl_comp_parallel_bfs(
     scl_sparse_t adjacency,
-    scl_index_t source,
-    scl_index_t* distances
-) {
-    if (!adjacency || !distances) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_nodes = sparse->rows();
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> dist(distances, static_cast<scl::Size>(n_nodes));
+    const scl_index_t source,
+    scl_index_t* distances) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(distances, "Output distances array is null");
+    
+    SCL_C_API_TRY
+        const Index n_nodes = adjacency->rows();
+        
+        adjacency->visit([&](auto& m) {
+            Array<Index> dist(distances, static_cast<Size>(n_nodes));
             scl::kernel::components::parallel_bfs(m, source, dist);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_dfs(
+// =============================================================================
+// Depth-First Search
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_dfs(
     scl_sparse_t adjacency,
-    scl_index_t source,
+    const scl_index_t source,
     scl_index_t* discovery_time,
-    scl_index_t* finish_time
-) {
-    if (!adjacency || !discovery_time || !finish_time) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_nodes = sparse->rows();
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> disc(discovery_time, static_cast<scl::Size>(n_nodes));
-            scl::Array<scl::Index> fin(finish_time, static_cast<scl::Size>(n_nodes));
+    scl_index_t* finish_time) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(discovery_time, "Output discovery time array is null");
+    SCL_C_API_CHECK_NULL(finish_time, "Output finish time array is null");
+    
+    SCL_C_API_TRY
+        const Index n_nodes = adjacency->rows();
+        
+        adjacency->visit([&](auto& m) {
+            Array<Index> disc(discovery_time, static_cast<Size>(n_nodes));
+            Array<Index> fin(finish_time, static_cast<Size>(n_nodes));
             scl::kernel::components::dfs(m, source, disc, fin);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_topological_sort(
+// =============================================================================
+// Topological Sort
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_topological_sort(
     scl_sparse_t adjacency,
     scl_index_t* order,
-    int* is_valid
-) {
-    if (!adjacency || !order || !is_valid) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_nodes = sparse->rows();
+    int* is_valid) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(order, "Output order array is null");
+    SCL_C_API_CHECK_NULL(is_valid, "Output is_valid pointer is null");
+    
+    SCL_C_API_TRY
+        const Index n_nodes = adjacency->rows();
         bool valid = false;
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> ord(order, static_cast<scl::Size>(n_nodes));
+        
+        adjacency->visit([&](auto& m) {
+            Array<Index> ord(order, static_cast<Size>(n_nodes));
             valid = scl::kernel::components::topological_sort(m, ord);
         });
-
+        
         *is_valid = valid ? 1 : 0;
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_graph_diameter(
+// =============================================================================
+// Graph Metrics
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_graph_diameter(
     scl_sparse_t adjacency,
-    scl_index_t* diameter
-) {
-    if (!adjacency || !diameter) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index diam = 0;
-
-        sparse->visit([&](auto& m) {
+    scl_index_t* diameter) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(diameter, "Output diameter pointer is null");
+    
+    SCL_C_API_TRY
+        Index diam = 0;
+        
+        adjacency->visit([&](auto& m) {
             diam = scl::kernel::components::graph_diameter(m);
         });
-
+        
         *diameter = diam;
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_average_path_length(
+SCL_EXPORT scl_error_t scl_comp_average_path_length(
     scl_sparse_t adjacency,
-    scl_size_t max_samples,
-    scl_real_t* avg_length
-) {
-    if (!adjacency || !avg_length) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Real length = 0;
-
-        sparse->visit([&](auto& m) {
+    const scl_size_t max_samples,
+    scl_real_t* avg_length) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(avg_length, "Output average length pointer is null");
+    
+    SCL_C_API_TRY
+        Real length = Real(0);
+        
+        adjacency->visit([&](auto& m) {
             length = scl::kernel::components::average_path_length(m, max_samples);
         });
-
+        
         *avg_length = static_cast<scl_real_t>(length);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_clustering_coefficient(
+// =============================================================================
+// Clustering Coefficient
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_clustering_coefficient(
     scl_sparse_t adjacency,
-    scl_real_t* coefficients
-) {
-    if (!adjacency || !coefficients) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_nodes = sparse->rows();
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Real> coeffs(reinterpret_cast<scl::Real*>(coefficients),
-                                        static_cast<scl::Size>(n_nodes));
+    scl_real_t* coefficients) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(coefficients, "Output coefficients array is null");
+    
+    SCL_C_API_TRY
+        const Index n_nodes = adjacency->rows();
+        
+        adjacency->visit([&](auto& m) {
+            Array<Real> coeffs(
+                reinterpret_cast<Real*>(coefficients),
+                static_cast<Size>(n_nodes)
+            );
             scl::kernel::components::clustering_coefficient(m, coeffs);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_global_clustering_coefficient(
+SCL_EXPORT scl_error_t scl_comp_global_clustering_coefficient(
     scl_sparse_t adjacency,
-    scl_real_t* coefficient
-) {
-    if (!adjacency || !coefficient) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Real coeff = 0;
-
-        sparse->visit([&](auto& m) {
+    scl_real_t* coefficient) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(coefficient, "Output coefficient pointer is null");
+    
+    SCL_C_API_TRY
+        Real coeff = Real(0);
+        
+        adjacency->visit([&](auto& m) {
             coeff = scl::kernel::components::global_clustering_coefficient(m);
         });
-
+        
         *coefficient = static_cast<scl_real_t>(coeff);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_count_triangles(
+// =============================================================================
+// Triangle Counting
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_count_triangles(
     scl_sparse_t adjacency,
-    scl_size_t* n_triangles
-) {
-    if (!adjacency || !n_triangles) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Size count = 0;
-
-        sparse->visit([&](auto& m) {
+    scl_size_t* n_triangles) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(n_triangles, "Output n_triangles pointer is null");
+    
+    SCL_C_API_TRY
+        Size count = 0;
+        
+        adjacency->visit([&](auto& m) {
             count = scl::kernel::components::count_triangles(m);
         });
-
+        
         *n_triangles = count;
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_degree_sequence(
+// =============================================================================
+// Degree Statistics
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_degree_sequence(
     scl_sparse_t adjacency,
-    scl_index_t* degrees
-) {
-    if (!adjacency || !degrees) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_nodes = sparse->rows();
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> degs(degrees, static_cast<scl::Size>(n_nodes));
+    scl_index_t* degrees) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(degrees, "Output degrees array is null");
+    
+    SCL_C_API_TRY
+        const Index n_nodes = adjacency->rows();
+        
+        adjacency->visit([&](auto& m) {
+            Array<Index> degs(degrees, static_cast<Size>(n_nodes));
             scl::kernel::components::degree_sequence(m, degs);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_degree_statistics(
+SCL_EXPORT scl_error_t scl_comp_degree_statistics(
     scl_sparse_t adjacency,
     scl_real_t* mean_degree,
     scl_real_t* max_degree,
     scl_real_t* min_degree,
-    scl_real_t* std_degree
-) {
-    if (!adjacency || !mean_degree || !max_degree || !min_degree || !std_degree) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Real mean = 0, max = 0, min = 0, std = 0;
-
-        sparse->visit([&](auto& m) {
+    scl_real_t* std_degree) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(mean_degree, "Output mean degree pointer is null");
+    SCL_C_API_CHECK_NULL(max_degree, "Output max degree pointer is null");
+    SCL_C_API_CHECK_NULL(min_degree, "Output min degree pointer is null");
+    SCL_C_API_CHECK_NULL(std_degree, "Output std degree pointer is null");
+    
+    SCL_C_API_TRY
+        Real mean = Real(0);
+        Real max = Real(0);
+        Real min = Real(0);
+        Real std = Real(0);
+        
+        adjacency->visit([&](auto& m) {
             scl::kernel::components::degree_statistics(m, mean, max, min, std);
         });
-
+        
         *mean_degree = static_cast<scl_real_t>(mean);
         *max_degree = static_cast<scl_real_t>(max);
         *min_degree = static_cast<scl_real_t>(min);
         *std_degree = static_cast<scl_real_t>(std);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_degree_distribution(
+SCL_EXPORT scl_error_t scl_comp_degree_distribution(
     scl_sparse_t adjacency,
     scl_size_t* histogram,
-    scl_index_t max_degree
-) {
-    if (!adjacency || !histogram) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Size hist_size = static_cast<scl::Size>(max_degree + 1);
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Size> hist(histogram, hist_size);
+    const scl_index_t max_degree) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(histogram, "Output histogram array is null");
+    SCL_C_API_CHECK(max_degree >= 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Max degree must be non-negative");
+    
+    SCL_C_API_TRY
+        const Size hist_size = static_cast<Size>(max_degree + 1);
+        
+        adjacency->visit([&](auto& m) {
+            Array<Size> hist(histogram, hist_size);
             scl::kernel::components::degree_distribution(m, hist, max_degree);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_graph_density(
+// =============================================================================
+// Graph Properties
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_graph_density(
     scl_sparse_t adjacency,
-    scl_real_t* density
-) {
-    if (!adjacency || !density) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Real dens = 0;
-
-        sparse->visit([&](auto& m) {
+    scl_real_t* density) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(density, "Output density pointer is null");
+    
+    SCL_C_API_TRY
+        Real dens = Real(0);
+        
+        adjacency->visit([&](auto& m) {
             dens = scl::kernel::components::graph_density(m);
         });
-
+        
         *density = static_cast<scl_real_t>(dens);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_comp_kcore_decomposition(
+// =============================================================================
+// K-Core Decomposition
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_comp_kcore_decomposition(
     scl_sparse_t adjacency,
-    scl_index_t* core_numbers
-) {
-    if (!adjacency || !core_numbers) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* sparse = static_cast<scl_sparse_matrix*>(adjacency);
-        scl::Index n_nodes = sparse->rows();
-
-        sparse->visit([&](auto& m) {
-            scl::Array<scl::Index> cores(core_numbers, static_cast<scl::Size>(n_nodes));
+    scl_index_t* core_numbers) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(core_numbers, "Output core numbers array is null");
+    
+    SCL_C_API_TRY
+        const Index n_nodes = adjacency->rows();
+        
+        adjacency->visit([&](auto& m) {
+            Array<Index> cores(core_numbers, static_cast<Size>(n_nodes));
             scl::kernel::components::kcore_decomposition(m, cores);
         });
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"

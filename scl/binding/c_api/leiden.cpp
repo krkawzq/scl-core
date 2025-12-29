@@ -11,39 +11,39 @@
 
 using namespace scl;
 using namespace scl::binding;
-using namespace scl::kernel::leiden;
 
 extern "C" {
 
-scl_error_t scl_leiden_cluster(
+// =============================================================================
+// Leiden Clustering
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_leiden_cluster(
     scl_sparse_t adjacency,
     scl_index_t* partition,
-    scl_size_t n_nodes,
-    scl_real_t resolution,
-    scl_index_t max_iter,
-    scl_index_t* out_n_communities)
-{
-    if (!adjacency || !partition || !out_n_communities) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_real_t resolution,
+    const scl_index_t max_iter,
+    scl_index_t* out_n_communities) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(partition, "Partition array is null");
+    SCL_C_API_CHECK_NULL(out_n_communities, "Output n_communities pointer is null");
+    SCL_C_API_CHECK(n_nodes > 0 && max_iter > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(adjacency);
-        
-        Index n = wrapper->rows();
-        if (static_cast<scl_size_t>(n) != n_nodes) {
-            set_last_error(SCL_ERROR_DIMENSION_MISMATCH, "Node count mismatch");
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        }
+    SCL_C_API_TRY
+        const Index n = adjacency->rows();
+        SCL_C_API_CHECK(static_cast<scl_size_t>(n) == n_nodes,
+                       SCL_ERROR_DIMENSION_MISMATCH, "Node count mismatch");
 
         Array<Index> labels_arr(
             reinterpret_cast<Index*>(partition),
             n_nodes
         );
 
-        wrapper->visit([&](auto& adj) {
-            cluster(
+        adjacency->visit([&](auto& adj) {
+            scl::kernel::leiden::cluster(
                 adj, labels_arr,
                 static_cast<Real>(resolution),
                 max_iter,
@@ -60,42 +60,40 @@ scl_error_t scl_leiden_cluster(
         }
         *out_n_communities = max_comm + 1;
 
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_leiden_cluster_multilevel(
+// =============================================================================
+// Leiden Multilevel
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_leiden_cluster_multilevel(
     scl_sparse_t adjacency,
     scl_index_t* partition,
-    scl_size_t n_nodes,
-    scl_real_t resolution,
-    scl_index_t max_iter,
-    scl_index_t* out_n_communities)
-{
-    if (!adjacency || !partition || !out_n_communities) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_real_t resolution,
+    const scl_index_t max_iter,
+    scl_index_t* out_n_communities) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(partition, "Partition array is null");
+    SCL_C_API_CHECK_NULL(out_n_communities, "Output n_communities pointer is null");
+    SCL_C_API_CHECK(n_nodes > 0 && max_iter > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
 
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(adjacency);
-        
-        Index n = wrapper->rows();
-        if (static_cast<scl_size_t>(n) != n_nodes) {
-            set_last_error(SCL_ERROR_DIMENSION_MISMATCH, "Node count mismatch");
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        }
+    SCL_C_API_TRY
+        const Index n = adjacency->rows();
+        SCL_C_API_CHECK(static_cast<scl_size_t>(n) == n_nodes,
+                       SCL_ERROR_DIMENSION_MISMATCH, "Node count mismatch");
 
         Array<Index> labels_arr(
             reinterpret_cast<Index*>(partition),
             n_nodes
         );
 
-        wrapper->visit([&](auto& adj) {
-            cluster_multilevel(
+        adjacency->visit([&](auto& adj) {
+            scl::kernel::leiden::cluster_multilevel(
                 adj, labels_arr,
                 static_cast<Real>(resolution),
                 max_iter,
@@ -112,53 +110,8 @@ scl_error_t scl_leiden_cluster_multilevel(
         }
         *out_n_communities = max_comm + 1;
 
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
-}
-
-scl_error_t scl_leiden_compute_modularity(
-    scl_sparse_t adjacency,
-    const scl_index_t* partition,
-    scl_size_t n_nodes,
-    scl_real_t resolution,
-    scl_real_t* out_modularity)
-{
-    if (!adjacency || !partition || !out_modularity) {
-        set_last_error(SCL_ERROR_NULL_POINTER, "Null pointer argument");
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        auto* wrapper = static_cast<SparseWrapper*>(adjacency);
-        
-        Index n = wrapper->rows();
-        if (static_cast<scl_size_t>(n) != n_nodes) {
-            set_last_error(SCL_ERROR_DIMENSION_MISMATCH, "Node count mismatch");
-            return SCL_ERROR_DIMENSION_MISMATCH;
-        }
-
-        Real modularity = Real(0);
-        wrapper->visit([&](const auto& adj) {
-            modularity = compute_modularity(
-                adj,
-                scl::Array<const Index>(
-                    reinterpret_cast<const Index*>(partition),
-                    static_cast<Size>(n_nodes)
-                ),
-                static_cast<Real>(resolution)
-            );
-        });
-
-        *out_modularity = modularity;
-        clear_last_error();
-        return SCL_OK;
-    } catch (...) {
-        return handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"
-

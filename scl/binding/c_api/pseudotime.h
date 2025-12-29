@@ -58,8 +58,7 @@ scl_error_t scl_pseudotime_multi_source(
     scl_sparse_t adjacency,
     const scl_index_t* source_cells,
     scl_index_t n_sources,
-    scl_real_t* distances,            // [n] output
-    scl_index_t n
+    scl_real_t* distances
 );
 
 #ifdef __cplusplus

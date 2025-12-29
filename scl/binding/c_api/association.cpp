@@ -9,257 +9,276 @@
 #include "scl/core/type.hpp"
 #include "scl/core/error.hpp"
 
-#include <exception>
+using namespace scl;
+using namespace scl::binding;
 
 extern "C" {
 
-static scl_error_t get_sparse_matrix(
-    scl_sparse_t handle,
-    scl::binding::SparseWrapper*& wrapper
-) {
-    if (!handle) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-    wrapper = static_cast<scl::binding::SparseWrapper*>(handle);
-    if (!wrapper->valid()) {
-        return SCL_ERROR_INVALID_ARGUMENT;
-    }
-    return SCL_OK;
-}
+// =============================================================================
+// Gene-Peak Correlation
+// =============================================================================
 
-scl_error_t scl_association_gene_peak_correlation(
+SCL_EXPORT scl_error_t scl_association_gene_peak_correlation(
     scl_sparse_t rna_expression,
     scl_sparse_t atac_accessibility,
     scl_index_t* gene_indices,
     scl_index_t* peak_indices,
     scl_real_t* correlations,
     scl_size_t* n_correlations,
-    scl_real_t min_correlation
-) {
-    if (!rna_expression || !atac_accessibility || !gene_indices ||
-        !peak_indices || !correlations || !n_correlations) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        scl::binding::SparseWrapper* wrapper_rna;
-        scl::binding::SparseWrapper* wrapper_atac;
-        scl_error_t err1 = get_sparse_matrix(rna_expression, wrapper_rna);
-        scl_error_t err2 = get_sparse_matrix(atac_accessibility, wrapper_atac);
-        if (err1 != SCL_OK) return err1;
-        if (err2 != SCL_OK) return err2;
-
-        scl::Size n_corr = 0;
-        wrapper_rna->visit([&](auto& rna) {
-            wrapper_atac->visit([&](auto& atac) {
+    const scl_real_t min_correlation) {
+    
+    SCL_C_API_CHECK_NULL(rna_expression, "RNA expression matrix is null");
+    SCL_C_API_CHECK_NULL(atac_accessibility, "ATAC accessibility matrix is null");
+    SCL_C_API_CHECK_NULL(gene_indices, "Output gene indices array is null");
+    SCL_C_API_CHECK_NULL(peak_indices, "Output peak indices array is null");
+    SCL_C_API_CHECK_NULL(correlations, "Output correlations array is null");
+    SCL_C_API_CHECK_NULL(n_correlations, "Output n_correlations pointer is null");
+    
+    SCL_C_API_TRY
+        Size n_corr = 0;
+        
+        rna_expression->visit([&](auto& rna) {
+            atac_accessibility->visit([&](auto& atac) {
                 scl::kernel::association::gene_peak_correlation(
                     rna, atac,
-                    reinterpret_cast<scl::Index*>(gene_indices),
-                    reinterpret_cast<scl::Index*>(peak_indices),
-                    reinterpret_cast<scl::Real*>(correlations),
+                    reinterpret_cast<Index*>(gene_indices),
+                    reinterpret_cast<Index*>(peak_indices),
+                    reinterpret_cast<Real*>(correlations),
                     n_corr,
-                    static_cast<scl::Real>(min_correlation)
+                    static_cast<Real>(min_correlation)
                 );
             });
         });
-        *n_correlations = static_cast<scl_size_t>(n_corr);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        *n_correlations = n_corr;
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_association_cis_regulatory(
+// =============================================================================
+// Cis-Regulatory Associations
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_association_cis_regulatory(
     scl_sparse_t rna_expression,
     scl_sparse_t atac_accessibility,
     const scl_index_t* gene_indices,
     const scl_index_t* peak_indices,
-    scl_size_t n_pairs,
+    const scl_size_t n_pairs,
     scl_real_t* correlations,
-    scl_real_t* p_values
-) {
-    if (!rna_expression || !atac_accessibility || !gene_indices ||
-        !peak_indices || !correlations || !p_values) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        scl::binding::SparseWrapper* wrapper_rna;
-        scl::binding::SparseWrapper* wrapper_atac;
-        scl_error_t err1 = get_sparse_matrix(rna_expression, wrapper_rna);
-        scl_error_t err2 = get_sparse_matrix(atac_accessibility, wrapper_atac);
-        if (err1 != SCL_OK) return err1;
-        if (err2 != SCL_OK) return err2;
-
-        wrapper_rna->visit([&](auto& rna) {
-            wrapper_atac->visit([&](auto& atac) {
+    scl_real_t* p_values) {
+    
+    SCL_C_API_CHECK_NULL(rna_expression, "RNA expression matrix is null");
+    SCL_C_API_CHECK_NULL(atac_accessibility, "ATAC accessibility matrix is null");
+    SCL_C_API_CHECK_NULL(gene_indices, "Gene indices array is null");
+    SCL_C_API_CHECK_NULL(peak_indices, "Peak indices array is null");
+    SCL_C_API_CHECK_NULL(correlations, "Output correlations array is null");
+    SCL_C_API_CHECK_NULL(p_values, "Output p_values array is null");
+    
+    SCL_C_API_TRY
+        rna_expression->visit([&](auto& rna) {
+            atac_accessibility->visit([&](auto& atac) {
                 scl::kernel::association::cis_regulatory(
                     rna, atac,
-                    reinterpret_cast<const scl::Index*>(gene_indices),
-                    reinterpret_cast<const scl::Index*>(peak_indices),
-                    static_cast<scl::Size>(n_pairs),
-                    reinterpret_cast<scl::Real*>(correlations),
-                    reinterpret_cast<scl::Real*>(p_values)
+                    reinterpret_cast<const Index*>(gene_indices),
+                    reinterpret_cast<const Index*>(peak_indices),
+                    n_pairs,
+                    reinterpret_cast<Real*>(correlations),
+                    reinterpret_cast<Real*>(p_values)
                 );
             });
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_association_enhancer_gene_link(
+// =============================================================================
+// Enhancer-Gene Links
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_association_enhancer_gene_link(
     scl_sparse_t rna,
     scl_sparse_t atac,
-    scl_real_t correlation_threshold,
+    const scl_real_t correlation_threshold,
     scl_index_t* link_genes,
     scl_index_t* link_peaks,
     scl_real_t* link_correlations,
-    scl_size_t* n_links
-) {
-    if (!rna || !atac || !link_genes || !link_peaks || !link_correlations || !n_links) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        scl::binding::SparseWrapper* wrapper_rna;
-        scl::binding::SparseWrapper* wrapper_atac;
-        scl_error_t err1 = get_sparse_matrix(rna, wrapper_rna);
-        scl_error_t err2 = get_sparse_matrix(atac, wrapper_atac);
-        if (err1 != SCL_OK) return err1;
-        if (err2 != SCL_OK) return err2;
-
-        scl::Size n_links_result = 0;
-        wrapper_rna->visit([&](auto& r) {
-            wrapper_atac->visit([&](auto& a) {
+    scl_size_t* n_links) {
+    
+    SCL_C_API_CHECK_NULL(rna, "RNA matrix is null");
+    SCL_C_API_CHECK_NULL(atac, "ATAC matrix is null");
+    SCL_C_API_CHECK_NULL(link_genes, "Output link_genes array is null");
+    SCL_C_API_CHECK_NULL(link_peaks, "Output link_peaks array is null");
+    SCL_C_API_CHECK_NULL(link_correlations, "Output link_correlations array is null");
+    SCL_C_API_CHECK_NULL(n_links, "Output n_links pointer is null");
+    
+    SCL_C_API_TRY
+        Size n_links_result = 0;
+        
+        rna->visit([&](auto& r) {
+            atac->visit([&](auto& a) {
                 scl::kernel::association::enhancer_gene_link(
                     r, a,
-                    static_cast<scl::Real>(correlation_threshold),
-                    reinterpret_cast<scl::Index*>(link_genes),
-                    reinterpret_cast<scl::Index*>(link_peaks),
-                    reinterpret_cast<scl::Real*>(link_correlations),
+                    static_cast<Real>(correlation_threshold),
+                    reinterpret_cast<Index*>(link_genes),
+                    reinterpret_cast<Index*>(link_peaks),
+                    reinterpret_cast<Real*>(link_correlations),
                     n_links_result
                 );
             });
         });
-        *n_links = static_cast<scl_size_t>(n_links_result);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        *n_links = n_links_result;
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_association_multimodal_neighbors(
+// =============================================================================
+// Multi-modal Neighbors
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_association_multimodal_neighbors(
     scl_sparse_t modality1,
     scl_sparse_t modality2,
-    scl_real_t weight1,
-    scl_real_t weight2,
-    scl_index_t k,
+    const scl_real_t weight1,
+    const scl_real_t weight2,
+    const scl_index_t k,
     scl_index_t* neighbor_indices,
-    scl_real_t* neighbor_distances
-) {
-    if (!modality1 || !modality2 || !neighbor_indices || !neighbor_distances) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        scl::binding::SparseWrapper* wrapper1;
-        scl::binding::SparseWrapper* wrapper2;
-        scl_error_t err1 = get_sparse_matrix(modality1, wrapper1);
-        scl_error_t err2 = get_sparse_matrix(modality2, wrapper2);
-        if (err1 != SCL_OK) return err1;
-        if (err2 != SCL_OK) return err2;
-
-        wrapper1->visit([&](auto& m1) {
-            wrapper2->visit([&](auto& m2) {
+    scl_real_t* neighbor_distances) {
+    
+    SCL_C_API_CHECK_NULL(modality1, "Modality1 matrix is null");
+    SCL_C_API_CHECK_NULL(modality2, "Modality2 matrix is null");
+    SCL_C_API_CHECK_NULL(neighbor_indices, "Output neighbor indices array is null");
+    SCL_C_API_CHECK_NULL(neighbor_distances, "Output neighbor distances array is null");
+    
+    SCL_C_API_TRY
+        modality1->visit([&](auto& m1) {
+            modality2->visit([&](auto& m2) {
                 scl::kernel::association::multimodal_neighbors(
                     m1, m2,
-                    static_cast<scl::Real>(weight1),
-                    static_cast<scl::Real>(weight2),
-                    static_cast<scl::Index>(k),
-                    reinterpret_cast<scl::Index*>(neighbor_indices),
-                    reinterpret_cast<scl::Real*>(neighbor_distances)
+                    static_cast<Real>(weight1),
+                    static_cast<Real>(weight2),
+                    k,
+                    reinterpret_cast<Index*>(neighbor_indices),
+                    reinterpret_cast<Real*>(neighbor_distances)
                 );
             });
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_association_feature_coupling(
+// =============================================================================
+// Feature Coupling
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_association_feature_coupling(
     scl_sparse_t modality1,
     scl_sparse_t modality2,
     scl_index_t* feature1_indices,
     scl_index_t* feature2_indices,
     scl_real_t* coupling_scores,
     scl_size_t* n_couplings,
-    scl_real_t min_score
-) {
-    if (!modality1 || !modality2 || !feature1_indices ||
-        !feature2_indices || !coupling_scores || !n_couplings) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        scl::binding::SparseWrapper* wrapper1;
-        scl::binding::SparseWrapper* wrapper2;
-        scl_error_t err1 = get_sparse_matrix(modality1, wrapper1);
-        scl_error_t err2 = get_sparse_matrix(modality2, wrapper2);
-        if (err1 != SCL_OK) return err1;
-        if (err2 != SCL_OK) return err2;
-
-        scl::Size n_coup = 0;
-        wrapper1->visit([&](auto& m1) {
-            wrapper2->visit([&](auto& m2) {
+    const scl_real_t min_score) {
+    
+    SCL_C_API_CHECK_NULL(modality1, "Modality1 matrix is null");
+    SCL_C_API_CHECK_NULL(modality2, "Modality2 matrix is null");
+    SCL_C_API_CHECK_NULL(feature1_indices, "Output feature1 indices array is null");
+    SCL_C_API_CHECK_NULL(feature2_indices, "Output feature2 indices array is null");
+    SCL_C_API_CHECK_NULL(coupling_scores, "Output coupling scores array is null");
+    SCL_C_API_CHECK_NULL(n_couplings, "Output n_couplings pointer is null");
+    
+    SCL_C_API_TRY
+        Size n_coup = 0;
+        
+        modality1->visit([&](auto& m1) {
+            modality2->visit([&](auto& m2) {
                 scl::kernel::association::feature_coupling(
                     m1, m2,
-                    reinterpret_cast<scl::Index*>(feature1_indices),
-                    reinterpret_cast<scl::Index*>(feature2_indices),
-                    reinterpret_cast<scl::Real*>(coupling_scores),
+                    reinterpret_cast<Index*>(feature1_indices),
+                    reinterpret_cast<Index*>(feature2_indices),
+                    reinterpret_cast<Real*>(coupling_scores),
                     n_coup,
-                    static_cast<scl::Real>(min_score)
+                    static_cast<Real>(min_score)
                 );
             });
         });
-        *n_couplings = static_cast<scl_size_t>(n_coup);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        *n_couplings = n_coup;
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_association_peak_to_gene_activity(
+// =============================================================================
+// Peak-to-Gene Activity
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_association_peak_to_gene_activity(
     scl_sparse_t atac,
     const scl_index_t* peak_to_gene_map,
-    scl_size_t n_peaks,
-    scl_size_t n_genes,
-    scl_real_t* gene_activity
-) {
-    if (!atac || !peak_to_gene_map || !gene_activity) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-
-    try {
-        scl::binding::SparseWrapper* wrapper;
-        scl_error_t err = get_sparse_matrix(atac, wrapper);
-        if (err != SCL_OK) return err;
-
-        wrapper->visit([&](auto& a) {
+    const scl_size_t n_peaks,
+    const scl_size_t n_genes,
+    scl_real_t* gene_activity) {
+    
+    SCL_C_API_CHECK_NULL(atac, "ATAC matrix is null");
+    SCL_C_API_CHECK_NULL(peak_to_gene_map, "Peak to gene map array is null");
+    SCL_C_API_CHECK_NULL(gene_activity, "Output gene activity array is null");
+    
+    SCL_C_API_TRY
+        atac->visit([&](auto& a) {
             scl::kernel::association::peak_to_gene_activity(
                 a,
-                reinterpret_cast<const scl::Index*>(peak_to_gene_map),
-                static_cast<scl::Size>(n_peaks),
-                static_cast<scl::Size>(n_genes),
-                reinterpret_cast<scl::Real*>(gene_activity)
+                reinterpret_cast<const Index*>(peak_to_gene_map),
+                n_peaks,
+                n_genes,
+                reinterpret_cast<Real*>(gene_activity)
             );
         });
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
+}
+
+// =============================================================================
+// Correlation in Subset
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_association_correlation_in_subset(
+    scl_sparse_t data1,
+    const scl_index_t feature1,
+    scl_sparse_t data2,
+    const scl_index_t feature2,
+    const scl_index_t* cell_indices,
+    const scl_size_t n_subset,
+    scl_real_t* correlation) {
+    
+    SCL_C_API_CHECK_NULL(data1, "Data1 matrix is null");
+    SCL_C_API_CHECK_NULL(data2, "Data2 matrix is null");
+    SCL_C_API_CHECK_NULL(cell_indices, "Cell indices array is null");
+    SCL_C_API_CHECK_NULL(correlation, "Output correlation pointer is null");
+    
+    SCL_C_API_TRY
+        Real corr = Real(0);
+        
+        data1->visit([&](auto& m1) {
+            data2->visit([&](auto& m2) {
+                scl::kernel::association::correlation_in_subset(
+                    m1, feature1,
+                    m2, feature2,
+                    Array<const Index>(
+                        reinterpret_cast<const Index*>(cell_indices),
+                        n_subset
+                    ),
+                    corr
+                );
+            });
+        });
+        
+        *correlation = static_cast<scl_real_t>(corr);
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"

@@ -9,154 +9,158 @@
 #include "scl/core/type.hpp"
 #include "scl/core/error.hpp"
 
-#include <exception>
+using namespace scl;
+using namespace scl::binding;
 
 extern "C" {
 
-static scl_error_t get_sparse_matrix(
-    scl_sparse_t handle,
-    scl::binding::SparseWrapper*& wrapper
-) {
-    if (!handle) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-    wrapper = static_cast<scl::binding::SparseWrapper*>(handle);
-    if (!wrapper->valid()) {
-        return SCL_ERROR_INVALID_ARGUMENT;
-    }
-    return SCL_OK;
-}
+// =============================================================================
+// Louvain Clustering
+// =============================================================================
 
-scl_error_t scl_louvain_clustering(
+SCL_EXPORT scl_error_t scl_louvain_clustering(
     scl_sparse_t adjacency,
     scl_index_t* labels,
-    scl_size_t n_nodes,
-    scl_real_t resolution,
-    scl_index_t max_iter
-) {
-    if (!adjacency || !labels) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_real_t resolution,
+    const scl_index_t max_iter) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(labels, "Labels array is null");
+    SCL_C_API_CHECK(n_nodes > 0 && max_iter > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Dimensions must be positive");
 
-    try {
-        scl::binding::SparseWrapper* wrapper;
-        scl_error_t err = get_sparse_matrix(adjacency, wrapper);
-        if (err != SCL_OK) return err;
-
-        wrapper->visit([&](auto& adj) {
-            scl::kernel::louvain::compute_modularity(
+    SCL_C_API_TRY
+        adjacency->visit([&](auto& adj) {
+            scl::kernel::louvain::cluster(
                 adj,
-                scl::Array<scl::Index>(
-                    reinterpret_cast<scl::Index*>(labels),
-                    static_cast<scl::Size>(n_nodes)
+                Array<Index>(
+                    reinterpret_cast<Index*>(labels),
+                    static_cast<Size>(n_nodes)
                 ),
-                static_cast<scl::Real>(resolution),
-                static_cast<scl::Index>(max_iter)
+                static_cast<Real>(resolution),
+                static_cast<Index>(max_iter)
             );
         });
 
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_louvain_compute_modularity(
+// =============================================================================
+// Compute Modularity (Utility Functions)
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_louvain_compute_modularity(
     scl_sparse_t adjacency,
     const scl_index_t* labels,
-    scl_size_t n_nodes,
-    scl_real_t resolution,
-    scl_real_t* modularity
-) {
-    if (!adjacency || !labels || !modularity) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t n_nodes,
+    const scl_real_t resolution,
+    scl_real_t* modularity) {
+    
+    SCL_C_API_CHECK_NULL(adjacency, "Adjacency matrix is null");
+    SCL_C_API_CHECK_NULL(labels, "Labels array is null");
+    SCL_C_API_CHECK_NULL(modularity, "Output modularity pointer is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
 
-    try {
-        scl::binding::SparseWrapper* wrapper;
-        scl_error_t err = get_sparse_matrix(adjacency, wrapper);
-        if (err != SCL_OK) return err;
+    SCL_C_API_TRY
+        Real mod = Real(0);
 
-        scl::Real mod = scl::Real(0);
-        wrapper->visit([&](auto& adj) {
+        adjacency->visit([&](auto& adj) {
             mod = scl::kernel::louvain::compute_modularity(
                 adj,
-                scl::Array<const scl::Index>(
-                    reinterpret_cast<const scl::Index*>(labels),
-                    static_cast<scl::Size>(n_nodes)
+                Array<const Index>(
+                    reinterpret_cast<const Index*>(labels),
+                    static_cast<Size>(n_nodes)
                 ),
-                static_cast<scl::Real>(resolution)
+                static_cast<Real>(resolution)
             );
         });
+
         *modularity = static_cast<scl_real_t>(mod);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_louvain_community_sizes(
+// =============================================================================
+// Community Utility Functions
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_louvain_community_sizes(
     const scl_index_t* labels,
-    scl_size_t n_nodes,
+    const scl_size_t n_nodes,
     scl_index_t* sizes,
-    scl_size_t sizes_size,
-    scl_index_t* n_communities
-) {
-    if (!labels || !sizes || !n_communities) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t sizes_size,
+    scl_index_t* n_communities) {
+    
+    SCL_C_API_CHECK_NULL(labels, "Labels array is null");
+    SCL_C_API_CHECK_NULL(sizes, "Sizes array is null");
+    SCL_C_API_CHECK_NULL(n_communities, "Output n_communities pointer is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
 
-    try {
-        scl::Index n_comm = 0;
-        scl::kernel::louvain::community_sizes(
-            scl::Array<const scl::Index>(
-                reinterpret_cast<const scl::Index*>(labels),
-                static_cast<scl::Size>(n_nodes)
-            ),
-            scl::Array<scl::Index>(
-                reinterpret_cast<scl::Index*>(sizes),
-                static_cast<scl::Size>(sizes_size)
-            ),
-            n_comm
-        );
-        *n_communities = static_cast<scl_index_t>(n_comm);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+    SCL_C_API_TRY
+        // Find max community ID
+        Index max_comm = -1;
+        for (scl_size_t i = 0; i < n_nodes; ++i) {
+            if (labels[i] > max_comm) {
+                max_comm = labels[i];
+            }
+        }
+        
+        const Index n_comm = max_comm + 1;
+        SCL_C_API_CHECK(static_cast<scl_size_t>(n_comm) <= sizes_size,
+                       SCL_ERROR_INVALID_ARGUMENT, "Sizes buffer too small");
+        
+        // Initialize sizes
+        for (Index i = 0; i < n_comm; ++i) {
+            sizes[i] = 0;
+        }
+        
+        // Count members
+        for (scl_size_t i = 0; i < n_nodes; ++i) {
+            if (labels[i] >= 0 && labels[i] < n_comm) {
+                sizes[labels[i]]++;
+            }
+        }
+        
+        *n_communities = n_comm;
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_louvain_get_community_members(
+SCL_EXPORT scl_error_t scl_louvain_get_community_members(
     const scl_index_t* labels,
-    scl_size_t n_nodes,
-    scl_index_t community,
+    const scl_size_t n_nodes,
+    const scl_index_t community,
     scl_index_t* members,
-    scl_size_t members_size,
-    scl_index_t* n_members
-) {
-    if (!labels || !members || !n_members) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    const scl_size_t members_size,
+    scl_index_t* n_members) {
+    
+    SCL_C_API_CHECK_NULL(labels, "Labels array is null");
+    SCL_C_API_CHECK_NULL(members, "Members array is null");
+    SCL_C_API_CHECK_NULL(n_members, "Output n_members pointer is null");
+    SCL_C_API_CHECK(n_nodes > 0, SCL_ERROR_INVALID_ARGUMENT,
+                   "Number of nodes must be positive");
 
-    try {
-        scl::Index n_mem = 0;
-        scl::kernel::louvain::get_community_members(
-            scl::Array<const scl::Index>(
-                reinterpret_cast<const scl::Index*>(labels),
-                static_cast<scl::Size>(n_nodes)
-            ),
-            static_cast<scl::Index>(community),
-            scl::Array<scl::Index>(
-                reinterpret_cast<scl::Index*>(members),
-                static_cast<scl::Size>(members_size)
-            ),
-            n_mem
-        );
-        *n_members = static_cast<scl_index_t>(n_mem);
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+    SCL_C_API_TRY
+        Index count = 0;
+        
+        for (scl_size_t i = 0; i < n_nodes; ++i) {
+            if (labels[i] == community) {
+                SCL_C_API_CHECK(static_cast<scl_size_t>(count) < members_size,
+                               SCL_ERROR_INVALID_ARGUMENT, "Members buffer too small");
+                members[count++] = static_cast<scl_index_t>(i);
+            }
+        }
+        
+        *n_members = count;
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"

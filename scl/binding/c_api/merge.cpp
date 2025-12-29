@@ -5,122 +5,99 @@
 
 #include "scl/binding/c_api/merge.h"
 #include "scl/binding/c_api/core/internal.hpp"
-#include "scl/binding/c_api/core/sparse.h"
 #include "scl/kernel/merge.hpp"
-#include "scl/core/type.hpp"
-#include "scl/core/error.hpp"
 #include "scl/core/registry.hpp"
 
-#include <exception>
+using namespace scl;
+using namespace scl::binding;
 
 extern "C" {
 
-static scl_error_t get_sparse_matrix(
-    scl_sparse_t handle,
-    scl::binding::SparseWrapper*& wrapper
-) {
-    if (!handle) {
-        return SCL_ERROR_NULL_POINTER;
-    }
-    wrapper = static_cast<scl::binding::SparseWrapper*>(handle);
-    if (!wrapper->valid()) {
-        return SCL_ERROR_INVALID_ARGUMENT;
-    }
-    return SCL_OK;
-}
+// =============================================================================
+// Vertical Stack
+// =============================================================================
 
-scl_error_t scl_merge_vstack(
+SCL_EXPORT scl_error_t scl_merge_vstack(
     scl_sparse_t matrix1,
     scl_sparse_t matrix2,
-    scl_sparse_t* result
-) {
-    if (!matrix1 || !matrix2 || !result) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    scl_sparse_t* result) {
+    
+    SCL_C_API_CHECK_NULL(matrix1, "Matrix1 handle is null");
+    SCL_C_API_CHECK_NULL(matrix2, "Matrix2 handle is null");
+    SCL_C_API_CHECK_NULL(result, "Result handle pointer is null");
 
-    try {
-        scl::binding::SparseWrapper* wrapper1;
-        scl::binding::SparseWrapper* wrapper2;
-        scl_error_t err1 = get_sparse_matrix(matrix1, wrapper1);
-        scl_error_t err2 = get_sparse_matrix(matrix2, wrapper2);
-        if (err1 != SCL_OK) return err1;
-        if (err2 != SCL_OK) return err2;
+    SCL_C_API_TRY
+        SCL_C_API_CHECK(matrix1->is_csr_format() == matrix2->is_csr_format(),
+                       SCL_ERROR_TYPE_MISMATCH,
+                       "Matrices must have the same format");
 
-        // Both matrices must have the same format
-        if (wrapper1->is_csr != wrapper2->is_csr) {
-            return SCL_ERROR_TYPE_MISMATCH;
-        }
-
-        bool is_csr = wrapper1->is_csr;
+        const bool is_csr = matrix1->is_csr_format();
+        
+        auto& reg = get_registry();
+        auto* handle = reg.new_object<scl_sparse_matrix>();
+        SCL_CHECK_NULL(handle, "Failed to allocate merged matrix handle");
+        
+        handle->is_csr = is_csr;
+        
         if (is_csr) {
-            auto& m1 = std::get<scl::CSR>(wrapper1->matrix);
-            auto& m2 = std::get<scl::CSR>(wrapper2->matrix);
-            auto merged = scl::kernel::merge::vstack(m1, m2);
-            auto* new_wrapper = scl::get_registry().new_object<scl::binding::SparseWrapper>(
-                scl::binding::SparseWrapper(std::move(merged))
-            );
-            *result = reinterpret_cast<scl_sparse_t>(new_wrapper);
+            auto& m1 = matrix1->as_csr();
+            auto& m2 = matrix2->as_csr();
+            handle->matrix = scl::kernel::merge::vstack(m1, m2);
         } else {
-            auto& m1 = std::get<scl::CSC>(wrapper1->matrix);
-            auto& m2 = std::get<scl::CSC>(wrapper2->matrix);
-            auto merged = scl::kernel::merge::vstack(m1, m2);
-            auto* new_wrapper = scl::get_registry().new_object<scl::binding::SparseWrapper>(
-                scl::binding::SparseWrapper(std::move(merged))
-            );
-            *result = reinterpret_cast<scl_sparse_t>(new_wrapper);
+            auto& m1 = matrix1->as_csc();
+            auto& m2 = matrix2->as_csc();
+            handle->matrix = scl::kernel::merge::vstack(m1, m2);
         }
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_CHECK_ARG(handle->valid(), "Failed to merge matrices");
+        
+        *result = handle;
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
-scl_error_t scl_merge_hstack(
+// =============================================================================
+// Horizontal Stack
+// =============================================================================
+
+SCL_EXPORT scl_error_t scl_merge_hstack(
     scl_sparse_t matrix1,
     scl_sparse_t matrix2,
-    scl_sparse_t* result
-) {
-    if (!matrix1 || !matrix2 || !result) {
-        return SCL_ERROR_NULL_POINTER;
-    }
+    scl_sparse_t* result) {
+    SCL_C_API_CHECK_NULL(matrix1, "Matrix1 handle is null");
+    SCL_C_API_CHECK_NULL(matrix2, "Matrix2 handle is null");
+    SCL_C_API_CHECK_NULL(result, "Result handle pointer is null");
 
-    try {
-        scl::binding::SparseWrapper* wrapper1;
-        scl::binding::SparseWrapper* wrapper2;
-        scl_error_t err1 = get_sparse_matrix(matrix1, wrapper1);
-        scl_error_t err2 = get_sparse_matrix(matrix2, wrapper2);
-        if (err1 != SCL_OK) return err1;
-        if (err2 != SCL_OK) return err2;
+    SCL_C_API_TRY
+        SCL_C_API_CHECK(matrix1->is_csr_format() == matrix2->is_csr_format(),
+                       SCL_ERROR_TYPE_MISMATCH,
+                       "Matrices must have the same format");
 
-        // Both matrices must have the same format
-        if (wrapper1->is_csr != wrapper2->is_csr) {
-            return SCL_ERROR_TYPE_MISMATCH;
-        }
-
-        bool is_csr = wrapper1->is_csr;
+        const bool is_csr = matrix1->is_csr_format();
+        
+        auto& reg = get_registry();
+        auto* handle = reg.new_object<scl_sparse_matrix>();
+        SCL_CHECK_NULL(handle, "Failed to allocate merged matrix handle");
+        
+        handle->is_csr = is_csr;
+        
         if (is_csr) {
-            auto& m1 = std::get<scl::CSR>(wrapper1->matrix);
-            auto& m2 = std::get<scl::CSR>(wrapper2->matrix);
-            auto merged = scl::kernel::merge::hstack(m1, m2);
-            auto* new_wrapper = scl::get_registry().new_object<scl::binding::SparseWrapper>(
-                scl::binding::SparseWrapper(std::move(merged))
-            );
-            *result = reinterpret_cast<scl_sparse_t>(new_wrapper);
+            auto& m1 = matrix1->as_csr();
+            auto& m2 = matrix2->as_csr();
+            handle->matrix = scl::kernel::merge::hstack(m1, m2);
         } else {
-            auto& m1 = std::get<scl::CSC>(wrapper1->matrix);
-            auto& m2 = std::get<scl::CSC>(wrapper2->matrix);
-            auto merged = scl::kernel::merge::hstack(m1, m2);
-            auto* new_wrapper = scl::get_registry().new_object<scl::binding::SparseWrapper>(
-                scl::binding::SparseWrapper(std::move(merged))
-            );
-            *result = reinterpret_cast<scl_sparse_t>(new_wrapper);
+            auto& m1 = matrix1->as_csc();
+            auto& m2 = matrix2->as_csc();
+            handle->matrix = scl::kernel::merge::hstack(m1, m2);
         }
-
-        return SCL_OK;
-    } catch (...) {
-        return scl::binding::handle_exception();
-    }
+        
+        SCL_CHECK_ARG(handle->valid(), "Failed to merge matrices");
+        
+        *result = handle;
+        
+        SCL_C_API_RETURN_OK;
+    SCL_C_API_CATCH
 }
 
 } // extern "C"

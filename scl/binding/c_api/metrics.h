@@ -56,15 +56,35 @@ scl_error_t scl_metrics_normalized_mutual_information(
 );
 
 // =============================================================================
-// Homogeneity, Completeness, V-Measure
+// Homogeneity Score
 // =============================================================================
 
-scl_error_t scl_metrics_homogeneity_completeness_vmeasure(
+scl_error_t scl_metrics_homogeneity_score(
     const scl_index_t* labels_true,
     const scl_index_t* labels_pred,
     scl_size_t n_cells,
-    scl_real_t* homogeneity,           // Output
-    scl_real_t* completeness,          // Output
+    scl_real_t* homogeneity            // Output
+);
+
+// =============================================================================
+// Completeness Score
+// =============================================================================
+
+scl_error_t scl_metrics_completeness_score(
+    const scl_index_t* labels_true,
+    const scl_index_t* labels_pred,
+    scl_size_t n_cells,
+    scl_real_t* completeness           // Output
+);
+
+// =============================================================================
+// V-Measure Score
+// =============================================================================
+
+scl_error_t scl_metrics_v_measure(
+    const scl_index_t* labels_true,
+    const scl_index_t* labels_pred,
+    scl_size_t n_cells,
     scl_real_t* v_measure              // Output
 );
 

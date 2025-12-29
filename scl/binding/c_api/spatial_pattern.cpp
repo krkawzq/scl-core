@@ -25,7 +25,6 @@ scl_error_t scl_spatial_pattern_variability(
 
     try {
         auto* sparse = static_cast<scl_sparse_matrix*>(expression);
-        scl::Index n_genes = sparse->cols();
 
         sparse->visit([&](auto& m) {
             scl::kernel::spatial_pattern::spatial_variability(
@@ -55,7 +54,7 @@ scl_error_t scl_spatial_pattern_gradient(
     }
 
     try {
-        scl::Real strength = scl::Real(0);
+        auto strength = scl::Real(0);
         scl::kernel::spatial_pattern::spatial_gradient(
             reinterpret_cast<const scl::Real*>(expression),
             reinterpret_cast<const scl::Real*>(coordinates),
@@ -204,7 +203,6 @@ scl_error_t scl_spatial_pattern_autocorrelation(
 
     try {
         auto* sparse = static_cast<scl_sparse_matrix*>(expression);
-        scl::Index n_genes = sparse->cols();
 
         sparse->visit([&](auto& m) {
             scl::kernel::spatial_pattern::spatial_autocorrelation(

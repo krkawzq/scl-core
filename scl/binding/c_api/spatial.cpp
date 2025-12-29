@@ -20,7 +20,7 @@ scl_error_t scl_spatial_weight_sum(
 
     try {
         auto* sparse = static_cast<scl_sparse_matrix*>(graph);
-        scl::Real sum = scl::Real(0);
+        auto sum = scl::Real(0);
 
         sparse->visit([&](auto& m) {
             scl::kernel::spatial::weight_sum(m, sum);
