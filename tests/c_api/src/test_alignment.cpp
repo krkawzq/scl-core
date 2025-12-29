@@ -25,9 +25,18 @@ extern "C" {
 
 using namespace scl::test;
 
+// Helper: Convert Eigen CSR to Sparse guard
+static Sparse eigen_to_sparse(const EigenCSR& eigen_mat) {
+    auto arrays = from_eigen_csr(eigen_mat);
+    return make_sparse_csr(
+        arrays.rows, arrays.cols, arrays.nnz,
+        arrays.indptr.data(), arrays.indices.data(), arrays.data.data()
+    );
+}
+
 // Helper: Create small dataset for alignment tests
 static Sparse make_small_dataset(scl_index_t n_cells, scl_index_t n_genes, Random& rng) {
-    return random_sparse_csr(n_cells, n_genes, 0.3, rng);
+    return eigen_to_sparse(random_sparse_csr(n_cells, n_genes, 0.3, rng));
 }
 
 SCL_TEST_BEGIN
@@ -255,7 +264,7 @@ SCL_TEST_CASE(integration_score_basic) {
     Random rng(42);
 
     auto integrated_data = make_small_dataset(50, 100, rng);
-    auto neighbors = random_sparse_csr(50, 50, 0.2, rng);
+    auto neighbors = eigen_to_sparse(random_sparse_csr(50, 50, 0.2, rng));
 
     std::vector<scl_index_t> batch_labels(50);
     for (scl_index_t i = 0; i < 50; ++i) {
@@ -279,7 +288,7 @@ SCL_TEST_CASE(integration_score_basic) {
 SCL_TEST_CASE(batch_mixing_basic) {
     Random rng(123);
 
-    auto neighbors = random_sparse_csr(40, 40, 0.25, rng);
+    auto neighbors = eigen_to_sparse(random_sparse_csr(40, 40, 0.25, rng));
 
     std::vector<scl_index_t> batch_labels(40);
     for (scl_index_t i = 0; i < 40; ++i) {
@@ -303,7 +312,7 @@ SCL_TEST_CASE(batch_mixing_basic) {
 SCL_TEST_CASE(kbet_score_basic) {
     Random rng(456);
 
-    auto neighbors = random_sparse_csr(30, 30, 0.3, rng);
+    auto neighbors = eigen_to_sparse(random_sparse_csr(30, 30, 0.3, rng));
 
     std::vector<scl_index_t> batch_labels(30);
     for (scl_index_t i = 0; i < 30; ++i) {
@@ -327,7 +336,7 @@ SCL_TEST_CASE(kbet_score_basic) {
 SCL_TEST_CASE(integration_quality_null_checks) {
     Random rng(42);
     auto data = make_small_dataset(20, 30, rng);
-    auto neighbors = random_sparse_csr(20, 20, 0.2, rng);
+    auto neighbors = eigen_to_sparse(random_sparse_csr(20, 20, 0.2, rng));
     std::vector<scl_index_t> labels(20, 0);
     scl_real_t score = 0.0;
 
@@ -536,8 +545,8 @@ SCL_TEST_RETRY(mnn_random_datasets, 3) {
     // Make sure they have same number of genes
     scl_index_t n_genes = std::min(n_genes1, n_genes2);
 
-    auto data1 = random_sparse_csr(n1, n_genes, 0.15, rng);
-    auto data2 = random_sparse_csr(n2, n_genes, 0.15, rng);
+    auto data1 = eigen_to_sparse(random_sparse_csr(n1, n_genes, 0.15, rng));
+    auto data2 = eigen_to_sparse(random_sparse_csr(n2, n_genes, 0.15, rng));
 
     std::vector<scl_index_t> mnn1(200), mnn2(200);
     scl_size_t n_pairs = 0;

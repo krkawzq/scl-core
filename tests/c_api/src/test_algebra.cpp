@@ -28,6 +28,15 @@ extern "C" {
 
 using namespace scl::test;
 
+// Helper: Convert Eigen CSR to Sparse guard
+static Sparse eigen_to_sparse(const EigenCSR& eigen_mat) {
+    auto arrays = from_eigen_csr(eigen_mat);
+    return make_sparse_csr(
+        arrays.rows, arrays.cols, arrays.nnz,
+        arrays.indptr.data(), arrays.indices.data(), arrays.data.data()
+    );
+}
+
 // Helper: Create 3x3 test matrix (CSR)
 static Sparse make_test_matrix_3x3() {
     // [1.0, 0.0, 2.0]
@@ -501,11 +510,9 @@ SCL_TEST_CASE(scale_rows_basic) {
     std::vector<scl_index_t> result_indices(nnz);
     std::vector<scl_index_t> result_indptr(4);
 
-    scl_bool_t is_csr;
     scl_sparse_export(
         mat,
-        result_indptr.data(), result_indices.data(), result_data.data(),
-        &is_csr
+        result_indptr.data(), result_indices.data(), result_data.data()
     );
 
     // Row 0 scaled by 2.0: [2.0, 4.0]
@@ -576,7 +583,7 @@ SCL_TEST_RETRY(spmv_random_test, 3) {
     Random rng(42);
 
     auto [rows, cols] = random_shape(10, 50, rng);
-    auto mat = random_sparse_csr(rows, cols, 0.1, rng);
+    auto mat = eigen_to_sparse(random_sparse_csr(rows, cols, 0.1, rng));
 
     std::vector<scl_real_t> x(cols);
     std::vector<scl_real_t> y(rows, 0.0);
@@ -597,7 +604,7 @@ SCL_TEST_RETRY(row_operations_random, 3) {
     Random rng(123);
 
     auto [rows, cols] = random_shape(20, 100, rng);
-    auto mat = random_sparse_csr(rows, cols, 0.05, rng);
+    auto mat = eigen_to_sparse(random_sparse_csr(rows, cols, 0.05, rng));
 
     std::vector<scl_real_t> norms(rows);
     std::vector<scl_real_t> sums(rows);

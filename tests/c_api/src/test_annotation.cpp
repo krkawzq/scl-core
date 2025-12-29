@@ -28,9 +28,18 @@ extern "C" {
 
 using namespace scl::test;
 
+// Helper: Convert Eigen CSR to Sparse guard
+static Sparse eigen_to_sparse(const EigenCSR& eigen_mat) {
+    auto arrays = from_eigen_csr(eigen_mat);
+    return make_sparse_csr(
+        arrays.rows, arrays.cols, arrays.nnz,
+        arrays.indptr.data(), arrays.indices.data(), arrays.data.data()
+    );
+}
+
 // Helper: Create small expression dataset
 static Sparse make_expression_data(scl_index_t n_cells, scl_index_t n_genes, Random& rng) {
-    return random_sparse_csr(n_cells, n_genes, 0.2, rng);
+    return eigen_to_sparse(random_sparse_csr(n_cells, n_genes, 0.2, rng));
 }
 
 SCL_TEST_BEGIN
