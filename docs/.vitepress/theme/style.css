@@ -1,0 +1,197 @@
+/* Custom theme variables */
+:root {
+  --vp-c-brand-1: #5b8def;
+  --vp-c-brand-2: #3a6bc9;
+  --vp-c-brand-3: #2952a3;
+  --vp-c-brand-soft: rgba(91, 141, 239, 0.14);
+
+  /* API documentation colors */
+  --api-bg: var(--vp-c-bg-soft);
+  --api-border: var(--vp-c-divider);
+  --api-type-color: #5b8def;
+  --api-param-in: #22c55e;
+  --api-param-out: #f59e0b;
+  --api-param-inout: #8b5cf6;
+}
+
+.dark {
+  --api-type-color: #7aa2f7;
+  --api-param-in: #4ade80;
+  --api-param-out: #fbbf24;
+  --api-param-inout: #a78bfa;
+}
+
+/* API Signature component */
+.api-signature {
+  background: var(--api-bg);
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  overflow-x: auto;
+}
+
+.api-signature pre {
+  margin: 0;
+  background: transparent;
+}
+
+.api-signature code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.api-signature .type {
+  color: var(--api-type-color);
+}
+
+.api-signature .fn-name {
+  color: var(--vp-c-text-1);
+  font-weight: 600;
+}
+
+.api-signature .param-name {
+  color: var(--vp-c-text-2);
+}
+
+/* Parameter Table */
+.param-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 14px;
+}
+
+.param-table th,
+.param-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--api-border);
+}
+
+.param-table th {
+  background: var(--api-bg);
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+}
+
+.param-table td:first-child {
+  font-family: var(--vp-font-family-mono);
+  font-weight: 500;
+}
+
+.param-table .dir-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.param-table .dir-in {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--api-param-in);
+}
+
+.param-table .dir-out {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--api-param-out);
+}
+
+.param-table .dir-inout {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--api-param-inout);
+}
+
+/* Algorithm Card */
+.algo-card {
+  background: var(--api-bg);
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  padding: 20px;
+  margin: 16px 0;
+}
+
+.algo-card-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--vp-c-text-1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.algo-card-title::before {
+  content: '📐';
+}
+
+.algo-card-content {
+  color: var(--vp-c-text-2);
+  line-height: 1.7;
+}
+
+.algo-card-content .math {
+  margin: 12px 0;
+  padding: 12px;
+  background: var(--vp-c-bg);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+/* Complexity Badge */
+.complexity-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--vp-font-family-mono);
+  background: var(--api-bg);
+  border: 1px solid var(--api-border);
+}
+
+.complexity-badge.time::before {
+  content: '⏱️';
+}
+
+.complexity-badge.space::before {
+  content: '💾';
+}
+
+/* Source Link */
+.source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--vp-c-text-3);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.source-link:hover {
+  color: var(--vp-c-brand-1);
+}
+
+.source-link::before {
+  content: '📄';
+}
+
+/* Utility classes */
+.required {
+  color: #ef4444;
+}
+
+.optional {
+  color: var(--vp-c-text-3);
+  font-style: italic;
+}
+
+.deprecated {
+  text-decoration: line-through;
+  opacity: 0.6;
+}

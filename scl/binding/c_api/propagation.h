@@ -6,7 +6,7 @@
 // =============================================================================
 
 #include "scl/binding/c_api/core/core.h"
-#include <cstdint>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {

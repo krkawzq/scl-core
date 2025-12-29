@@ -152,20 +152,37 @@ class CtypesMapper:
 
         # Handle SCL handle types specially
         # scl_sparse_t is typedef scl_sparse_matrix*, so it's already a pointer
+        # Therefore:
+        #   scl_sparse_t   -> c_void_p           (already a pointer)
+        #   scl_sparse_t*  -> POINTER(c_void_p)  (pointer to pointer)
+        #   scl_sparse_t** -> POINTER(POINTER(c_void_p))
         if base_type in SCL_HANDLE_TYPES:
             if base_type.endswith("_t"):
-                # scl_sparse_t, scl_dense_t - these are already pointer typedefs
-                result = "POINTER(c_void_p)"
-                # Add additional pointer levels
-                for _ in range(expr.pointer_depth):
-                    result = f"POINTER({result})"
-                return result
+                # scl_sparse_t, scl_dense_t - these are pointer typedefs
+                # The handle itself is c_void_p
+                if expr.pointer_depth == 0:
+                    return "c_void_p"
+                else:
+                    # pointer_depth >= 1
+                    result = "c_void_p"
+                    for _ in range(expr.pointer_depth):
+                        result = f"POINTER({result})"
+                    return result
             else:
                 # scl_sparse_matrix, scl_dense_matrix - raw struct types
-                result = "c_void_p"
-                for _ in range(expr.pointer_depth):
-                    result = f"POINTER({result})"
-                return result
+                # A pointer to struct is c_void_p (opaque)
+                if expr.pointer_depth == 0:
+                    # Raw struct - shouldn't happen in FFI, but handle it
+                    return "c_void_p"
+                elif expr.pointer_depth == 1:
+                    # struct* -> c_void_p
+                    return "c_void_p"
+                else:
+                    # struct** -> POINTER(c_void_p), etc.
+                    result = "c_void_p"
+                    for _ in range(expr.pointer_depth - 1):
+                        result = f"POINTER({result})"
+                    return result
 
         # Apply pointer depth
         result = ctypes_base

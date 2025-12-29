@@ -7,7 +7,9 @@ struct definitions, enums, and typedefs.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Optional, Iterator
 
@@ -36,6 +38,41 @@ from .c_types import (
     ParsedHeader,
     SourceLocation,
 )
+
+
+def _find_system_includes() -> list[str]:
+    """Find system include paths by querying clang."""
+    try:
+        result = subprocess.run(
+            ["clang", "-E", "-x", "c", "/dev/null", "-v"],
+            capture_output=True,
+            text=True,
+        )
+        output = result.stderr
+
+        # Parse include paths from clang output
+        paths = []
+        in_includes = False
+        for line in output.split("\n"):
+            if "#include <...> search starts here:" in line:
+                in_includes = True
+                continue
+            if "End of search list" in line:
+                break
+            if in_includes and line.startswith(" "):
+                path = line.strip()
+                if os.path.isdir(path):
+                    paths.append(path)
+        return paths
+    except (subprocess.SubprocessError, FileNotFoundError):
+        # Fallback to common paths
+        fallbacks = [
+            "/usr/include",
+            "/usr/local/include",
+            "/usr/include/x86_64-linux-gnu",
+            "/usr/lib/llvm-14/lib/clang/14.0.0/include",
+        ]
+        return [p for p in fallbacks if os.path.isdir(p)]
 
 
 class ClangParser:
@@ -72,12 +109,17 @@ class ClangParser:
         self.include_dirs = include_dirs or []
         self.defines = defines or {}
         self.clang_args = clang_args or []
+        self._system_includes = _find_system_includes()
 
         self._index = Index.create()
 
     def _build_args(self) -> list[str]:
         """Build clang argument list."""
         args = ["-x", "c", "-std=c99"]
+
+        # Add system include directories
+        for inc in self._system_includes:
+            args.append(f"-isystem{inc}")
 
         # Add include directories
         for inc in self.include_dirs:

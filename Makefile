@@ -3,6 +3,7 @@
 # Config
 
 PYTHON := python3
+VENV_PYTHON := .venv/bin/python
 PIP := $(PYTHON) -m pip
 CMAKE_BUILD_DIR := build/cmake
 INSTALL_DIR := python/scl/libs
@@ -201,10 +202,10 @@ codegen: codegen-python codegen-docs
 
 codegen-python:
 	@echo "Generating Python ctypes bindings..."
-	@$(PYTHON) -m codegen python-bindings -v
+	@$(VENV_PYTHON) -m codegen -v --overwrite python-bindings
 	@echo "Python bindings generated"
 
 codegen-docs:
 	@echo "Generating C API documentation skeletons..."
-	@$(PYTHON) -m codegen c-api-docs -v
+	@$(VENV_PYTHON) -m codegen -v c-api-docs
 	@echo "C API documentation skeletons generated"
