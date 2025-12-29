@@ -9,8 +9,6 @@
 #include "scl/core/algo.hpp"
 #include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
-#include "scl/threading/scheduler.hpp"
 
 #include <cmath>
 
@@ -274,7 +272,7 @@ void sparse_matvec(
         // CSR: parallel over rows
         const Index n_rows = X.rows();
         
-        scl::threading::parallel_for(Size(0), static_cast<Size>(n_rows), [&](size_t i) {
+        scl::threading::parallel_for(Size(0), static_cast<Size>(n_rows), [&](Size i) {
             const Index idx = static_cast<Index>(i);
             const Index len = X.primary_length_unsafe(idx);
             if (len == 0) return;
@@ -355,9 +353,12 @@ Real estimate_lipschitz_constant(
     const Size n_rows_sz = static_cast<Size>(n_rows);
     
     // Power iteration to estimate largest singular value
-    Real* v = scl::memory::aligned_alloc<Real>(n_cols_sz, SCL_ALIGNMENT);
-    Real* u = scl::memory::aligned_alloc<Real>(n_rows_sz, SCL_ALIGNMENT);
-    Real* Xv = scl::memory::aligned_alloc<Real>(n_rows_sz, SCL_ALIGNMENT);
+    auto v_ptr = scl::memory::aligned_alloc<Real>(n_cols_sz, SCL_ALIGNMENT);
+    auto u_ptr = scl::memory::aligned_alloc<Real>(n_rows_sz, SCL_ALIGNMENT);
+    auto Xv_ptr = scl::memory::aligned_alloc<Real>(n_rows_sz, SCL_ALIGNMENT);
+    Real* v = v_ptr.release();
+    Real* u = u_ptr.release();
+    Real* Xv = Xv_ptr.release();
     
     // Initialize v randomly
     for (Size i = 0; i < n_cols_sz; ++i) {
@@ -432,8 +433,9 @@ void prox_l1(Array<Real> x, Real lambda) {
     const Size n = x.len;
     
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::Lanes(d);
+    using SimdTag = s::SimdTagFor<Real>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
     
     const auto v_lambda = s::Set(d, lambda);
     const auto v_neg_lambda = s::Set(d, -lambda);
@@ -468,8 +470,9 @@ void prox_elastic_net(Array<Real> x, Real lambda, Real l1_ratio) {
     const Size n = x.len;
     
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::Lanes(d);
+    using SimdTag = s::SimdTagFor<Real>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
     
     const auto v_l1_lambda = s::Set(d, l1_lambda);
     const auto v_neg_l1_lambda = s::Set(d, -l1_lambda);
@@ -529,20 +532,20 @@ void lasso_coordinate_descent(
     scl::algo::zero(coefficients.ptr, n_features_sz);
     
     // Allocate residuals: r = y - X * coef (initially r = y)
-    Real* residuals = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto col_norms_sq_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    Real* residuals = residuals_ptr.release();
+    Real* col_norms_sq = col_norms_sq_ptr.release();
+    Real* coef_old = coef_old_ptr.release();
+    
     scl::algo::copy(y.ptr, residuals, n_samples_sz);
     
     // Precompute column squared norms (X[:, j]^T * X[:, j])
-    Real* col_norms_sq = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    
     for (Size j = 0; j < n_features_sz; ++j) {
         col_norms_sq[j] = static_cast<Real>(detail::column_squared_norm(X, static_cast<Index>(j)));
     }
     
-    // Old coefficients for convergence check
-    Real* coef_old = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    
-    const Real n_inv = Real(1.0) / static_cast<Real>(n_samples);
     const Real lambda = alpha * static_cast<Real>(n_samples);
     
     for (Index iter = 0; iter < max_iter; ++iter) {
@@ -608,15 +611,18 @@ void elastic_net_coordinate_descent(
     
     scl::algo::zero(coefficients.ptr, n_features_sz);
     
-    Real* residuals = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto col_norms_sq_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    Real* residuals = residuals_ptr.release();
+    Real* col_norms_sq = col_norms_sq_ptr.release();
+    Real* coef_old = coef_old_ptr.release();
+    
     scl::algo::copy(y.ptr, residuals, n_samples_sz);
     
-    Real* col_norms_sq = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
     for (Size j = 0; j < n_features_sz; ++j) {
         col_norms_sq[j] = static_cast<Real>(detail::column_squared_norm(X, static_cast<Index>(j)));
     }
-    
-    Real* coef_old = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
     
     const Real n_samples_real = static_cast<Real>(n_samples);
     const Real l1_lambda = alpha * l1_ratio * n_samples_real;
@@ -682,9 +688,12 @@ void proximal_gradient(
     Real L = detail::estimate_lipschitz_constant(X);
     Real step_size = Real(1.0) / L;
     
-    Real* residuals = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
-    Real* gradient = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* coef_old = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto gradient_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    Real* residuals = residuals_ptr.release();
+    Real* gradient = gradient_ptr.release();
+    Real* coef_old = coef_old_ptr.release();
     
     for (Index iter = 0; iter < max_iter; ++iter) {
         scl::algo::copy(coefficients.ptr, coef_old, n_features_sz);
@@ -788,10 +797,14 @@ void fista(
     Real L = detail::estimate_lipschitz_constant(X);
     Real step_size = Real(1.0) / L;
     
-    Real* residuals = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
-    Real* gradient = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* coef_old = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* z = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);  // Momentum term
+    auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto gradient_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto z_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    Real* residuals = residuals_ptr.release();
+    Real* gradient = gradient_ptr.release();
+    Real* coef_old = coef_old_ptr.release();
+    Real* z = z_ptr.release();  // Momentum term
     
     scl::algo::zero(z, n_features_sz);
     
@@ -883,10 +896,14 @@ void iht(
     Real L = detail::estimate_lipschitz_constant(X);
     Real step_size = Real(1.0) / L;
     
-    Real* residuals = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
-    Real* gradient = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* abs_coef = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Index* sorted_idx = scl::memory::aligned_alloc<Index>(n_features_sz, SCL_ALIGNMENT);
+    auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto gradient_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto abs_coef_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(n_features_sz, SCL_ALIGNMENT);
+    Real* residuals = residuals_ptr.release();
+    Real* gradient = gradient_ptr.release();
+    Real* abs_coef = abs_coef_ptr.release();
+    Index* sorted_idx = sorted_idx_ptr.release();
     
     for (Index iter = 0; iter < max_iter; ++iter) {
         // Compute residuals: r = X * coef - y
@@ -964,7 +981,8 @@ void lasso_path(
     const Size n_features_sz = static_cast<Size>(n_features);
     
     // Warm start from previous solution
-    Real* current_coef = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto current_coef_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    Real* current_coef = current_coef_ptr.release();
     scl::algo::zero(current_coef, n_features_sz);
     
     for (Index a = 0; a < n_alphas; ++a) {
@@ -1007,10 +1025,12 @@ void group_lasso(
     
     scl::algo::zero(coefficients.ptr, n_features_sz);
     
-    Real* residuals = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
-    scl::algo::copy(y.ptr, residuals, n_samples_sz);
+    auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    Real* residuals = residuals_ptr.release();
+    Real* coef_old = coef_old_ptr.release();
     
-    Real* coef_old = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    scl::algo::copy(y.ptr, residuals, n_samples_sz);
     
     for (Index iter = 0; iter < max_iter; ++iter) {
         scl::algo::copy(coefficients.ptr, coef_old, n_features_sz);
@@ -1023,8 +1043,10 @@ void group_lasso(
             if (group_size == 0) continue;
             
             // Compute group gradient
-            Real* group_grad = scl::memory::aligned_alloc<Real>(group_size, SCL_ALIGNMENT);
-            Real* group_coef = scl::memory::aligned_alloc<Real>(group_size, SCL_ALIGNMENT);
+            auto group_grad_ptr = scl::memory::aligned_alloc<Real>(group_size, SCL_ALIGNMENT);
+            auto group_coef_ptr = scl::memory::aligned_alloc<Real>(group_size, SCL_ALIGNMENT);
+            Real* group_grad = group_grad_ptr.release();
+            Real* group_coef = group_coef_ptr.release();
             
             for (Size j = 0; j < group_size; ++j) {
                 Index feat_idx = group_indices[group_start + j];
@@ -1109,11 +1131,16 @@ void sparse_logistic_regression(
     Real intercept = Real(0);
     
     // Working response and weights
-    Real* linear_pred = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
-    Real* prob = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
-    Real* weights = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
-    Real* working_response = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
-    Real* coef_old = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    auto linear_pred_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto prob_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto weights_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto working_response_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
+    auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
+    Real* linear_pred = linear_pred_ptr.release();
+    Real* prob = prob_ptr.release();
+    Real* weights = weights_ptr.release();
+    Real* working_response = working_response_ptr.release();
+    Real* coef_old = coef_old_ptr.release();
     
     scl::algo::zero(linear_pred, n_samples_sz);
     

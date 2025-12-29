@@ -54,7 +54,7 @@ SCL_FORCE_INLINE Index binary_search_gene(
     return -1;
 }
 
-// Chi-squared test statistic for contingency table
+    // Chi-squared test statistic for contingency table
 SCL_FORCE_INLINE Real chi_squared_stat(
     const Size* observed,
     const Real* expected,
@@ -88,9 +88,13 @@ SCL_FORCE_INLINE Real fisher_pvalue_approx(
     Real exp_c = row2 * col1 / total_r;
     Real exp_d = row2 * col2 / total_r;
 
+    // PERFORMANCE: Small fixed-size arrays for 2x2 contingency table
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     Size obs[4] = {a, b, c, d};
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     Real exp[4] = {exp_a, exp_b, exp_c, exp_d};
 
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     Real chi2 = chi_squared_stat(obs, exp, 4);
 
     // P-value from chi-squared distribution with 1 df
@@ -117,9 +121,12 @@ SCL_FORCE_INLINE Real wilcoxon_pvalue(
     }
 
     Size n_total = n1 + n2;
-    Real* combined = scl::memory::aligned_alloc<Real>(n_total, SCL_ALIGNMENT);
-    Index* indices = scl::memory::aligned_alloc<Index>(n_total, SCL_ALIGNMENT);
-    Real* ranks = scl::memory::aligned_alloc<Real>(n_total, SCL_ALIGNMENT);
+    auto combined_ptr = scl::memory::aligned_alloc<Real>(n_total, SCL_ALIGNMENT);
+    auto indices_ptr = scl::memory::aligned_alloc<Index>(n_total, SCL_ALIGNMENT);
+    auto ranks_ptr = scl::memory::aligned_alloc<Real>(n_total, SCL_ALIGNMENT);
+    Real* combined = combined_ptr.release();
+    Index* indices = indices_ptr.release();
+    Real* ranks = ranks_ptr.release();
 
     // Combine groups
     scl::algo::copy(group1, combined, n1);
@@ -161,8 +168,8 @@ SCL_FORCE_INLINE Real wilcoxon_pvalue(
 
     // Compute rank sum for group 1
     Real W = Real(0.0);
-    for (Size i = 0; i < n1; ++i) {
-        W += ranks[i];
+    for (Size idx = 0; idx < n1; ++idx) {
+        W += ranks[idx];
     }
 
     // Expected value and variance under null
@@ -206,8 +213,10 @@ void composition_analysis(
     if (n_cells == 0 || n_types == 0 || n_conditions == 0) return;
 
     // Count cells per type per condition
-    Size* counts = scl::memory::aligned_alloc<Size>(n_types * n_conditions, SCL_ALIGNMENT);
-    Size* total_per_condition = scl::memory::aligned_alloc<Size>(n_conditions, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_types * n_conditions, SCL_ALIGNMENT);
+    auto total_per_condition_ptr = scl::memory::aligned_alloc<Size>(n_conditions, SCL_ALIGNMENT);
+    Size* counts = counts_ptr.release();
+    Size* total_per_condition = total_per_condition_ptr.release();
 
     scl::algo::zero(counts, n_types * n_conditions);
     scl::algo::zero(total_per_condition, n_conditions);
@@ -222,14 +231,17 @@ void composition_analysis(
     }
 
     // Compute proportions (parallel over types)
-    scl::threading::parallel_for(Size(0), n_types, [&](size_t t) {
+    scl::threading::parallel_for(Size(0), n_types, [&](Size t) {
         for (Size c = 0; c < n_conditions; ++c) {
             if (total_per_condition[c] > 0) {
-                proportions[t * n_conditions + c] =
+                // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+                // PERFORMANCE: Safe narrowing - t and c are bounded and fit in Index
+                proportions[static_cast<Index>(t) * static_cast<Index>(n_conditions) + static_cast<Index>(c)] =
                     static_cast<Real>(counts[t * n_conditions + c]) /
                     static_cast<Real>(total_per_condition[c]);
             } else {
-                proportions[t * n_conditions + c] = Real(0.0);
+                // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+                proportions[static_cast<Index>(t) * static_cast<Index>(n_conditions) + static_cast<Index>(c)] = Real(0.0);
             }
         }
     });
@@ -237,19 +249,21 @@ void composition_analysis(
     // Chi-squared test for each cell type (parallel)
     Real total_r = static_cast<Real>(n_cells);
 
-    scl::threading::parallel_for(Size(0), n_types, [&](size_t t) {
+    scl::threading::parallel_for(Size(0), n_types, [&](Size t) {
         Size total_type = 0;
         for (Size c = 0; c < n_conditions; ++c) {
             total_type += counts[t * n_conditions + c];
         }
 
         if (total_type == 0) {
-            p_values[t] = Real(1.0);
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            p_values[static_cast<Index>(t)] = Real(1.0);
             return;
         }
 
         // Expected counts under uniform distribution
-        Real* expected = scl::memory::aligned_alloc<Real>(n_conditions, SCL_ALIGNMENT);
+        auto expected_ptr = scl::memory::aligned_alloc<Real>(n_conditions, SCL_ALIGNMENT);
+        Real* expected = expected_ptr.release();
 
         for (Size c = 0; c < n_conditions; ++c) {
             expected[c] = static_cast<Real>(total_type) *
@@ -268,9 +282,11 @@ void composition_analysis(
             Real normal_z = (z - mean) / std_dev;
             Real p = Real(1.0) - Real(0.5) * (Real(1.0) +
                 std::erf(normal_z / std::sqrt(Real(2.0))));
-            p_values[t] = p;
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            p_values[static_cast<Index>(t)] = p;
         } else {
-            p_values[t] = Real(1.0);
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            p_values[static_cast<Index>(t)] = Real(1.0);
         }
 
         scl::memory::aligned_free(expected);
@@ -309,16 +325,20 @@ void abundance_test(
         "P-values array too small");
 
     if (n_conds < 2) {
-        scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](size_t c) {
-            fold_changes.ptr[c] = Real(1.0);
-            p_values.ptr[c] = Real(1.0);
+        scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](Size c) {
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            fold_changes.ptr[static_cast<Index>(c)] = Real(1.0);
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            p_values.ptr[static_cast<Index>(c)] = Real(1.0);
         });
         return;
     }
 
     // Count cells per cluster per condition
-    Size* counts = scl::memory::aligned_alloc<Size>(n_clusters * n_conds, SCL_ALIGNMENT);
-    Size* total_per_cond = scl::memory::aligned_alloc<Size>(n_conds, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_clusters * n_conds, SCL_ALIGNMENT);
+    auto total_per_cond_ptr = scl::memory::aligned_alloc<Size>(n_conds, SCL_ALIGNMENT);
+    Size* counts = counts_ptr.release();
+    Size* total_per_cond = total_per_cond_ptr.release();
 
     scl::algo::zero(counts, static_cast<Size>(n_clusters * n_conds));
     scl::algo::zero(total_per_cond, static_cast<Size>(n_conds));
@@ -331,7 +351,7 @@ void abundance_test(
     }
 
     // Compare condition 0 vs condition 1 (parallel over clusters)
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](size_t c) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](Size c) {
         Real prop0 = Real(0.0), prop1 = Real(0.0);
 
         if (total_per_cond[0] > 0) {
@@ -344,12 +364,14 @@ void abundance_test(
         }
 
         // Fold change
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto c_idx = static_cast<Index>(c);
         if (prop0 > config::EPSILON) {
-            fold_changes.ptr[c] = prop1 / prop0;
+            fold_changes.ptr[c_idx] = prop1 / prop0;
         } else if (prop1 > config::EPSILON) {
-            fold_changes.ptr[c] = std::numeric_limits<Real>::infinity();
+            fold_changes.ptr[c_idx] = std::numeric_limits<Real>::infinity();
         } else {
-            fold_changes.ptr[c] = Real(1.0);
+            fold_changes.ptr[c_idx] = Real(1.0);
         }
 
         // Fisher's exact test
@@ -358,7 +380,7 @@ void abundance_test(
         Size c_val = total_per_cond[0] - a;
         Size d = total_per_cond[1] - b;
 
-        p_values.ptr[c] = detail::fisher_pvalue_approx(a, b, c_val, d);
+        p_values.ptr[c_idx] = detail::fisher_pvalue_approx(a, b, c_val, d);
     });
 
     scl::memory::aligned_free(counts);
@@ -397,15 +419,18 @@ void differential_abundance(
     SCL_CHECK_DIM(p_values.len >= static_cast<Size>(n_clusters), "P-values array too small");
 
     if (n_conds < 2 || n_samples < 2) {
-        scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](size_t c) {
-            da_scores.ptr[c] = Real(0.0);
-            p_values.ptr[c] = Real(1.0);
+        scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](Size c) {
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            da_scores.ptr[static_cast<Index>(c)] = Real(0.0);
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            p_values.ptr[static_cast<Index>(c)] = Real(1.0);
         });
         return;
     }
 
     // Map samples to conditions
-    Index* sample_to_cond = scl::memory::aligned_alloc<Index>(n_samples, SCL_ALIGNMENT);
+    auto sample_to_cond_ptr = scl::memory::aligned_alloc<Index>(n_samples, SCL_ALIGNMENT);
+    Index* sample_to_cond = sample_to_cond_ptr.release();
     scl::algo::fill(sample_to_cond, static_cast<Size>(n_samples), static_cast<Index>(-1));
 
     for (Size i = 0; i < n_cells; ++i) {
@@ -414,8 +439,10 @@ void differential_abundance(
     }
 
     // Count cells per cluster per sample
-    Size* counts = scl::memory::aligned_alloc<Size>(n_clusters * n_samples, SCL_ALIGNMENT);
-    Size* total_per_sample = scl::memory::aligned_alloc<Size>(n_samples, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_clusters * n_samples, SCL_ALIGNMENT);
+    auto total_per_sample_ptr = scl::memory::aligned_alloc<Size>(n_samples, SCL_ALIGNMENT);
+    Size* counts = counts_ptr.release();
+    Size* total_per_sample = total_per_sample_ptr.release();
 
     scl::algo::zero(counts, static_cast<Size>(n_clusters * n_samples));
     scl::algo::zero(total_per_sample, static_cast<Size>(n_samples));
@@ -428,14 +455,17 @@ void differential_abundance(
     }
 
     // Compute proportions per sample (parallel)
-    Real* props = scl::memory::aligned_alloc<Real>(n_clusters * n_samples, SCL_ALIGNMENT);
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](size_t c) {
+    auto props_ptr = scl::memory::aligned_alloc<Real>(n_clusters * n_samples, SCL_ALIGNMENT);
+    Real* props = props_ptr.release();
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](Size c) {
         for (Index s = 0; s < n_samples; ++s) {
             if (total_per_sample[s] > 0) {
-                props[c * n_samples + s] = static_cast<Real>(counts[c * n_samples + s]) /
+                // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+                props[static_cast<Index>(c) * n_samples + s] = static_cast<Real>(counts[c * n_samples + s]) /
                                           static_cast<Real>(total_per_sample[s]);
             } else {
-                props[c * n_samples + s] = Real(0.0);
+                // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+                props[static_cast<Index>(c) * n_samples + s] = Real(0.0);
             }
         }
     });
@@ -453,15 +483,18 @@ void differential_abundance(
     pool0.init(scl::threading::Scheduler::get_num_threads(), n_cond0);
     pool1.init(scl::threading::Scheduler::get_num_threads(), n_cond1);
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](size_t c, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](Size c, size_t thread_rank) {
         Real* group0 = pool0.get(thread_rank);
         Real* group1 = pool1.get(thread_rank);
 
         Size idx0 = 0, idx1 = 0;
         Real sum0 = Real(0.0), sum1 = Real(0.0);
 
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto c_idx = static_cast<Index>(c);
         for (Index s = 0; s < n_samples; ++s) {
-            Real prop = props[c * n_samples + s];
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            Real prop = props[c_idx * n_samples + s];
             if (sample_to_cond[s] == 0 && idx0 < n_cond0) {
                 group0[idx0++] = prop;
                 sum0 += prop;
@@ -476,17 +509,17 @@ void differential_abundance(
         Real mean1 = (idx1 > 0) ? sum1 / static_cast<Real>(idx1) : Real(0.0);
 
         if (mean0 > config::EPSILON && mean1 > config::EPSILON) {
-            da_scores.ptr[c] = std::log2(mean1 / mean0);
+            da_scores.ptr[c_idx] = std::log2(mean1 / mean0);
         } else if (mean1 > config::EPSILON) {
-            da_scores.ptr[c] = Real(10.0);
+            da_scores.ptr[c_idx] = Real(10.0);
         } else if (mean0 > config::EPSILON) {
-            da_scores.ptr[c] = Real(-10.0);
+            da_scores.ptr[c_idx] = Real(-10.0);
         } else {
-            da_scores.ptr[c] = Real(0.0);
+            da_scores.ptr[c_idx] = Real(0.0);
         }
 
         // Wilcoxon test
-        p_values.ptr[c] = detail::wilcoxon_pvalue(group0, idx0, group1, idx1);
+        p_values.ptr[c_idx] = detail::wilcoxon_pvalue(group0, idx0, group1, idx1);
     });
 
     scl::memory::aligned_free(sample_to_cond);
@@ -519,9 +552,11 @@ void condition_response(
     }
 
     if (n_conds < 2) {
-        scl::threading::parallel_for(Size(0), n_genes, [&](size_t g) {
-            response_scores[g] = Real(0.0);
-            p_values[g] = Real(1.0);
+        scl::threading::parallel_for(Size(0), n_genes, [&](Size g) {
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            response_scores[static_cast<Index>(g)] = Real(0.0);
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            p_values[static_cast<Index>(g)] = Real(1.0);
         });
         return;
     }
@@ -539,13 +574,15 @@ void condition_response(
     pool0.init(scl::threading::Scheduler::get_num_threads(), n_cond0);
     pool1.init(scl::threading::Scheduler::get_num_threads(), n_cond1);
 
-    scl::threading::parallel_for(Size(0), n_genes, [&](size_t g, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n_genes, [&](Size g, size_t thread_rank) {
         Real* group0 = pool0.get(thread_rank);
         Real* group1 = pool1.get(thread_rank);
 
         Size idx0 = 0, idx1 = 0;
         Real sum0 = Real(0.0), sum1 = Real(0.0);
 
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto g_idx = static_cast<Index>(g);
         // Gather expression values for this gene
         if constexpr (IsCSR) {
             // For CSR: iterate over cells and search for gene
@@ -558,7 +595,7 @@ void condition_response(
 
                 // Binary search for gene in sorted indices
                 Index pos = detail::binary_search_gene(
-                    row_idxs.ptr, 0, row_len, static_cast<Index>(g));
+                    row_idxs.ptr, 0, row_len, g_idx);
                 if (pos >= 0) {
                     val = static_cast<Real>(row_vals.ptr[pos]);
                 }
@@ -573,12 +610,13 @@ void condition_response(
             }
         } else {
             // For CSC: directly access column for gene
-            auto col_vals = expression.col_values_unsafe(static_cast<Index>(g));
-            auto col_idxs = expression.col_indices_unsafe(static_cast<Index>(g));
-            Index col_len = expression.col_length_unsafe(static_cast<Index>(g));
+            auto col_vals = expression.col_values_unsafe(g_idx);
+            auto col_idxs = expression.col_indices_unsafe(g_idx);
+            Index col_len = expression.col_length_unsafe(g_idx);
 
             // Create dense vector for this gene
-            Real* gene_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+            auto gene_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+            Real* gene_expr = gene_expr_ptr.release();
             scl::algo::zero(gene_expr, n_cells);
 
             for (Index k = 0; k < col_len; ++k) {
@@ -608,17 +646,17 @@ void condition_response(
         Real mean1 = (idx1 > 0) ? sum1 / static_cast<Real>(idx1) : Real(0.0);
 
         if (mean0 > config::EPSILON && mean1 > config::EPSILON) {
-            response_scores[g] = std::log2((mean1 + config::EPSILON) / (mean0 + config::EPSILON));
+            response_scores[g_idx] = std::log2((mean1 + config::EPSILON) / (mean0 + config::EPSILON));
         } else if (mean1 > config::EPSILON) {
-            response_scores[g] = Real(10.0);
+            response_scores[g_idx] = Real(10.0);
         } else if (mean0 > config::EPSILON) {
-            response_scores[g] = Real(-10.0);
+            response_scores[g_idx] = Real(-10.0);
         } else {
-            response_scores[g] = Real(0.0);
+            response_scores[g_idx] = Real(0.0);
         }
 
         // Wilcoxon test
-        p_values[g] = detail::wilcoxon_pvalue(group0, idx0, group1, idx1);
+        p_values[g_idx] = detail::wilcoxon_pvalue(group0, idx0, group1, idx1);
     });
 }
 
@@ -644,7 +682,7 @@ SCL_HOT void compute_mean_and_variance(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     // Pass 1: Compute sum for mean
     auto v_sum = s::Zero(d);
@@ -692,7 +730,10 @@ Real effect_size(
     if (n1 < 2 || n2 < 2) return Real(0.0);
 
     // Compute means and variances using SIMD
-    Real mean1, var1, mean2, var2;
+    Real mean1 = Real(0.0);
+    Real var1 = Real(0.0);
+    Real mean2 = Real(0.0);
+    Real var2 = Real(0.0);
     detail::compute_mean_and_variance(group1.ptr, n1, mean1, var1);
     detail::compute_mean_and_variance(group2.ptr, n2, mean2, var2);
 
@@ -722,7 +763,10 @@ Real glass_delta(
     if (n_control < 2 || n_treatment < 1) return Real(0.0);
 
     // Compute mean and variance using SIMD
-    Real mean_c, var_c, mean_t, var_t;
+    Real mean_c = Real(0.0);
+    Real var_c = Real(0.0);
+    Real mean_t = Real(0.0);
+    Real var_t = Real(0.0);
     detail::compute_mean_and_variance(control.ptr, n_control, mean_c, var_c);
     detail::compute_mean_and_variance(treatment.ptr, n_treatment, mean_t, var_t);
 

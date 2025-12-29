@@ -102,7 +102,7 @@ SCL_FORCE_INLINE void partition_two_groups_moments(
             Index sec_idx = indices[k + j];
             int32_t g = group_ids[sec_idx];
             T val = values[k + j];
-            double v = static_cast<double>(val);
+            auto v = static_cast<double>(val);
 
             if (SCL_LIKELY(g == 0)) {
                 buf1[n1++] = val;
@@ -120,7 +120,7 @@ SCL_FORCE_INLINE void partition_two_groups_moments(
         Index sec_idx = indices[k];
         int32_t g = group_ids[sec_idx];
         T val = values[k];
-        double v = static_cast<double>(val);
+        auto v = static_cast<double>(val);
 
         if (SCL_LIKELY(g == 0)) {
             buf1[n1++] = val;
@@ -220,7 +220,7 @@ SCL_FORCE_INLINE void partition_k_groups_moments(
 
             if (SCL_LIKELY(g >= 0 && static_cast<Size>(g) < n_groups)) {
                 T val = values[k + j];
-                double v = static_cast<double>(val);
+                auto v = static_cast<double>(val);
 
                 counts[g]++;
                 sums[g] += v;
@@ -235,7 +235,7 @@ SCL_FORCE_INLINE void partition_k_groups_moments(
 
         if (SCL_LIKELY(g >= 0 && static_cast<Size>(g) < n_groups)) {
             T val = values[k];
-            double v = static_cast<double>(val);
+            auto v = static_cast<double>(val);
 
             counts[g]++;
             sums[g] += v;

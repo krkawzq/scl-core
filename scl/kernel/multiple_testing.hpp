@@ -7,8 +7,6 @@
 #include "scl/core/sort.hpp"
 #include "scl/core/algo.hpp"
 #include "scl/core/vectorize.hpp"
-#include "scl/core/simd.hpp"
-#include "scl/threading/parallel_for.hpp"
 
 #include <cmath>
 
@@ -45,12 +43,15 @@ SCL_FORCE_INLINE void sort_indices_by_pvalue(
     if (n == 0) return;
 
     // Copy p-values to temporary array for sorting
-    Real* pvals_copy = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    scl::memory::copy_fast(p_values.ptr, pvals_copy, n * sizeof(Real));
+    auto pvals_copy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* pvals_copy = pvals_copy_ptr.release();
+    scl::memory::copy_fast(p_values, Array<Real>(pvals_copy, n));
 
     // Initialize indices
     for (Size i = 0; i < n; ++i) {
-        indices[i] = static_cast<Index>(i);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - i is bounded by array size and fits in Index
+        indices[static_cast<Index>(i)] = static_cast<Index>(i);
     }
 
     // Use SIMD-optimized sort_pairs (VQSort - 2-5x faster than std::sort)
@@ -100,7 +101,8 @@ SCL_FORCE_INLINE Real estimate_pi0_bootstrap(
     }
 
     // Compute pi0 estimates at each lambda
-    Real* pi0_estimates = scl::memory::aligned_alloc<Real>(n_lambda, SCL_ALIGNMENT);
+    auto pi0_estimates_ptr = scl::memory::aligned_alloc<Real>(n_lambda, SCL_ALIGNMENT);
+    Real* pi0_estimates = pi0_estimates_ptr.release();
 
     for (Size l = 0; l < n_lambda; ++l) {
         Size count_above = 0;
@@ -109,15 +111,19 @@ SCL_FORCE_INLINE Real estimate_pi0_bootstrap(
                 ++count_above;
             }
         }
-        pi0_estimates[l] = static_cast<Real>(count_above) /
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - l is bounded by n_lambda and fits in Index
+        pi0_estimates[static_cast<Index>(l)] = static_cast<Real>(count_above) /
                           (static_cast<Real>(n) * (Real(1.0) - lambda_grid[l]));
     }
 
     // Use spline smoothing (simplified: take minimum pi0 estimate)
     Real min_pi0 = pi0_estimates[0];
     for (Size l = 1; l < n_lambda; ++l) {
-        if (pi0_estimates[l] < min_pi0) {
-            min_pi0 = pi0_estimates[l];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        if (pi0_estimates[static_cast<Index>(l)] < min_pi0) {
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            min_pi0 = pi0_estimates[static_cast<Index>(l)];
         }
     }
 
@@ -209,7 +215,7 @@ SCL_FORCE_INLINE Real pvalue_to_zscore(Real p) {
 void benjamini_hochberg(
     Array<const Real> p_values,
     Array<Real> adjusted_p_values,
-    Real fdr_level
+    Real /* fdr_level */
 ) {
     SCL_CHECK_DIM(p_values.len == adjusted_p_values.len,
         "p_values and adjusted_p_values must have same length");
@@ -218,16 +224,21 @@ void benjamini_hochberg(
     if (n == 0) return;
 
     // Allocate working memory
-    Index* sorted_indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* sorted_pvalues = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* adjusted_sorted = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sorted_indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto sorted_pvalues_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto adjusted_sorted_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Index* sorted_indices = sorted_indices_ptr.release();
+    Real* sorted_pvalues = sorted_pvalues_ptr.release();
+    Real* adjusted_sorted = adjusted_sorted_ptr.release();
 
     // Sort indices by p-value
     detail::sort_indices_by_pvalue(p_values, sorted_indices);
 
     // Get sorted p-values
     for (Size i = 0; i < n; ++i) {
-        sorted_pvalues[i] = p_values.ptr[sorted_indices[i]];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - i and sorted_indices[i] are bounded and fit in Index
+        sorted_pvalues[static_cast<Index>(i)] = p_values.ptr[sorted_indices[static_cast<Index>(i)]];
     }
 
     // BH adjustment: p_adj[i] = p[i] * n / rank
@@ -236,19 +247,26 @@ void benjamini_hochberg(
 
     for (Size i = 0; i < n; ++i) {
         Real rank = static_cast<Real>(i + 1);
-        adjusted_sorted[i] = sorted_pvalues[i] * n_real / rank;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        adjusted_sorted[static_cast<Index>(i)] = sorted_pvalues[static_cast<Index>(i)] * n_real / rank;
     }
 
     // Enforce monotonicity: cumulative minimum from right to left
-    adjusted_sorted[n - 1] = scl::algo::min2(adjusted_sorted[n - 1], Real(1.0));
+    // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+    adjusted_sorted[static_cast<Index>(n - 1)] = scl::algo::min2(adjusted_sorted[static_cast<Index>(n - 1)], Real(1.0));
     for (Size i = n - 1; i > 0; --i) {
-        adjusted_sorted[i - 1] = scl::algo::min2(adjusted_sorted[i - 1], adjusted_sorted[i]);
-        adjusted_sorted[i - 1] = scl::algo::min2(adjusted_sorted[i - 1], Real(1.0));
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_idx = static_cast<Index>(i);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_minus_one_idx = static_cast<Index>(i - 1);
+        adjusted_sorted[i_minus_one_idx] = scl::algo::min2(adjusted_sorted[i_minus_one_idx], adjusted_sorted[i_idx]);
+        adjusted_sorted[i_minus_one_idx] = scl::algo::min2(adjusted_sorted[i_minus_one_idx], Real(1.0));
     }
 
     // Map back to original order
     for (Size i = 0; i < n; ++i) {
-        adjusted_p_values.ptr[sorted_indices[i]] = adjusted_sorted[i];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        adjusted_p_values.ptr[sorted_indices[static_cast<Index>(i)]] = adjusted_sorted[static_cast<Index>(i)];
     }
 
     scl::memory::aligned_free(sorted_indices);
@@ -272,11 +290,10 @@ void bonferroni(
 
     const Real n_real = static_cast<Real>(n);
 
-    // Copy p-values to adjusted array
-    scl::memory::copy_fast(p_values.ptr, adjusted_p_values.ptr, n * sizeof(Real));
-
-    // Use SIMD scale: multiply all by n
-    scl::vectorize::scale(adjusted_p_values, n_real);
+    // Copy p-values to adjusted array and scale by n
+    for (Size i = 0; i < n; ++i) {
+        adjusted_p_values.ptr[i] = p_values.ptr[i] * n_real;
+    }
 
     // Clamp all values to [0, 1.0] using SIMD
     scl::vectorize::clamp_max(adjusted_p_values, Real(1.0));
@@ -298,29 +315,38 @@ void storey_qvalue(
     if (n == 0) return;
 
     // Estimate pi0 (proportion of true nulls)
-    Real pi0;
+    Real pi0 = Real(1.0);
     if (n >= config::MIN_TESTS_FOR_STOREY) {
         // Use bootstrap method with lambda grid
         constexpr Size n_lambda = 20;
+        // PERFORMANCE: Small fixed-size array for lambda grid
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Real lambda_grid[n_lambda];
         for (Size l = 0; l < n_lambda; ++l) {
-            lambda_grid[l] = Real(0.05) + static_cast<Real>(l) * Real(0.05);
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            // PERFORMANCE: Safe narrowing - l is bounded by n_lambda and fits in Index
+            lambda_grid[static_cast<Index>(l)] = Real(0.05) + static_cast<Real>(l) * Real(0.05);
         }
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
         pi0 = detail::estimate_pi0_bootstrap(p_values, lambda_grid, n_lambda);
     } else {
         pi0 = detail::estimate_pi0(p_values, lambda);
     }
 
     // Allocate working memory
-    Index* sorted_indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* sorted_pvalues = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* q_sorted = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sorted_indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto sorted_pvalues_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto q_sorted_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Index* sorted_indices = sorted_indices_ptr.release();
+    Real* sorted_pvalues = sorted_pvalues_ptr.release();
+    Real* q_sorted = q_sorted_ptr.release();
 
     // Sort indices by p-value
     detail::sort_indices_by_pvalue(p_values, sorted_indices);
 
     for (Size i = 0; i < n; ++i) {
-        sorted_pvalues[i] = p_values.ptr[sorted_indices[i]];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        sorted_pvalues[static_cast<Index>(i)] = p_values.ptr[sorted_indices[static_cast<Index>(i)]];
     }
 
     // Compute q-values: q[i] = pi0 * n * p[i] / rank
@@ -328,19 +354,26 @@ void storey_qvalue(
 
     for (Size i = 0; i < n; ++i) {
         Real rank = static_cast<Real>(i + 1);
-        q_sorted[i] = pi0 * n_real * sorted_pvalues[i] / rank;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        q_sorted[static_cast<Index>(i)] = pi0 * n_real * sorted_pvalues[static_cast<Index>(i)] / rank;
     }
 
     // Enforce monotonicity from right to left
-    q_sorted[n - 1] = scl::algo::min2(q_sorted[n - 1], Real(1.0));
+    // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+    q_sorted[static_cast<Index>(n - 1)] = scl::algo::min2(q_sorted[static_cast<Index>(n - 1)], Real(1.0));
     for (Size i = n - 1; i > 0; --i) {
-        q_sorted[i - 1] = scl::algo::min2(q_sorted[i - 1], q_sorted[i]);
-        q_sorted[i - 1] = scl::algo::min2(q_sorted[i - 1], Real(1.0));
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_idx = static_cast<Index>(i);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_minus_one_idx = static_cast<Index>(i - 1);
+        q_sorted[i_minus_one_idx] = scl::algo::min2(q_sorted[i_minus_one_idx], q_sorted[i_idx]);
+        q_sorted[i_minus_one_idx] = scl::algo::min2(q_sorted[i_minus_one_idx], Real(1.0));
     }
 
     // Map back to original order
     for (Size i = 0; i < n; ++i) {
-        q_values.ptr[sorted_indices[i]] = q_sorted[i];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        q_values.ptr[sorted_indices[static_cast<Index>(i)]] = q_sorted[static_cast<Index>(i)];
     }
 
     scl::memory::aligned_free(sorted_indices);
@@ -363,32 +396,40 @@ void local_fdr(
     if (n == 0) return;
 
     // Transform p-values to z-scores
-    Real* z_scores = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto z_scores_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* z_scores = z_scores_ptr.release();
     for (Size i = 0; i < n; ++i) {
-        z_scores[i] = detail::pvalue_to_zscore(p_values.ptr[i]);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        z_scores[static_cast<Index>(i)] = detail::pvalue_to_zscore(p_values.ptr[i]);
     }
 
     // Find z-score range
     Real z_min = z_scores[0], z_max = z_scores[0];
     for (Size i = 1; i < n; ++i) {
-        if (z_scores[i] < z_min) z_min = z_scores[i];
-        if (z_scores[i] > z_max) z_max = z_scores[i];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        if (z_scores[static_cast<Index>(i)] < z_min) z_min = z_scores[static_cast<Index>(i)];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        if (z_scores[static_cast<Index>(i)] > z_max) z_max = z_scores[static_cast<Index>(i)];
     }
 
     // Compute bandwidth using Silverman's rule
-    Array<const Real> z_array = {z_scores, n};
+    Array<const Real> z_array(z_scores, n);
     Real bandwidth = detail::silverman_bandwidth(z_array);
     bandwidth = scl::algo::max2(bandwidth, Real(0.1));
 
     // Create evaluation grid
     constexpr Size n_grid = 200;
-    Real* grid = scl::memory::aligned_alloc<Real>(n_grid, SCL_ALIGNMENT);
-    Real* f_density = scl::memory::aligned_alloc<Real>(n_grid, SCL_ALIGNMENT);
-    Real* f0_density = scl::memory::aligned_alloc<Real>(n_grid, SCL_ALIGNMENT);
+    auto grid_ptr = scl::memory::aligned_alloc<Real>(n_grid, SCL_ALIGNMENT);
+    auto f_density_ptr = scl::memory::aligned_alloc<Real>(n_grid, SCL_ALIGNMENT);
+    auto f0_density_ptr = scl::memory::aligned_alloc<Real>(n_grid, SCL_ALIGNMENT);
+    Real* grid = grid_ptr.release();
+    Real* f_density = f_density_ptr.release();
+    Real* f0_density = f0_density_ptr.release();
 
     Real grid_step = (z_max - z_min + Real(2.0) * bandwidth) / static_cast<Real>(n_grid - 1);
     for (Size g = 0; g < n_grid; ++g) {
-        grid[g] = z_min - bandwidth + static_cast<Real>(g) * grid_step;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        grid[static_cast<Index>(g)] = z_min - bandwidth + static_cast<Real>(g) * grid_step;
     }
 
     // Estimate f(z) using KDE
@@ -396,7 +437,8 @@ void local_fdr(
 
     // f0(z) is standard normal density
     for (Size g = 0; g < n_grid; ++g) {
-        f0_density[g] = std::exp(-Real(0.5) * grid[g] * grid[g]) / std::sqrt(Real(2.0) * Real(3.14159265358979323846));
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        f0_density[static_cast<Index>(g)] = std::exp(-Real(0.5) * grid[static_cast<Index>(g)] * grid[static_cast<Index>(g)]) / std::sqrt(Real(2.0) * Real(3.14159265358979323846));
     }
 
     // Estimate pi0
@@ -404,12 +446,14 @@ void local_fdr(
 
     // Compute local FDR for each test by interpolation
     for (Size i = 0; i < n; ++i) {
-        Real z = z_scores[i];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        Real z = z_scores[static_cast<Index>(i)];
 
         // Find grid position
         Size g_low = 0;
         for (Size g = 0; g < n_grid - 1; ++g) {
-            if (grid[g + 1] > z) {
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            if (grid[static_cast<Index>(g + 1)] > z) {
                 g_low = g;
                 break;
             }
@@ -417,12 +461,15 @@ void local_fdr(
         }
 
         // Linear interpolation
-        Real t = (z - grid[g_low]) / grid_step;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        Real t = (z - grid[static_cast<Index>(g_low)]) / grid_step;
         t = scl::algo::max2(Real(0.0), scl::algo::min2(Real(1.0), t));
 
         Size g_high = scl::algo::min2(g_low + 1, n_grid - 1);
-        Real f_z = f_density[g_low] * (Real(1.0) - t) + f_density[g_high] * t;
-        Real f0_z = f0_density[g_low] * (Real(1.0) - t) + f0_density[g_high] * t;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        Real f_z = f_density[static_cast<Index>(g_low)] * (Real(1.0) - t) + f_density[static_cast<Index>(g_high)] * t;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        Real f0_z = f0_density[static_cast<Index>(g_low)] * (Real(1.0) - t) + f0_density[static_cast<Index>(g_high)] * t;
 
         // local FDR = pi0 * f0(z) / f(z)
         if (f_z > Real(1e-10)) {
@@ -456,13 +503,16 @@ void empirical_fdr(
     if (n == 0 || n_perms == 0) return;
 
     // Sort observed scores (descending, assuming higher = more significant)
-    Index* sorted_obs_indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* scores_copy = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sorted_obs_indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto scores_copy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Index* sorted_obs_indices = sorted_obs_indices_ptr.release();
+    Real* scores_copy = scores_copy_ptr.release();
 
     // Copy scores and initialize indices
-    scl::memory::copy_fast(observed_scores.ptr, scores_copy, n * sizeof(Real));
+    scl::memory::copy_fast(observed_scores, Array<Real>(scores_copy, n));
     for (Size i = 0; i < n; ++i) {
-        sorted_obs_indices[i] = static_cast<Index>(i);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        sorted_obs_indices[static_cast<Index>(i)] = static_cast<Index>(i);
     }
 
     // Use SIMD-optimized sort_pairs_descending (VQSort - 2-5x faster than std::sort)
@@ -472,10 +522,12 @@ void empirical_fdr(
     );
 
     // Count permutation discoveries at each threshold
-    Real* fdr_at_rank = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto fdr_at_rank_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* fdr_at_rank = fdr_at_rank_ptr.release();
 
     for (Size r = 0; r < n; ++r) {
-        Real threshold = scores_copy[r];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        Real threshold = scores_copy[static_cast<Index>(r)];
 
         // Count observed discoveries at this threshold
         Size obs_discoveries = r + 1;
@@ -494,17 +546,23 @@ void empirical_fdr(
         // Empirical FDR = (null_discoveries / n_perms) / obs_discoveries
         Real expected_null = static_cast<Real>(null_discoveries) / static_cast<Real>(n_perms);
         Real fdr_est = expected_null / static_cast<Real>(obs_discoveries);
-        fdr_at_rank[r] = scl::algo::min2(fdr_est, Real(1.0));
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        fdr_at_rank[static_cast<Index>(r)] = scl::algo::min2(fdr_est, Real(1.0));
     }
 
     // Enforce monotonicity (cumulative minimum from right to left)
     for (Size r = n - 1; r > 0; --r) {
-        fdr_at_rank[r - 1] = scl::algo::min2(fdr_at_rank[r - 1], fdr_at_rank[r]);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto r_idx = static_cast<Index>(r);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto r_minus_one_idx = static_cast<Index>(r - 1);
+        fdr_at_rank[r_minus_one_idx] = scl::algo::min2(fdr_at_rank[r_minus_one_idx], fdr_at_rank[r_idx]);
     }
 
     // Map back to original order
     for (Size r = 0; r < n; ++r) {
-        fdr.ptr[sorted_obs_indices[r]] = fdr_at_rank[r];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        fdr.ptr[sorted_obs_indices[static_cast<Index>(r)]] = fdr_at_rank[static_cast<Index>(r)];
     }
 
     scl::memory::aligned_free(sorted_obs_indices);
@@ -533,14 +591,18 @@ void benjamini_yekutieli(
         c_n += Real(1.0) / static_cast<Real>(i);
     }
 
-    Index* sorted_indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* sorted_pvalues = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* adjusted_sorted = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sorted_indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto sorted_pvalues_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto adjusted_sorted_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Index* sorted_indices = sorted_indices_ptr.release();
+    Real* sorted_pvalues = sorted_pvalues_ptr.release();
+    Real* adjusted_sorted = adjusted_sorted_ptr.release();
 
     detail::sort_indices_by_pvalue(p_values, sorted_indices);
 
     for (Size i = 0; i < n; ++i) {
-        sorted_pvalues[i] = p_values.ptr[sorted_indices[i]];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        sorted_pvalues[static_cast<Index>(i)] = p_values.ptr[sorted_indices[static_cast<Index>(i)]];
     }
 
     // BY adjustment: p_adj[i] = p[i] * n * c(n) / rank
@@ -548,18 +610,25 @@ void benjamini_yekutieli(
 
     for (Size i = 0; i < n; ++i) {
         Real rank = static_cast<Real>(i + 1);
-        adjusted_sorted[i] = sorted_pvalues[i] * n_real * c_n / rank;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        adjusted_sorted[static_cast<Index>(i)] = sorted_pvalues[static_cast<Index>(i)] * n_real * c_n / rank;
     }
 
     // Enforce monotonicity
-    adjusted_sorted[n - 1] = scl::algo::min2(adjusted_sorted[n - 1], Real(1.0));
+    // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+    adjusted_sorted[static_cast<Index>(n - 1)] = scl::algo::min2(adjusted_sorted[static_cast<Index>(n - 1)], Real(1.0));
     for (Size i = n - 1; i > 0; --i) {
-        adjusted_sorted[i - 1] = scl::algo::min2(adjusted_sorted[i - 1], adjusted_sorted[i]);
-        adjusted_sorted[i - 1] = scl::algo::min2(adjusted_sorted[i - 1], Real(1.0));
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_idx = static_cast<Index>(i);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_minus_one_idx = static_cast<Index>(i - 1);
+        adjusted_sorted[i_minus_one_idx] = scl::algo::min2(adjusted_sorted[i_minus_one_idx], adjusted_sorted[i_idx]);
+        adjusted_sorted[i_minus_one_idx] = scl::algo::min2(adjusted_sorted[i_minus_one_idx], Real(1.0));
     }
 
     for (Size i = 0; i < n; ++i) {
-        adjusted_p_values.ptr[sorted_indices[i]] = adjusted_sorted[i];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        adjusted_p_values.ptr[sorted_indices[static_cast<Index>(i)]] = adjusted_sorted[static_cast<Index>(i)];
     }
 
     scl::memory::aligned_free(sorted_indices);
@@ -578,14 +647,18 @@ void holm_bonferroni(
     const Size n = p_values.len;
     if (n == 0) return;
 
-    Index* sorted_indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* sorted_pvalues = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* adjusted_sorted = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sorted_indices_ptr2 = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto sorted_pvalues_ptr2 = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto adjusted_sorted_ptr2 = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Index* sorted_indices = sorted_indices_ptr2.release();
+    Real* sorted_pvalues = sorted_pvalues_ptr2.release();
+    Real* adjusted_sorted = adjusted_sorted_ptr2.release();
 
     detail::sort_indices_by_pvalue(p_values, sorted_indices);
 
     for (Size i = 0; i < n; ++i) {
-        sorted_pvalues[i] = p_values.ptr[sorted_indices[i]];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        sorted_pvalues[static_cast<Index>(i)] = p_values.ptr[sorted_indices[static_cast<Index>(i)]];
     }
 
     // Holm adjustment: p_adj[i] = p[i] * (n - rank + 1)
@@ -593,21 +666,28 @@ void holm_bonferroni(
 
     for (Size i = 0; i < n; ++i) {
         Real multiplier = n_real - static_cast<Real>(i);
-        adjusted_sorted[i] = sorted_pvalues[i] * multiplier;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        adjusted_sorted[static_cast<Index>(i)] = sorted_pvalues[static_cast<Index>(i)] * multiplier;
     }
 
     // Enforce monotonicity (cumulative maximum from left to right)
     for (Size i = 1; i < n; ++i) {
-        adjusted_sorted[i] = scl::algo::max2(adjusted_sorted[i], adjusted_sorted[i - 1]);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_idx = static_cast<Index>(i);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_minus_one_idx = static_cast<Index>(i - 1);
+        adjusted_sorted[i_idx] = scl::algo::max2(adjusted_sorted[i_idx], adjusted_sorted[i_minus_one_idx]);
     }
 
     // Cap at 1.0
     for (Size i = 0; i < n; ++i) {
-        adjusted_sorted[i] = scl::algo::min2(adjusted_sorted[i], Real(1.0));
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        adjusted_sorted[static_cast<Index>(i)] = scl::algo::min2(adjusted_sorted[static_cast<Index>(i)], Real(1.0));
     }
 
     for (Size i = 0; i < n; ++i) {
-        adjusted_p_values.ptr[sorted_indices[i]] = adjusted_sorted[i];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        adjusted_p_values.ptr[sorted_indices[static_cast<Index>(i)]] = adjusted_sorted[static_cast<Index>(i)];
     }
 
     scl::memory::aligned_free(sorted_indices);
@@ -626,14 +706,18 @@ void hochberg(
     const Size n = p_values.len;
     if (n == 0) return;
 
-    Index* sorted_indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* sorted_pvalues = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* adjusted_sorted = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sorted_indices_ptr3 = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto sorted_pvalues_ptr3 = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto adjusted_sorted_ptr3 = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Index* sorted_indices = sorted_indices_ptr3.release();
+    Real* sorted_pvalues = sorted_pvalues_ptr3.release();
+    Real* adjusted_sorted = adjusted_sorted_ptr3.release();
 
     detail::sort_indices_by_pvalue(p_values, sorted_indices);
 
     for (Size i = 0; i < n; ++i) {
-        sorted_pvalues[i] = p_values.ptr[sorted_indices[i]];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        sorted_pvalues[static_cast<Index>(i)] = p_values.ptr[sorted_indices[static_cast<Index>(i)]];
     }
 
     // Hochberg adjustment: p_adj[i] = p[i] * (n - rank + 1)
@@ -641,18 +725,25 @@ void hochberg(
 
     for (Size i = 0; i < n; ++i) {
         Real multiplier = n_real - static_cast<Real>(i);
-        adjusted_sorted[i] = sorted_pvalues[i] * multiplier;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        adjusted_sorted[static_cast<Index>(i)] = sorted_pvalues[static_cast<Index>(i)] * multiplier;
     }
 
     // Enforce monotonicity (cumulative minimum from right to left)
-    adjusted_sorted[n - 1] = scl::algo::min2(adjusted_sorted[n - 1], Real(1.0));
+    // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+    adjusted_sorted[static_cast<Index>(n - 1)] = scl::algo::min2(adjusted_sorted[static_cast<Index>(n - 1)], Real(1.0));
     for (Size i = n - 1; i > 0; --i) {
-        adjusted_sorted[i - 1] = scl::algo::min2(adjusted_sorted[i - 1], adjusted_sorted[i]);
-        adjusted_sorted[i - 1] = scl::algo::min2(adjusted_sorted[i - 1], Real(1.0));
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_idx = static_cast<Index>(i);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        const auto i_minus_one_idx = static_cast<Index>(i - 1);
+        adjusted_sorted[i_minus_one_idx] = scl::algo::min2(adjusted_sorted[i_minus_one_idx], adjusted_sorted[i_idx]);
+        adjusted_sorted[i_minus_one_idx] = scl::algo::min2(adjusted_sorted[i_minus_one_idx], Real(1.0));
     }
 
     for (Size i = 0; i < n; ++i) {
-        adjusted_p_values.ptr[sorted_indices[i]] = adjusted_sorted[i];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        adjusted_p_values.ptr[sorted_indices[static_cast<Index>(i)]] = adjusted_sorted[static_cast<Index>(i)];
     }
 
     scl::memory::aligned_free(sorted_indices);

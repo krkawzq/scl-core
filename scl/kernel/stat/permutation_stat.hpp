@@ -1,8 +1,5 @@
 #pragma once
 
-#include "scl/kernel/stat/stat_base.hpp"
-#include "scl/kernel/stat/rank_utils.hpp"
-#include "scl/kernel/stat/group_partition.hpp"
 #include "scl/core/sparse.hpp"
 #include "scl/core/sort.hpp"
 #include "scl/core/error.hpp"
@@ -43,17 +40,16 @@ namespace config {
 // =============================================================================
 
 namespace detail {
-
 class FastRNG {
 public:
-    explicit FastRNG(uint64_t seed) noexcept {
+    explicit FastRNG(uint64_t seed) noexcept : state_{} {
         uint64_t s = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (auto& state_elem : state_) {
             s += 0x9e3779b97f4a7c15ULL;
             uint64_t z = s;
             z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
             z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-            state_[i] = z ^ (z >> 31);
+            state_elem = z ^ (z >> 31);
         }
     }
 
@@ -73,9 +69,9 @@ public:
     SCL_FORCE_INLINE Size bounded(Size n) noexcept {
         uint64_t x = (*this)();
         __uint128_t m = static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n);
-        uint64_t l = static_cast<uint64_t>(m);
+        auto l = static_cast<uint64_t>(m);
         if (l < n) {
-            uint64_t t = -n % n;
+            auto t = -n % n;
             while (l < t) {
                 x = (*this)();
                 m = static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n);
@@ -86,14 +82,15 @@ public:
     }
 
     void jump() noexcept {
+        // NOLINTNEXTLINE(modernize-avoid-c-arrays)
         static const uint64_t JUMP[] = {
             0x180ec6d33cfd0abaULL, 0xd5a61266f0c9392cULL,
             0xa9582618e03fc9aaULL, 0x39abdc4529b1661cULL
         };
         uint64_t s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-        for (int i = 0; i < 4; ++i) {
+        for (const auto& jump_val : JUMP) {
             for (int b = 0; b < 64; ++b) {
-                if (JUMP[i] & (1ULL << b)) {
+                if (jump_val & (1ULL << b)) {
                     s0 ^= state_[0]; s1 ^= state_[1];
                     s2 ^= state_[2]; s3 ^= state_[3];
                 }
@@ -105,7 +102,8 @@ public:
     }
 
 private:
-    alignas(32) uint64_t state_[4];
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    alignas(32) uint64_t state_[4] {0, 0, 0, 0};
     static SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) noexcept {
         return (x << k) | (x >> (64 - k));
     }
@@ -170,15 +168,13 @@ SCL_FORCE_INLINE Real compute_mean_diff_from_sorted(
     const T* values,
     const Size* indices,
     Size n,
-    const int32_t* perm_groups,
-    Size n1_total,
-    Size n2_total
+    const int32_t* perm_groups
 ) {
     double sum1 = 0.0, sum2 = 0.0;
     Size count1 = 0, count2 = 0;
 
     for (Size i = 0; i < n; ++i) {
-        double v = static_cast<double>(values[i]);
+        auto v = static_cast<double>(values[i]);
         if (perm_groups[indices[i]] == 0) {
             sum1 += v;
             count1++;
@@ -227,8 +223,8 @@ void batch_permutation_reuse_sort(
 
     Size n1 = 0, n2 = 0;
     for (Size i = 0; i < N_samples; ++i) {
-        if (group_ids[i] == 0) n1++;
-        else if (group_ids[i] == 1) n2++;
+        if (group_ids[static_cast<Index>(i)] == 0) n1++;
+        else if (group_ids[static_cast<Index>(i)] == 1) n2++;
     }
     SCL_CHECK_ARG(n1 > 0 && n2 > 0, "Both groups must have members");
 
@@ -238,7 +234,7 @@ void batch_permutation_reuse_sort(
         if (len > max_len) max_len = len;
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const size_t n_threads = scl::threading::get_num_threads_runtime();
 
     // Workspace: sorted values, sorted indices, permuted groups, null distribution
     Size workspace_per_thread = max_len + max_len + N_samples + n_permutations;
@@ -246,12 +242,12 @@ void batch_permutation_reuse_sort(
     work_pool.init(n_threads, workspace_per_thread);
 
     scl::threading::parallel_for(Size(0), N_features, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) {
-            out_p_values[p] = Real(1);
+            out_p_values[static_cast<Index>(p)] = Real(1);
             return;
         }
 
@@ -261,7 +257,7 @@ void batch_permutation_reuse_sort(
         double* workspace = work_pool.get(thread_rank);
         T* sorted_vals = reinterpret_cast<T*>(workspace);
         Size* sorted_idx = reinterpret_cast<Size*>(workspace + max_len);
-        int32_t* perm_groups = reinterpret_cast<int32_t*>(workspace + max_len * 2);
+        auto perm_groups = reinterpret_cast<int32_t*>(workspace + max_len * 2);
         Real* null_dist = reinterpret_cast<Real*>(workspace + max_len * 2 + N_samples);
 
         // Copy and filter valid samples
@@ -277,7 +273,7 @@ void batch_permutation_reuse_sort(
         }
 
         if (total == 0) {
-            out_p_values[p] = Real(1);
+            out_p_values[static_cast<Index>(p)] = Real(1);
             return;
         }
 
@@ -297,11 +293,11 @@ void batch_permutation_reuse_sort(
 
         // Initialize permuted groups
         for (Size i = 0; i < N_samples; ++i) {
-            perm_groups[i] = group_ids[i];
+            perm_groups[i] = group_ids[static_cast<Index>(i)];
         }
 
         // Compute observed statistic
-        Real observed;
+        auto observed = Real(0);
         switch (stat_type) {
             case PermStatType::MWU:
                 observed = detail::compute_U_from_sorted(
@@ -366,7 +362,7 @@ void batch_permutation_reuse_sort(
             Real av = (null_dist[k] >= 0) ? null_dist[k] : -null_dist[k];
             count += (av >= abs_obs);
         }
-        out_p_values[p] = static_cast<Real>(count + 1) / static_cast<Real>(actual_perms + 1);
+        out_p_values[static_cast<Index>(p)] = static_cast<Real>(count + 1) / static_cast<Real>(actual_perms + 1);
     });
 }
 
@@ -390,23 +386,23 @@ Real permutation_test_single(
 
     Size n1 = 0, n2 = 0;
     for (Size i = 0; i < n; ++i) {
-        if (group_ids[i] == 0) n1++;
-        else if (group_ids[i] == 1) n2++;
+        if (group_ids[static_cast<Index>(i)] == 0) n1++;
+        else if (group_ids[static_cast<Index>(i)] == 1) n2++;
     }
 
     if (n1 == 0 || n2 == 0) return Real(1);
 
     // Allocate workspace
     T* sorted_vals = scl::memory::aligned_alloc<T>(n, SCL_ALIGNMENT);
-    Size* sorted_idx = scl::memory::aligned_alloc<Size>(n, SCL_ALIGNMENT);
-    int32_t* perm_groups = scl::memory::aligned_alloc<int32_t>(n, SCL_ALIGNMENT);
-    Real* null_dist = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
+    auto sorted_idx = scl::memory::aligned_alloc<Size>(n, SCL_ALIGNMENT);
+    auto perm_groups = scl::memory::aligned_alloc<int32_t>(n, SCL_ALIGNMENT);
+    auto null_dist = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
 
     // Filter and sort
     Size total = 0;
     for (Size i = 0; i < n; ++i) {
-        if (group_ids[i] == 0 || group_ids[i] == 1) {
-            sorted_vals[total] = values[i];
+        if (group_ids[static_cast<Index>(i)] == 0 || group_ids[static_cast<Index>(i)] == 1) {
+            sorted_vals[total] = values[static_cast<Index>(i)];
             sorted_idx[total] = i;
             total++;
         }
@@ -427,10 +423,10 @@ Real permutation_test_single(
     }
 
     for (Size i = 0; i < n; ++i) {
-        perm_groups[i] = group_ids[i];
+        perm_groups[i] = group_ids[static_cast<Index>(i)];
     }
 
-    Real observed;
+    auto observed = Real(0);
     switch (stat_type) {
         case PermStatType::MWU:
             observed = detail::compute_U_from_sorted(
@@ -448,7 +444,7 @@ Real permutation_test_single(
     Real abs_obs = (observed >= 0) ? observed : -observed;
 
     for (Size perm = 0; perm < n_permutations; ++perm) {
-        detail::shuffle_groups(perm_groups, n, rng);
+        detail::shuffle_groups(perm_groups.get(), n, rng);
 
         switch (stat_type) {
             case PermStatType::MWU:
@@ -470,11 +466,6 @@ Real permutation_test_single(
         count += (av >= abs_obs);
     }
     Real p_value = static_cast<Real>(count + 1) / static_cast<Real>(n_permutations + 1);
-
-    scl::memory::aligned_free(null_dist, SCL_ALIGNMENT);
-    scl::memory::aligned_free(perm_groups, SCL_ALIGNMENT);
-    scl::memory::aligned_free(sorted_idx, SCL_ALIGNMENT);
-    scl::memory::aligned_free(sorted_vals, SCL_ALIGNMENT);
 
     return p_value;
 }

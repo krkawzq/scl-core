@@ -1,7 +1,6 @@
 #pragma once
 
 #include "scl/kernel/stat/stat_base.hpp"
-#include "scl/kernel/stat/group_partition.hpp"
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/memory.hpp"
@@ -31,7 +30,7 @@ inline void count_k_groups(
     }
 
     for (Size i = 0; i < group_ids.len; ++i) {
-        int32_t g = group_ids[i];
+        int32_t g = group_ids[static_cast<Index>(i)];
         if (g >= 0 && static_cast<Size>(g) < n_groups) {
             out_counts[g]++;
         }
@@ -56,8 +55,8 @@ void oneway_anova(
     SCL_CHECK_ARG(n_groups >= 2, "One-way ANOVA requires at least 2 groups");
 
     // Count group sizes
-    Size* group_sizes = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
-    count_k_groups(group_ids, n_groups, group_sizes);
+    auto group_sizes = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
+    count_k_groups(group_ids, n_groups, group_sizes.get());
 
     Size N_total = 0;
     Size valid_groups = 0;
@@ -74,27 +73,20 @@ void oneway_anova(
     Size df_within = N_total - valid_groups;
 
     // Precompute group size info
-    double* inv_group_sizes = scl::memory::aligned_alloc<double>(n_groups, SCL_ALIGNMENT);
+    auto inv_group_sizes = scl::memory::aligned_alloc<double>(n_groups, SCL_ALIGNMENT);
     for (Size g = 0; g < n_groups; ++g) {
         inv_group_sizes[g] = (group_sizes[g] > 0) ? (1.0 / static_cast<double>(group_sizes[g])) : 0.0;
     }
     double inv_N = 1.0 / static_cast<double>(N_total);
 
-    // Find max row length
-    Size max_len = 0;
-    for (Index i = 0; i < primary_dim; ++i) {
-        Size len = static_cast<Size>(matrix.primary_length_unsafe(i));
-        if (len > max_len) max_len = len;
-    }
-
     // Workspace: counts + sums + sum_sqs per group
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-    Size workspace_per_thread = n_groups * 3;  // counts, sums, sum_sqs
+    const size_t n_threads = scl::threading::get_num_threads_runtime();
+    Size workspace_per_thread = n_groups * 3;
     scl::threading::WorkspacePool<double> work_pool;
     work_pool.init(n_threads, workspace_per_thread);
 
     scl::threading::parallel_for(Size(0), N_features, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -119,7 +111,7 @@ void oneway_anova(
             int32_t g = group_ids[sec_idx];
 
             if (g >= 0 && static_cast<Size>(g) < n_groups) {
-                double v = static_cast<double>(values[k]);
+                auto v = static_cast<double>(values[k]);
                 counts[g]++;
                 sums[g] += v;
                 sum_sqs[g] += v * v;
@@ -134,7 +126,7 @@ void oneway_anova(
         double grand_mean = grand_sum * inv_N;
 
         // Compute group means (including zeros)
-        double* group_means = sum_sqs;  // Reuse buffer
+        auto group_means = scl::memory::aligned_alloc<double>(n_groups, SCL_ALIGNMENT);
         for (Size g = 0; g < n_groups; ++g) {
             group_means[g] = sums[g] * inv_group_sizes[g];
         }
@@ -149,44 +141,26 @@ void oneway_anova(
         }
 
         // SS_within = sum over all observations of (x - mean_g)^2
-        // = sum(sum_sq_g - n_g * mean_g^2)
-        // But we need to account for zeros
+        // For sparse data: non-zeros contribute (x - mean_g)^2, zeros contribute mean_g^2
         double SS_within = 0.0;
         for (Size g = 0; g < n_groups; ++g) {
             if (group_sizes[g] > 0) {
-                // Non-zero contribution
                 double mean_g = group_means[g];
                 Size n_nz = counts[g];
-                double sum_nz = sums[g];
-                double sum_sq_nz = 0.0;
-
-                // Recompute sum_sq for this group (we overwrote it)
-                // Actually we need another buffer...
-                // For simplicity, use online formula
-                // SS_within_g = sum_sq - n * mean^2
-                // But we don't have original sum_sq anymore
-
-                // Alternative: compute SS_within = SS_total - SS_between
+                Size n_zeros_g = group_sizes[g] - n_nz;
+                
+                // Non-zero contribution: sum(x^2) - 2*mean*sum(x) + n*mean^2
+                // = sum_sq - 2*mean*sum + n*mean^2
+                // = sum_sq - n*mean^2 (since sum = n*mean)
+                double ss_nz = sum_sqs[g] - static_cast<double>(n_nz) * mean_g * mean_g;
+                
+                // Zero contribution: each zero contributes (0 - mean_g)^2 = mean_g^2
+                double ss_zeros = static_cast<double>(n_zeros_g) * mean_g * mean_g;
+                
+                SS_within += ss_nz + ss_zeros;
             }
         }
 
-        // SS_total = sum((x_i - grand_mean)^2) for all N observations
-        // = sum(x_i^2) - N * grand_mean^2
-        double total_sum_sq = 0.0;
-        for (Size k = 0; k < len_sz; ++k) {
-            Index sec_idx = indices[k];
-            int32_t g = group_ids[sec_idx];
-            if (g >= 0 && static_cast<Size>(g) < n_groups) {
-                double v = static_cast<double>(values[k]);
-                total_sum_sq += v * v;
-            }
-        }
-        // Add zeros: contribute grand_mean^2 each
-        Size n_zeros = N_total - len_sz;  // Approximate
-        total_sum_sq += static_cast<double>(n_zeros) * grand_mean * grand_mean;
-
-        double SS_total = total_sum_sq - static_cast<double>(N_total) * grand_mean * grand_mean;
-        SS_within = SS_total - SS_between;
         if (SS_within < 0.0) SS_within = 0.0;
 
         // F statistic
@@ -201,12 +175,9 @@ void oneway_anova(
             p_val = static_cast<double>(pvalue::f_pvalue(static_cast<Real>(F), df_between, df_within));
         }
 
-        out_F_stats[p] = static_cast<Real>(F);
-        out_p_values[p] = static_cast<Real>(p_val);
+        out_F_stats[static_cast<Index>(p)] = static_cast<Real>(F);
+        out_p_values[static_cast<Index>(p)] = static_cast<Real>(p_val);
     });
-
-    scl::memory::aligned_free(group_sizes, SCL_ALIGNMENT);
-    scl::memory::aligned_free(inv_group_sizes, SCL_ALIGNMENT);
 }
 
 } // namespace scl::kernel::stat::oneway_anova

@@ -31,8 +31,9 @@ namespace detail {
 template <typename T>
 SCL_FORCE_INLINE Real simd_sum_4way(const T* SCL_RESTRICT vals, Size len) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<Real>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -162,19 +163,19 @@ void compute_basic_qc(
     SCL_CHECK_DIM(out_total_counts.len == static_cast<Size>(primary_dim), "total_counts size mismatch");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        out_n_genes[p] = len;
+        out_n_genes[static_cast<Index>(p)] = len;
 
         if (SCL_UNLIKELY(len_sz == 0)) {
-            out_total_counts[p] = Real(0);
+            out_total_counts[static_cast<Index>(p)] = Real(0);
             return;
         }
 
         auto values = matrix.primary_values_unsafe(idx);
-        out_total_counts[p] = detail::simd_sum_4way(values.ptr, len_sz);
+        out_total_counts[static_cast<Index>(p)] = detail::simd_sum_4way(values.ptr, len_sz);
     });
 }
 
@@ -191,22 +192,23 @@ void compute_subset_pct(
     const uint8_t* SCL_RESTRICT mask = subset_mask.ptr;
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) {
-            out_pcts[p] = Real(0);
+            out_pcts[static_cast<Index>(p)] = Real(0);
             return;
         }
 
         auto values = matrix.primary_values_unsafe(idx);
         auto indices = matrix.primary_indices_unsafe(idx);
 
-        Real total, subset;
+        Real total = Real(0);
+        Real subset = Real(0);
         detail::fused_total_subset_sum(values.ptr, indices.ptr, mask, len_sz, total, subset);
 
-        out_pcts[p] = SCL_LIKELY(total > Real(0)) ? (subset / total * config::PCT_SCALE) : Real(0);
+        out_pcts[static_cast<Index>(p)] = SCL_LIKELY(total > Real(0)) ? (subset / total * config::PCT_SCALE) : Real(0);
     });
 }
 
@@ -227,26 +229,27 @@ void compute_fused_qc(
     const uint8_t* SCL_RESTRICT mask = subset_mask.ptr;
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        out_n_genes[p] = len;
+        out_n_genes[static_cast<Index>(p)] = len;
 
         if (SCL_UNLIKELY(len_sz == 0)) {
-            out_total_counts[p] = Real(0);
-            out_pcts[p] = Real(0);
+            out_total_counts[static_cast<Index>(p)] = Real(0);
+            out_pcts[static_cast<Index>(p)] = Real(0);
             return;
         }
 
         auto values = matrix.primary_values_unsafe(idx);
         auto indices = matrix.primary_indices_unsafe(idx);
 
-        Real total, subset;
+        Real total = Real(0);
+        Real subset = Real(0);
         detail::fused_total_subset_sum(values.ptr, indices.ptr, mask, len_sz, total, subset);
 
-        out_total_counts[p] = total;
-        out_pcts[p] = SCL_LIKELY(total > Real(0)) ? (subset / total * config::PCT_SCALE) : Real(0);
+        out_total_counts[static_cast<Index>(p)] = total;
+        out_pcts[static_cast<Index>(p)] = SCL_LIKELY(total > Real(0)) ? (subset / total * config::PCT_SCALE) : Real(0);
     });
 }
 

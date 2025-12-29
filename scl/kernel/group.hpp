@@ -86,7 +86,7 @@ void group_stats(
     scl::memory::zero(out_vars);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
 
         Real* mean_ptr = out_means.ptr + (p * n_groups);
@@ -101,16 +101,18 @@ void group_stats(
         const auto values = matrix.primary_values_unsafe(idx);
         const auto indices = matrix.primary_indices_unsafe(idx);
 
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         Size nnz_counts_local[256];
         Size* nnz_counts = nullptr;
-        Size* nnz_counts_heap = nullptr;
+        // NOLINTNEXTLINE
+        std::unique_ptr<Size[], scl::memory::AlignedDeleter<Size>> nnz_counts_heap;
 
         if (!include_zeros) {
             if (n_groups <= 256) {
-                nnz_counts = nnz_counts_local;
+                nnz_counts = static_cast<Size*>(static_cast<void*>(nnz_counts_local));
             } else {
                 nnz_counts_heap = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
-                nnz_counts = nnz_counts_heap;
+                nnz_counts = nnz_counts_heap.get();
             }
             scl::algo::zero(nnz_counts, n_groups);
         }
@@ -149,10 +151,6 @@ void group_stats(
 
         detail::finalize_stats(mean_ptr, var_ptr, group_sizes.ptr, nnz_counts,
                                n_groups, ddof, include_zeros);
-
-        if (nnz_counts_heap) {
-            scl::memory::aligned_free(nnz_counts_heap, SCL_ALIGNMENT);
-        }
     });
 }
 

@@ -14,6 +14,8 @@
 
 #include <cmath>
 #include <cstring>
+#include <concepts>
+#include <memory>
 
 // =============================================================================
 // FILE: scl/kernel/annotation.hpp
@@ -41,15 +43,22 @@
 namespace scl::kernel::annotation {
 
 // =============================================================================
+// C++20 Concepts
+// =============================================================================
+
+template <typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
 namespace config {
-    constexpr Real DEFAULT_CONFIDENCE_THRESHOLD = Real(0.5);
-    constexpr Real EPSILON = Real(1e-15);
-    constexpr Index DEFAULT_K = 15;
-    constexpr Real DEFAULT_NOVELTY_THRESHOLD = Real(0.3);
-    constexpr Size PARALLEL_THRESHOLD = 500;
+    inline constexpr Real DEFAULT_CONFIDENCE_THRESHOLD = Real(0.5);
+    inline constexpr Real EPSILON = Real(1e-15);
+    inline constexpr Index DEFAULT_K = 15;
+    inline constexpr Real DEFAULT_NOVELTY_THRESHOLD = Real(0.3);
+    inline constexpr Size PARALLEL_THRESHOLD = 500;
 }
 
 // =============================================================================
@@ -77,7 +86,7 @@ enum class DistanceMetric {
 namespace detail {
 
 // Compute mean of sparse row - SIMD optimized
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 SCL_FORCE_INLINE Real compute_row_mean(
     const Sparse<T, IsCSR>& X,
     Index row,
@@ -119,7 +128,7 @@ SCL_FORCE_INLINE Real compute_row_mean(
 }
 
 // Compute L2 norm of sparse row - SIMD optimized
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 SCL_FORCE_INLINE Real compute_row_norm(
     const Sparse<T, IsCSR>& X,
     Index row
@@ -160,7 +169,7 @@ SCL_FORCE_INLINE Real compute_row_norm(
 }
 
 // Compute dot product between two sparse rows - using adaptive algorithm
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 SCL_FORCE_INLINE Real sparse_dot_product(
     const Sparse<T, IsCSR>& X,
     Index row_x,
@@ -189,7 +198,7 @@ SCL_FORCE_INLINE Real sparse_dot_product(
 }
 
 // Cosine similarity between sparse rows
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 Real cosine_similarity(
     const Sparse<T, IsCSR>& X,
     Index row_x,
@@ -207,7 +216,7 @@ Real cosine_similarity(
 // Pearson correlation using algebraic identity (avoids dense allocation)
 // correlation(x, y) = (n*sum(xy) - sum(x)*sum(y)) / 
 //                     sqrt((n*sum(x^2) - sum(x)^2) * (n*sum(y^2) - sum(y)^2))
-template <typename T, bool IsCSR_X, bool IsCSR_Y>
+template <Arithmetic T, bool IsCSR_X, bool IsCSR_Y>
 SCL_FORCE_INLINE Real pearson_correlation(
     const Sparse<T, IsCSR_X>& X,
     Index row_x,
@@ -257,8 +266,10 @@ SCL_FORCE_INLINE Real pearson_correlation(
         Real sum_xx = Real(0);
         Real sum_yy = Real(0);
 
-        Real* x_dense = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
-        Real* y_dense = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+        auto x_dense_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+        auto y_dense_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+        Real* x_dense = x_dense_ptr.release();
+        Real* y_dense = y_dense_ptr.release();
         scl::algo::zero(x_dense, static_cast<Size>(n_features));
         scl::algo::zero(y_dense, static_cast<Size>(n_features));
 
@@ -398,7 +409,8 @@ Index weighted_majority_vote(
     Index n_types,
     Real& confidence
 ) {
-    Real* weighted_counts = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto weighted_counts_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    Real* weighted_counts = weighted_counts_ptr.release();
     scl::algo::zero(weighted_counts, static_cast<Size>(n_types));
 
     Real total_weight = Real(0);
@@ -435,8 +447,8 @@ SCL_FORCE_INLINE SCL_HOT void softmax_normalize_simd(Real* scores, Index n) {
     if (SCL_UNLIKELY(n == 0)) return;
     
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    const s::ScalableTag<Real> d{};
+    const Size lanes = static_cast<Size>(s::Lanes(d));
     
     // Find max for numerical stability
     Real max_score = scores[0];
@@ -493,7 +505,7 @@ SCL_FORCE_INLINE SCL_HOT void softmax_normalize_simd(Real* scores, Index n) {
         v_sum = s::Add(v_sum, e);
     }
     
-    Real sum_exp = s::GetLane(s::SumOfLanes(d, v_sum));
+    Real sum_exp = s::ReduceSum(d, v_sum);
     
     // Scalar cleanup - use std::exp for efficiency
     for (; i < n; ++i) {
@@ -529,7 +541,7 @@ SCL_FORCE_INLINE SCL_HOT void softmax_normalize_simd(Real* scores, Index n) {
 inline Index count_cell_types(
     Array<const Index> labels,
     Index n
-) {
+) noexcept {
     Index max_label = 0;
     for (Index i = 0; i < n; ++i) {
         max_label = scl::algo::max2(max_label, labels[i]);
@@ -541,10 +553,10 @@ inline Index count_cell_types(
 // Reference Mapping (KNN-based Transfer)
 // =============================================================================
 
-template <typename T, bool IsCSR_Query, bool IsCSR_Ref, bool IsCSR_Neighbors>
+template <Arithmetic T, bool IsCSR_Query, bool IsCSR_Ref, bool IsCSR_Neighbors>
 void reference_mapping(
-    const Sparse<T, IsCSR_Query>& query_expression,
-    const Sparse<T, IsCSR_Ref>& reference_expression,
+    [[maybe_unused]] const Sparse<T, IsCSR_Query>& query_expression,
+    [[maybe_unused]] const Sparse<T, IsCSR_Ref>& reference_expression,
     Array<const Index> reference_labels,
     const Sparse<Index, IsCSR_Neighbors>& query_to_ref_neighbors,
     Index n_query,
@@ -567,16 +579,16 @@ void reference_mapping(
                 query_to_ref_neighbors.primary_length_unsafe(q));
         }
 
-        Size workspace_size = static_cast<Size>(max_neighbors) * (sizeof(Index) + sizeof(Real)) +
-                              static_cast<Size>(n_types) * sizeof(Real);
+        const Size workspace_size = static_cast<Size>(max_neighbors) * (sizeof(Index) + sizeof(Real)) +
+                                     static_cast<Size>(n_types) * sizeof(Real);
 
         scl::threading::WorkspacePool<Byte> pool;
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+        const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
         pool.init(n_threads, workspace_size);
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_query), 
-            [&](size_t q_idx, size_t thread_rank) {
-            const Index q = static_cast<Index>(q_idx);
+            [&](Size q_idx, Size thread_rank) {
+            const auto q = static_cast<Index>(q_idx);
             Byte* workspace = pool.get(thread_rank);
 
             auto neighbor_indices = query_to_ref_neighbors.primary_indices_unsafe(q);
@@ -590,22 +602,25 @@ void reference_mapping(
             }
 
             // Get labels of neighbors
-            Index* neighbor_labels = reinterpret_cast<Index*>(workspace);
-            Real* weights = reinterpret_cast<Real*>(workspace + 
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            auto* neighbor_labels = reinterpret_cast<Index*>(workspace);
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            auto* weights = reinterpret_cast<Real*>(workspace + 
                 static_cast<Size>(n_neighbors) * sizeof(Index));
 
             for (Index k = 0; k < n_neighbors; ++k) {
-                Index ref_idx = neighbor_indices[k];
+                const Index ref_idx = neighbor_indices[k];
                 if (SCL_LIKELY(ref_idx >= 0 && ref_idx < n_ref)) {
-                    neighbor_labels[k] = reference_labels[ref_idx];
+                    const auto ref_idx_sz = static_cast<Size>(ref_idx);
+                    neighbor_labels[static_cast<Size>(k)] = static_cast<Index>(reference_labels[ref_idx_sz]);
                 } else {
-                    neighbor_labels[k] = -1;
+                    neighbor_labels[static_cast<Size>(k)] = -1;
                 }
-                weights[k] = static_cast<Real>(neighbor_weights[k]);
+                weights[static_cast<Size>(k)] = static_cast<Real>(neighbor_weights[k]);
             }
 
             // Weighted voting
-            Real confidence;
+            Real confidence = Real(0);
             query_labels[q] = detail::weighted_majority_vote(
                 neighbor_labels, weights, n_neighbors, n_types, confidence
             );
@@ -624,20 +639,24 @@ void reference_mapping(
                 continue;
             }
 
-            Index* neighbor_labels = scl::memory::aligned_alloc<Index>(n_neighbors, SCL_ALIGNMENT);
-            Real* weights = scl::memory::aligned_alloc<Real>(n_neighbors, SCL_ALIGNMENT);
+            auto neighbor_labels_ptr = scl::memory::aligned_alloc<Index>(n_neighbors, SCL_ALIGNMENT);
+            auto weights_ptr = scl::memory::aligned_alloc<Real>(n_neighbors, SCL_ALIGNMENT);
+            Index* neighbor_labels = neighbor_labels_ptr.release();
+            Real* weights = weights_ptr.release();
 
             for (Index k = 0; k < n_neighbors; ++k) {
-                Index ref_idx = neighbor_indices[k];
+                const Index ref_idx = neighbor_indices[k];
+                const auto k_sz = static_cast<Size>(k);
                 if (SCL_LIKELY(ref_idx >= 0 && ref_idx < n_ref)) {
-                    neighbor_labels[k] = reference_labels[ref_idx];
+                    const auto ref_idx_sz = static_cast<Size>(ref_idx);
+                    neighbor_labels[k_sz] = static_cast<Index>(reference_labels[ref_idx_sz]);
                 } else {
-                    neighbor_labels[k] = -1;
+                    neighbor_labels[k_sz] = -1;
                 }
-                weights[k] = static_cast<Real>(neighbor_weights[k]);
+                weights[k_sz] = static_cast<Real>(neighbor_weights[k]);
             }
 
-            Real confidence;
+            Real confidence = Real(0);
             query_labels[q] = detail::weighted_majority_vote(
                 neighbor_labels, weights, n_neighbors, n_types, confidence
             );
@@ -653,7 +672,7 @@ void reference_mapping(
 // Correlation-Based Assignment (SingleR-style)
 // =============================================================================
 
-template <typename T, bool IsCSR_Query, bool IsCSR_Ref>
+template <Arithmetic T, bool IsCSR_Query, bool IsCSR_Ref>
 void correlation_assignment(
     const Sparse<T, IsCSR_Query>& query_expression,
     const Sparse<T, IsCSR_Ref>& reference_profiles,  // n_types x n_genes
@@ -671,15 +690,15 @@ void correlation_assignment(
 
     // Parallel processing for large datasets
     if (static_cast<Size>(n_query) >= config::PARALLEL_THRESHOLD) {
-        Size workspace_size = static_cast<Size>(n_types) * sizeof(Real);
+        // Size workspace_size = static_cast<Size>(n_types) * sizeof(Real);
 
         scl::threading::WorkspacePool<Real> pool;
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+        const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
         pool.init(n_threads, static_cast<Size>(n_types));
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_query),
-            [&](size_t q_idx, size_t thread_rank) {
-            const Index q = static_cast<Index>(q_idx);
+            [&](Size q_idx, Size thread_rank) {
+            const auto q = static_cast<Index>(q_idx);
             Real* type_corrs = pool.get(thread_rank);
 
             Real max_corr = -Real(2);
@@ -704,13 +723,16 @@ void correlation_assignment(
             // Store all correlations if requested
             if (all_correlations.ptr != nullptr) {
                 for (Index t = 0; t < n_types; ++t) {
-                    all_correlations[static_cast<Size>(q) * n_types + t] = type_corrs[t];
+                    const Size idx = static_cast<Size>(q) * static_cast<Size>(n_types) + static_cast<Size>(t);
+                    const auto t_sz = static_cast<Size>(t);
+                    all_correlations[static_cast<Index>(idx)] = type_corrs[t_sz];
                 }
             }
         });
     } else {
         // Sequential path
-        Real* type_corrs = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+        auto type_corrs_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+        Real* type_corrs = type_corrs_ptr.release();
 
         for (Index q = 0; q < n_query; ++q) {
             Real max_corr = -Real(2);
@@ -734,7 +756,9 @@ void correlation_assignment(
 
             if (all_correlations.ptr != nullptr) {
                 for (Index t = 0; t < n_types; ++t) {
-                    all_correlations[static_cast<Size>(q) * n_types + t] = type_corrs[t];
+                    const Size idx = static_cast<Size>(q) * static_cast<Size>(n_types) + static_cast<Size>(t);
+                    const auto t_sz = static_cast<Size>(t);
+                    all_correlations[static_cast<Index>(idx)] = type_corrs[t_sz];
                 }
             }
         }
@@ -747,7 +771,7 @@ void correlation_assignment(
 // Build Reference Profiles (Mean per Cell Type)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void build_reference_profiles(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> labels,
@@ -759,7 +783,8 @@ void build_reference_profiles(
     Size total = static_cast<Size>(n_types) * static_cast<Size>(n_genes);
     scl::algo::zero(profiles, total);
 
-    Index* type_counts = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    auto type_counts_ptr = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    auto* type_counts = type_counts_ptr.get();
     scl::algo::zero(type_counts, static_cast<Size>(n_types));
 
     // Count cells per type
@@ -837,14 +862,14 @@ void build_reference_profiles(
         }
     }
 
-    scl::memory::aligned_free(type_counts, SCL_ALIGNMENT);
+    // type_counts_ptr automatically freed
 }
 
 // =============================================================================
 // Marker Gene Score (scType-style)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void marker_gene_score(
     const Sparse<T, IsCSR>& expression,
     const Index* const* marker_genes,      // Array of marker gene arrays per type
@@ -861,15 +886,15 @@ void marker_gene_score(
     // Parallel processing for large datasets
     if (static_cast<Size>(n_cells) >= config::PARALLEL_THRESHOLD && IsCSR) {
         // Parallel path with thread-local gene expression buffer
-        Size workspace_size = static_cast<Size>(n_genes) * sizeof(Real);
+        // Size workspace_size = static_cast<Size>(n_genes) * sizeof(Real);
 
         scl::threading::WorkspacePool<Real> pool;
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+        const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
         pool.init(n_threads, static_cast<Size>(n_genes));
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells),
-            [&](size_t c_idx, size_t thread_rank) {
-            const Index c = static_cast<Index>(c_idx);
+            [&](Size c_idx, Size thread_rank) {
+            const auto c = static_cast<Index>(c_idx);
             Real* cell_expr = pool.get(thread_rank);
 
             // Extract cell expression
@@ -934,9 +959,12 @@ void marker_gene_score(
         });
     } else {
         // Sequential path
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, modernize-avoid-c-arrays)
+        std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>> cell_expr_ptr;
         Real* cell_expr = nullptr;
         if constexpr (IsCSR) {
-            cell_expr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+            cell_expr_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+            cell_expr = cell_expr_ptr.get();
         }
 
         for (Index c = 0; c < n_cells; ++c) {
@@ -994,11 +1022,10 @@ void marker_gene_score(
                     Index g = markers[m];
                     if (SCL_UNLIKELY(g < 0 || g >= n_genes)) continue;
 
-                    Real expr;
+                    Real expr = Real(0);
                     if constexpr (IsCSR) {
                         expr = cell_expr[g];
                     } else {
-                        expr = Real(0);
                         auto indices = expression.col_indices_unsafe(g);
                         auto values = expression.col_values_unsafe(g);
                         Index len = expression.col_length_unsafe(g);
@@ -1019,9 +1046,7 @@ void marker_gene_score(
             }
         }
 
-        if (IsCSR && cell_expr != nullptr) {
-            scl::memory::aligned_free(cell_expr, SCL_ALIGNMENT);
-        }
+        // cell_expr_ptr automatically freed
     }
 
     // Normalize scores per cell using optimized SIMD softmax
@@ -1090,16 +1115,18 @@ inline void consensus_annotation(
         Size workspace_size = static_cast<Size>(n_types) * (sizeof(Index) + sizeof(Real));
 
         scl::threading::WorkspacePool<Byte> pool;
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+        const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
         pool.init(n_threads, workspace_size);
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells),
-            [&](size_t c_idx, size_t thread_rank) {
-            const Index c = static_cast<Index>(c_idx);
+            [&](Size c_idx, Size thread_rank) {
+            const auto c = static_cast<Index>(c_idx);
             Byte* workspace = pool.get(thread_rank);
 
-            Index* vote_counts = reinterpret_cast<Index*>(workspace);
-            Real* weighted_votes = reinterpret_cast<Real*>(workspace + 
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            auto* vote_counts = reinterpret_cast<Index*>(workspace);
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            auto* weighted_votes = reinterpret_cast<Real*>(workspace + 
                 static_cast<Size>(n_types) * sizeof(Index));
 
             scl::algo::zero(vote_counts, static_cast<Size>(n_types));
@@ -1136,8 +1163,10 @@ inline void consensus_annotation(
         });
     } else {
         // Sequential path
-        Index* vote_counts = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
-        Real* weighted_votes = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+        auto vote_counts_ptr = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+        auto weighted_votes_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+        Index* vote_counts = vote_counts_ptr.release();
+        Real* weighted_votes = weighted_votes_ptr.release();
 
         for (Index c = 0; c < n_cells; ++c) {
             scl::algo::zero(vote_counts, static_cast<Size>(n_types));
@@ -1181,9 +1210,9 @@ inline void consensus_annotation(
 // Detect Novel Cell Types
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void detect_novel_types(
-    const Sparse<T, IsCSR>& query_expression,
+    [[maybe_unused]] const Sparse<T, IsCSR>& query_expression,
     Array<const Real> confidence_scores,
     Index n_query,
     Real threshold,
@@ -1194,8 +1223,8 @@ void detect_novel_types(
 
     // Parallelize for large datasets
     if (static_cast<Size>(n_query) >= config::PARALLEL_THRESHOLD) {
-        scl::threading::parallel_for(Size(0), static_cast<Size>(n_query), [&](size_t q_idx) {
-            const Index q = static_cast<Index>(q_idx);
+        scl::threading::parallel_for(Size(0), static_cast<Size>(n_query), [&](Size q_idx) {
+            const auto q = static_cast<Index>(q_idx);
             is_novel[q] = confidence_scores[q] < threshold;
         });
     } else {
@@ -1209,7 +1238,7 @@ void detect_novel_types(
 // Detect Novel Types with Distance Criterion
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void detect_novel_types_by_distance(
     const Sparse<T, IsCSR>& query_expression,
     const Real* reference_profiles,    // n_types x n_genes
@@ -1226,15 +1255,15 @@ void detect_novel_types_by_distance(
 
     // Parallel processing for large datasets
     if (static_cast<Size>(n_query) >= config::PARALLEL_THRESHOLD) {
-        Size workspace_size = static_cast<Size>(n_genes) * sizeof(Real);
+        // Size workspace_size = static_cast<Size>(n_genes) * sizeof(Real);
 
         scl::threading::WorkspacePool<Real> pool;
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+        const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
         pool.init(n_threads, static_cast<Size>(n_genes));
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_query),
-            [&](size_t q_idx, size_t thread_rank) {
-            const Index q = static_cast<Index>(q_idx);
+            [&](Size q_idx, Size thread_rank) {
+            const auto q = static_cast<Index>(q_idx);
             Real* query_dense = pool.get(thread_rank);
 
             Index assigned = assigned_labels[q];
@@ -1256,9 +1285,9 @@ void detect_novel_types_by_distance(
                 Index len = query_expression.row_length_unsafe(q);
 
                 for (Index k = 0; k < len; ++k) {
-                    Index g = indices[k];
+                    Index g = indices.ptr[k];
                     if (SCL_LIKELY(g < n_genes)) {
-                        query_dense[g] = static_cast<Real>(values[k]);
+                        query_dense[g] = static_cast<Real>(values.ptr[k]);
                     }
                 }
             }
@@ -1267,14 +1296,14 @@ void detect_novel_types_by_distance(
             const Real* profile = reference_profiles + static_cast<Size>(assigned) * n_genes;
 
             // SIMD-friendly dot product and norm computation
-            Real dot = scl::vectorize::dot(
+            const Real dot = scl::vectorize::dot(
                 Array<const Real>(query_dense, static_cast<Size>(n_genes)),
                 Array<const Real>(profile, static_cast<Size>(n_genes))
             );
-            Real norm_q = std::sqrt(scl::vectorize::sum_squared(
+            const Real norm_q = std::sqrt(scl::vectorize::sum_squared(
                 Array<const Real>(query_dense, static_cast<Size>(n_genes))
             ));
-            Real norm_p = std::sqrt(scl::vectorize::sum_squared(
+            const Real norm_p = std::sqrt(scl::vectorize::sum_squared(
                 Array<const Real>(profile, static_cast<Size>(n_genes))
             ));
 
@@ -1293,7 +1322,8 @@ void detect_novel_types_by_distance(
         });
     } else {
         // Serial version for small datasets
-        Real* query_dense = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+        auto query_dense_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+        Real* query_dense = query_dense_ptr.release();
 
         for (Index q = 0; q < n_query; ++q) {
             Index assigned = assigned_labels[q];
@@ -1315,9 +1345,9 @@ void detect_novel_types_by_distance(
                 Index len = query_expression.row_length_unsafe(q);
 
                 for (Index k = 0; k < len; ++k) {
-                    Index g = indices[k];
+                    Index g = indices.ptr[k];
                     if (SCL_LIKELY(g < n_genes)) {
-                        query_dense[g] = static_cast<Real>(values[k]);
+                        query_dense[g] = static_cast<Real>(values.ptr[k]);
                     }
                 }
             }
@@ -1325,14 +1355,14 @@ void detect_novel_types_by_distance(
             // Compute distance to assigned profile
             const Real* profile = reference_profiles + static_cast<Size>(assigned) * n_genes;
 
-            Real dot = scl::vectorize::dot(
+            const Real dot = scl::vectorize::dot(
                 Array<const Real>(query_dense, static_cast<Size>(n_genes)),
                 Array<const Real>(profile, static_cast<Size>(n_genes))
             );
-            Real norm_q = std::sqrt(scl::vectorize::sum_squared(
+            const Real norm_q = std::sqrt(scl::vectorize::sum_squared(
                 Array<const Real>(query_dense, static_cast<Size>(n_genes))
             ));
-            Real norm_p = std::sqrt(scl::vectorize::sum_squared(
+            const Real norm_p = std::sqrt(scl::vectorize::sum_squared(
                 Array<const Real>(profile, static_cast<Size>(n_genes))
             ));
 
@@ -1369,8 +1399,10 @@ inline void cluster_novel_cells(
     SCL_CHECK_DIM(is_novel_cluster.len >= static_cast<Size>(n_clusters),
                   "Annotation: is_novel_cluster buffer too small");
 
-    Index* cluster_sizes = scl::memory::aligned_alloc<Index>(n_clusters, SCL_ALIGNMENT);
-    Index* novel_counts = scl::memory::aligned_alloc<Index>(n_clusters, SCL_ALIGNMENT);
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Index>(n_clusters, SCL_ALIGNMENT);
+    auto novel_counts_ptr = scl::memory::aligned_alloc<Index>(n_clusters, SCL_ALIGNMENT);
+    Index* cluster_sizes = cluster_sizes_ptr.release();
+    Index* novel_counts = novel_counts_ptr.release();
 
     scl::algo::zero(cluster_sizes, static_cast<Size>(n_clusters));
     scl::algo::zero(novel_counts, static_cast<Size>(n_clusters));
@@ -1399,7 +1431,7 @@ inline void cluster_novel_cells(
 // Label Propagation from Neighbors
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void label_propagation(
     const Sparse<T, IsCSR>& neighbor_graph,
     Array<const Index> initial_labels,   // -1 for unlabeled
@@ -1420,8 +1452,10 @@ void label_propagation(
         label_confidence[c] = (initial_labels[c] >= 0) ? Real(1) : Real(0);
     }
 
-    Real* type_scores = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
-    Index* prev_labels = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto type_scores_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto prev_labels_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    Real* type_scores = type_scores_ptr.release();
+    Index* prev_labels = prev_labels_ptr.release();
 
     for (Index iter = 0; iter < max_iter; ++iter) {
         // Copy current labels
@@ -1496,9 +1530,12 @@ inline void annotation_quality_metrics(
     // Count predictions
     Index correct = 0;
 
-    Index* true_positives = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
-    Index* false_positives = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
-    Index* false_negatives = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    auto true_positives_ptr = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    auto false_positives_ptr = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    auto false_negatives_ptr = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    Index* true_positives = true_positives_ptr.release();
+    Index* false_positives = false_positives_ptr.release();
+    Index* false_negatives = false_negatives_ptr.release();
 
     scl::algo::zero(true_positives, static_cast<Size>(n_types));
     scl::algo::zero(false_positives, static_cast<Size>(n_types));
@@ -1590,7 +1627,7 @@ inline void confusion_matrix(
 // Cell Type Marker Expression
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void cell_type_marker_expression(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> labels,
@@ -1606,7 +1643,8 @@ void cell_type_marker_expression(
     scl::algo::zero(mean_expression, total);
     scl::algo::zero(pct_expressed, total);
 
-    Index* type_counts = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    auto type_counts_ptr = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    auto* type_counts = type_counts_ptr.get();
     scl::algo::zero(type_counts, static_cast<Size>(n_types));
 
     // Count cells per type
@@ -1618,7 +1656,8 @@ void cell_type_marker_expression(
     }
 
     // Accumulate marker expression
-    Index* expressing = scl::memory::aligned_alloc<Index>(total, SCL_ALIGNMENT);
+    auto expressing_ptr = scl::memory::aligned_alloc<Index>(total, SCL_ALIGNMENT);
+    Index* expressing = expressing_ptr.release();
     scl::algo::zero(expressing, total);
 
     for (Index m = 0; m < n_markers; ++m) {
@@ -1656,12 +1695,12 @@ void cell_type_marker_expression(
             Index len = expression.col_length_unsafe(g);
 
             for (Index k = 0; k < len; ++k) {
-                Index c = indices[k];
+                Index c = indices.ptr[k];
                 if (c >= n_cells) continue;
 
                 Index t = labels[c];
                 if (t >= 0 && t < n_types) {
-                    Real v = static_cast<Real>(values[k]);
+                    Real v = static_cast<Real>(values.ptr[k]);
                     mean_expression[static_cast<Size>(t) * n_markers + m] += v;
                     if (v > Real(0)) {
                         ++expressing[static_cast<Size>(t) * n_markers + m];
@@ -1684,14 +1723,14 @@ void cell_type_marker_expression(
     }
 
     scl::memory::aligned_free(expressing, SCL_ALIGNMENT);
-    scl::memory::aligned_free(type_counts, SCL_ALIGNMENT);
+    // type_counts_ptr automatically freed
 }
 
 // =============================================================================
 // Fine-Grained Annotation (Hierarchical)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void hierarchical_annotation(
     const Sparse<T, IsCSR>& expression,
     const Real* coarse_profiles,      // n_coarse x n_genes
@@ -1711,7 +1750,8 @@ void hierarchical_annotation(
     SCL_CHECK_DIM(fine_labels.len >= static_cast<Size>(n_cells),
                   "Annotation: fine_labels buffer too small");
 
-    Real* cell_expr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto cell_expr_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    Real* cell_expr = cell_expr_ptr.release();
 
     for (Index c = 0; c < n_cells; ++c) {
         // Extract cell expression
@@ -1723,9 +1763,9 @@ void hierarchical_annotation(
             Index len = expression.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
-                Index g = indices[k];
+                Index g = indices.ptr[k];
                 if (g < n_genes) {
-                    cell_expr[g] = static_cast<Real>(values[k]);
+                    cell_expr[g] = static_cast<Real>(values.ptr[k]);
                 }
             }
         }
@@ -1825,8 +1865,8 @@ inline void annotation_entropy(
 
     // Parallelize for large datasets
     if (static_cast<Size>(n_cells) >= config::PARALLEL_THRESHOLD) {
-        scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells), [&](size_t c_idx) {
-            const Index c = static_cast<Index>(c_idx);
+        scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells), [&](Size c_idx) {
+            const auto c = static_cast<Index>(c_idx);
             const Real* probs = type_probabilities + static_cast<Size>(c) * n_types;
 
             Real h = Real(0);
@@ -1859,14 +1899,14 @@ inline void annotation_entropy(
 // Differential Marker Expression
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void differential_markers(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> labels,
     Index target_type,
     Index n_cells,
     Index n_genes,
-    Index n_types,
+    [[maybe_unused]] Index n_types,
     Array<Real> log_fold_change,
     Array<Real> pct_in,
     Array<Real> pct_out
@@ -1874,10 +1914,14 @@ void differential_markers(
     SCL_CHECK_DIM(log_fold_change.len >= static_cast<Size>(n_genes),
                   "Annotation: log_fold_change buffer too small");
 
-    Real* sum_in = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Real* sum_out = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Index* count_in_expr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
-    Index* count_out_expr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    auto sum_in_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto sum_out_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto count_in_expr_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    auto count_out_expr_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    Real* sum_in = sum_in_ptr.release();
+    Real* sum_out = sum_out_ptr.release();
+    Index* count_in_expr = count_in_expr_ptr.release();
+    Index* count_out_expr = count_out_expr_ptr.release();
 
     scl::algo::zero(sum_in, static_cast<Size>(n_genes));
     scl::algo::zero(sum_out, static_cast<Size>(n_genes));
@@ -1898,10 +1942,10 @@ void differential_markers(
             Index len = expression.row_length_unsafe(c);
 
             for (Index k = 0; k < len; ++k) {
-                Index g = indices[k];
+                Index g = indices.ptr[k];
                 if (g >= n_genes) continue;
 
-                Real v = static_cast<Real>(values[k]);
+                Real v = static_cast<Real>(values.ptr[k]);
                 if (is_target) {
                     sum_in[g] += v;
                     if (v > Real(0)) ++count_in_expr[g];
@@ -1924,10 +1968,10 @@ void differential_markers(
             Index len = expression.col_length_unsafe(g);
 
             for (Index k = 0; k < len; ++k) {
-                Index c = indices[k];
+                Index c = indices.ptr[k];
                 if (c >= n_cells) continue;
 
-                Real v = static_cast<Real>(values[k]);
+                Real v = static_cast<Real>(values.ptr[k]);
                 bool is_target = (labels[c] == target_type);
 
                 if (is_target) {
@@ -1983,20 +2027,22 @@ inline void top_markers_per_type(
         Size workspace_size = static_cast<Size>(n_genes) * (sizeof(Index) + sizeof(Real));
 
         scl::threading::WorkspacePool<Byte> pool;
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+        const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
         pool.init(n_threads, workspace_size);
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_types),
-            [&](size_t t_idx, size_t thread_rank) {
-            const Index t = static_cast<Index>(t_idx);
+            [&](Size t_idx, Size thread_rank) {
+            const auto t = static_cast<Index>(t_idx);
             Byte* workspace = pool.get(thread_rank);
 
-            const Real* lfc = log_fold_changes + static_cast<Size>(t) * n_genes;
-            Index* out_markers = top_markers + static_cast<Size>(t) * n_top;
-            Real* out_lfc = top_lfc + static_cast<Size>(t) * n_top;
+            const Real* lfc = log_fold_changes + static_cast<Size>(t) * static_cast<Size>(n_genes);
+            auto* out_markers = top_markers + static_cast<Size>(t) * static_cast<Size>(n_top);
+            auto* out_lfc = top_lfc + static_cast<Size>(t) * static_cast<Size>(n_top);
 
-            Index* sorted_idx = reinterpret_cast<Index*>(workspace);
-            Real* sorted_lfc = reinterpret_cast<Real*>(workspace + 
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            auto* sorted_idx = reinterpret_cast<Index*>(workspace);
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+            auto* sorted_lfc = reinterpret_cast<Real*>(workspace + 
                 static_cast<Size>(n_genes) * sizeof(Index));
 
             // Initialize indices
@@ -2027,13 +2073,15 @@ inline void top_markers_per_type(
         });
     } else {
         // Sequential path
-        Index* sorted_idx = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
-        Real* sorted_lfc = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+        auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+        auto sorted_lfc_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+        Index* sorted_idx = sorted_idx_ptr.release();
+        Real* sorted_lfc = sorted_lfc_ptr.release();
 
         for (Index t = 0; t < n_types; ++t) {
-            const Real* lfc = log_fold_changes + static_cast<Size>(t) * n_genes;
-            Index* out_markers = top_markers + static_cast<Size>(t) * n_top;
-            Real* out_lfc = top_lfc + static_cast<Size>(t) * n_top;
+            const Real* lfc = log_fold_changes + static_cast<Size>(t) * static_cast<Size>(n_genes);
+            Index* out_markers = top_markers + static_cast<Size>(t) * static_cast<Size>(n_top);
+            Real* out_lfc = top_lfc + static_cast<Size>(t) * static_cast<Size>(n_top);
 
             // Initialize
             for (Index g = 0; g < n_genes; ++g) {

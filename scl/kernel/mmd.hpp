@@ -28,8 +28,8 @@ SCL_FORCE_INLINE T unary_exp_sum_ultra(
     T* SCL_RESTRICT cache
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>();
+    const size_t lanes = s::Lanes(d);
 
     const auto v_gamma = s::Set(d, gamma);
 
@@ -169,13 +169,13 @@ SCL_FORCE_INLINE T self_kernel_sum_symmetric(
     }
 
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>();
+    const size_t lanes = s::Lanes(d);
     const auto v_gamma = s::Set(d, gamma);
 
     T off_diag = T(0);
 
-    for (size_t i = 0; i < nnz - 1; ++i) {
+    for (Size i = 0; i < nnz - 1; ++i) {
         const T vi = vals[i];
         const auto v_vi = s::Set(d, vi);
 
@@ -245,8 +245,8 @@ SCL_FORCE_INLINE T cross_kernel_sum_blocked(
     }
 
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>();
+    const size_t lanes = s::Lanes(d);
     const auto v_gamma = s::Set(d, gamma);
 
     constexpr size_t BLOCK_X = 64;
@@ -254,11 +254,11 @@ SCL_FORCE_INLINE T cross_kernel_sum_blocked(
 
     T cross_sum = T(0);
 
-    for (size_t bx = 0; bx < nnz_x; bx += BLOCK_X) {
-        size_t bx_end = (bx + BLOCK_X < static_cast<size_t>(nnz_x)) ? (bx + BLOCK_X) : static_cast<size_t>(nnz_x);
+    for (Size bx = 0; bx < nnz_x; bx += BLOCK_X) {
+        size_t bx_end = (bx + BLOCK_X < static_cast<Size>(nnz_x)) ? (bx + BLOCK_X) : static_cast<Size>(nnz_x);
 
-        for (size_t by = 0; by < nnz_y; by += BLOCK_Y) {
-            size_t by_end = (by + BLOCK_Y < static_cast<size_t>(nnz_y)) ? (by + BLOCK_Y) : static_cast<size_t>(nnz_y);
+        for (Size by = 0; by < nnz_y; by += BLOCK_Y) {
+            size_t by_end = (by + BLOCK_Y < static_cast<Size>(nnz_y)) ? (by + BLOCK_Y) : static_cast<Size>(nnz_y);
 
             SCL_PREFETCH_READ(vals_y + by, 0);
 
@@ -380,7 +380,7 @@ void mmd_rbf(
     }
 
     // Pre-allocate cache pools for all threads
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     const Size max_cache = (max_nnz_x > max_nnz_y) ? max_nnz_x : max_nnz_y;
 
     scl::threading::DualWorkspacePool<T> cache_pool;
@@ -389,7 +389,7 @@ void mmd_rbf(
     }
 
     scl::threading::parallel_for(Index(0), primary_dim, [&](size_t p_sz, size_t thread_rank) {
-        const Index p = static_cast<Index>(p_sz);
+        const auto p = static_cast<Index>(p_sz);
 
         auto vals_x_arr = mat_x.primary_values_unsafe(p);
         auto vals_y_arr = mat_y.primary_values_unsafe(p);

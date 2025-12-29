@@ -42,8 +42,9 @@ SCL_FORCE_INLINE void compute_sum_sq_simd(
     Real& out_sq_sum
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -104,8 +105,9 @@ SCL_FORCE_INLINE void compute_clipped_sum_sq_simd(
     Real& out_sq_sum
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     auto v_clip = s::Set(d, clip);
     auto v_sum0 = s::Zero(d);
@@ -178,12 +180,12 @@ void standard_moments(
     SCL_CHECK_DIM(out_means.len >= static_cast<Size>(primary_dim), "Means size mismatch");
     SCL_CHECK_DIM(out_vars.len >= static_cast<Size>(primary_dim), "Vars size mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
-        Real sum, sq_sum;
+        Real sum{0}, sq_sum{0};
         if (len_sz > 0) {
             auto values = matrix.primary_values_unsafe(idx);
             detail::compute_sum_sq_simd(values.ptr, len_sz, sum, sq_sum);
@@ -196,8 +198,8 @@ void standard_moments(
         Real var = (denom > Real(0)) ? ((sq_sum - sum * mu) / denom) : Real(0);
         if (var < Real(0)) var = Real(0);
 
-        out_means[p] = mu;
-        out_vars[p] = var;
+        out_means[static_cast<Index>(p)] = mu;
+        out_vars[static_cast<Index>(p)] = var;
     });
 }
 
@@ -216,13 +218,13 @@ void clipped_moments(
     SCL_CHECK_DIM(out_means.len >= static_cast<Size>(primary_dim), "Means size mismatch");
     SCL_CHECK_DIM(out_vars.len >= static_cast<Size>(primary_dim), "Vars size mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
-        Real clip = clip_vals[p];
+        Real clip = clip_vals[static_cast<Index>(p)];
 
-        Real sum, sq_sum;
+        Real sum{0}, sq_sum{0};
         if (len_sz > 0) {
             auto values = matrix.primary_values_unsafe(idx);
             detail::compute_clipped_sum_sq_simd(values.ptr, len_sz, clip, sum, sq_sum);
@@ -238,8 +240,8 @@ void clipped_moments(
         }
         if (var < Real(0)) var = Real(0);
 
-        out_means[p] = mu;
-        out_vars[p] = var;
+        out_means[static_cast<Index>(p)] = mu;
+        out_vars[static_cast<Index>(p)] = var;
     });
 }
 
@@ -253,10 +255,10 @@ void detection_rate(
 
     SCL_CHECK_DIM(out_rates.len >= static_cast<Size>(primary_dim), "Rates size mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
-        out_rates[p] = static_cast<Real>(len) * inv_N;
+        out_rates[static_cast<Index>(p)] = static_cast<Real>(len) * inv_N;
     });
 }
 
@@ -271,8 +273,9 @@ inline void dispersion(
     SCL_CHECK_DIM(out_dispersion.len >= n, "Output size mismatch");
 
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<Real>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     const auto v_eps = s::Set(d, config::EPSILON);
     const auto v_zero = s::Zero(d);
@@ -318,9 +321,9 @@ inline void dispersion(
     }
 
     for (; k < n; ++k) {
-        Real m = means[k];
-        Real v = vars[k];
-        out_dispersion[k] = (m > config::EPSILON) ? (v / m) : Real(0);
+        Real m = means[static_cast<Index>(k)];
+        Real v = vars[static_cast<Index>(k)];
+        out_dispersion[static_cast<Index>(k)] = (m > config::EPSILON) ? (v / m) : Real(0);
     }
 }
 

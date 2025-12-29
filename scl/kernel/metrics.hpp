@@ -128,23 +128,22 @@ Real silhouette_score(
 
     if (n_cells < 2) return Real(0.0);
 
-    Index n_clusters = detail::find_max_label(labels) + 1;
+    const Index n_clusters = detail::find_max_label(labels) + 1;
     if (n_clusters < 2) return Real(0.0);
 
-    // Count cells per cluster
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    Size* cluster_sizes = cluster_sizes_ptr.get();
     detail::count_per_cluster(labels, n_clusters, cluster_sizes);
 
-    // Parallel computation
     if (n_cells >= config::PARALLEL_THRESHOLD) {
         std::atomic<Real> total_silhouette{Real(0.0)};
         std::atomic<Size> valid_count{0};
 
         scl::threading::WorkspacePool<Real> workspace;
-        workspace.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_clusters));
+        workspace.init(scl::threading::get_num_threads_runtime(), static_cast<Size>(n_clusters));
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
-            Index my_cluster = labels.ptr[i];
+            const Index my_cluster = labels.ptr[i];
 
             if (cluster_sizes[my_cluster] < 2) return;
 
@@ -153,24 +152,24 @@ Real silhouette_score(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices_unsafe(i];
-            const Index row_end = distances.row_indices_unsafe(i + 1];
+            const Index row_start = distances.row_indices_unsafe(i);
+            const Index row_end = distances.row_indices_unsafe(i + 1);
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = distances.col_indices_unsafe(j];
+                const Index neighbor = distances.col_indices_unsafe(j);
                 if (neighbor == static_cast<Index>(i)) continue;
 
-                T dist_val = distances.values()[j];
-                Index neighbor_cluster = labels.ptr[neighbor];
+                const T dist_val = distances.values()[j];
+                const Index neighbor_cluster = labels.ptr[neighbor];
                 cluster_dist_sum[neighbor_cluster] += static_cast<Real>(dist_val);
             }
 
-            Real a_i = cluster_dist_sum[my_cluster] / static_cast<Real>(cluster_sizes[my_cluster] - 1);
+            const Real a_i = cluster_dist_sum[my_cluster] / static_cast<Real>(cluster_sizes[my_cluster] - 1);
 
             Real b_i = std::numeric_limits<Real>::max();
             for (Index c = 0; c < n_clusters; ++c) {
                 if (c != my_cluster && cluster_sizes[c] > 0) {
-                    Real mean_dist = cluster_dist_sum[c] / static_cast<Real>(cluster_sizes[c]);
+                    const Real mean_dist = cluster_dist_sum[c] / static_cast<Real>(cluster_sizes[c]);
                     if (mean_dist < b_i) {
                         b_i = mean_dist;
                     }
@@ -178,10 +177,9 @@ Real silhouette_score(
             }
 
             if (b_i < std::numeric_limits<Real>::max()) {
-                Real max_ab = scl::algo::max2(a_i, b_i);
+                const Real max_ab = scl::algo::max2(a_i, b_i);
                 if (max_ab > config::EPSILON) {
-                    Real s_i = (b_i - a_i) / max_ab;
-                    // Atomic add for thread safety
+                    const Real s_i = (b_i - a_i) / max_ab;
                     Real expected = total_silhouette.load(std::memory_order_relaxed);
                     while (!total_silhouette.compare_exchange_weak(expected, expected + s_i,
                         std::memory_order_relaxed, std::memory_order_relaxed)) {}
@@ -190,9 +188,7 @@ Real silhouette_score(
             }
         });
 
-        scl::memory::aligned_free(cluster_sizes);
-
-        Size count = valid_count.load();
+        const Size count = valid_count.load();
         if (count == 0) return Real(0.0);
         return total_silhouette.load() / static_cast<Real>(count);
     }
@@ -200,10 +196,11 @@ Real silhouette_score(
     // Sequential fallback for small inputs
     Real total_silhouette = Real(0.0);
     Size valid_count = 0;
-    Real* cluster_dist_sum = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
+    auto cluster_dist_sum_ptr = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
+    Real* cluster_dist_sum = cluster_dist_sum_ptr.get();
 
     for (Size i = 0; i < n_cells; ++i) {
-        Index my_cluster = labels.ptr[i];
+        const Index my_cluster = labels.ptr[i];
 
         if (cluster_sizes[my_cluster] < 2) continue;
 
@@ -211,24 +208,24 @@ Real silhouette_score(
             cluster_dist_sum[c] = Real(0.0);
         }
 
-        const Index row_start = distances.row_indices_unsafe(i];
-        const Index row_end = distances.row_indices_unsafe(i + 1];
+        const Index row_start = distances.row_indices_unsafe(i);
+        const Index row_end = distances.row_indices_unsafe(i + 1);
 
         for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = distances.col_indices_unsafe(j];
+            const Index neighbor = distances.col_indices_unsafe(j);
             if (neighbor == static_cast<Index>(i)) continue;
 
-            T dist_val = distances.values()[j];
-            Index neighbor_cluster = labels.ptr[neighbor];
+            const T dist_val = distances.values()[j];
+            const Index neighbor_cluster = labels.ptr[neighbor];
             cluster_dist_sum[neighbor_cluster] += static_cast<Real>(dist_val);
         }
 
-        Real a_i = cluster_dist_sum[my_cluster] / static_cast<Real>(cluster_sizes[my_cluster] - 1);
+        const Real a_i = cluster_dist_sum[my_cluster] / static_cast<Real>(cluster_sizes[my_cluster] - 1);
 
         Real b_i = std::numeric_limits<Real>::max();
         for (Index c = 0; c < n_clusters; ++c) {
             if (c != my_cluster && cluster_sizes[c] > 0) {
-                Real mean_dist = cluster_dist_sum[c] / static_cast<Real>(cluster_sizes[c]);
+                const Real mean_dist = cluster_dist_sum[c] / static_cast<Real>(cluster_sizes[c]);
                 if (mean_dist < b_i) {
                     b_i = mean_dist;
                 }
@@ -236,17 +233,14 @@ Real silhouette_score(
         }
 
         if (b_i < std::numeric_limits<Real>::max()) {
-            Real max_ab = scl::algo::max2(a_i, b_i);
+            const Real max_ab = scl::algo::max2(a_i, b_i);
             if (max_ab > config::EPSILON) {
-                Real s_i = (b_i - a_i) / max_ab;
+                const Real s_i = (b_i - a_i) / max_ab;
                 total_silhouette += s_i;
                 ++valid_count;
             }
         }
     }
-
-    scl::memory::aligned_free(cluster_sizes);
-    scl::memory::aligned_free(cluster_dist_sum);
 
     if (valid_count == 0) return Real(0.0);
     return total_silhouette / static_cast<Real>(valid_count);
@@ -264,21 +258,24 @@ void silhouette_samples(
     SCL_CHECK_DIM(n_cells == scores.len, "Scores length must match number of cells");
 
     if (n_cells < 2) {
-        for (Size i = 0; i < n_cells; ++i) scores.ptr[i] = Real(0.0);
+        for (Size i = 0; i < n_cells; ++i) {
+            scores.ptr[i] = Real(0.0);
+        }
         return;
     }
 
-    Index n_clusters = detail::find_max_label(labels) + 1;
+    const Index n_clusters = detail::find_max_label(labels) + 1;
 
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    Size* cluster_sizes = cluster_sizes_ptr.release();
     detail::count_per_cluster(labels, n_clusters, cluster_sizes);
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
         scl::threading::WorkspacePool<Real> workspace;
-        workspace.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_clusters));
+        workspace.init(scl::threading::get_num_threads_runtime(), static_cast<Size>(n_clusters));
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
-            Index my_cluster = labels.ptr[i];
+            const Index my_cluster = labels.ptr[i];
 
             if (cluster_sizes[my_cluster] < 2 || n_clusters < 2) {
                 scores.ptr[i] = Real(0.0);
@@ -290,24 +287,24 @@ void silhouette_samples(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices_unsafe(i];
-            const Index row_end = distances.row_indices_unsafe(i + 1];
+            const Index row_start = distances.row_indices_unsafe(i);
+            const Index row_end = distances.row_indices_unsafe(i + 1);
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = distances.col_indices_unsafe(j];
+                const Index neighbor = distances.col_indices_unsafe(j);
                 if (neighbor == static_cast<Index>(i)) continue;
 
-                T dist_val = distances.values()[j];
-                Index neighbor_cluster = labels.ptr[neighbor];
+                const T dist_val = distances.values()[j];
+                const Index neighbor_cluster = labels.ptr[neighbor];
                 cluster_dist_sum[neighbor_cluster] += static_cast<Real>(dist_val);
             }
 
-            Real a_i = cluster_dist_sum[my_cluster] / static_cast<Real>(cluster_sizes[my_cluster] - 1);
+            const Real a_i = cluster_dist_sum[my_cluster] / static_cast<Real>(cluster_sizes[my_cluster] - 1);
 
             Real b_i = std::numeric_limits<Real>::max();
             for (Index c = 0; c < n_clusters; ++c) {
                 if (c != my_cluster && cluster_sizes[c] > 0) {
-                    Real mean_dist = cluster_dist_sum[c] / static_cast<Real>(cluster_sizes[c]);
+                    const Real mean_dist = cluster_dist_sum[c] / static_cast<Real>(cluster_sizes[c]);
                     if (mean_dist < b_i) {
                         b_i = mean_dist;
                     }
@@ -315,7 +312,7 @@ void silhouette_samples(
             }
 
             if (b_i < std::numeric_limits<Real>::max()) {
-                Real max_ab = scl::algo::max2(a_i, b_i);
+                const Real max_ab = scl::algo::max2(a_i, b_i);
                 if (max_ab > config::EPSILON) {
                     scores.ptr[i] = (b_i - a_i) / max_ab;
                 } else {
@@ -326,10 +323,11 @@ void silhouette_samples(
             }
         });
     } else {
-        Real* cluster_dist_sum = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
+        auto cluster_dist_sum_ptr = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
+        Real* cluster_dist_sum = cluster_dist_sum_ptr.get();
 
         for (Size i = 0; i < n_cells; ++i) {
-            Index my_cluster = labels.ptr[i];
+            const Index my_cluster = labels.ptr[i];
 
             if (cluster_sizes[my_cluster] < 2 || n_clusters < 2) {
                 scores.ptr[i] = Real(0.0);
@@ -340,24 +338,24 @@ void silhouette_samples(
                 cluster_dist_sum[c] = Real(0.0);
             }
 
-            const Index row_start = distances.row_indices_unsafe(i];
-            const Index row_end = distances.row_indices_unsafe(i + 1];
+            const Index row_start = distances.row_indices_unsafe(i);
+            const Index row_end = distances.row_indices_unsafe(i + 1);
 
             for (Index j = row_start; j < row_end; ++j) {
-                Index neighbor = distances.col_indices_unsafe(j];
+                const Index neighbor = distances.col_indices_unsafe(j);
                 if (neighbor == static_cast<Index>(i)) continue;
 
-                T dist_val = distances.values()[j];
-                Index neighbor_cluster = labels.ptr[neighbor];
+                const T dist_val = distances.values()[j];
+                const Index neighbor_cluster = labels.ptr[neighbor];
                 cluster_dist_sum[neighbor_cluster] += static_cast<Real>(dist_val);
             }
 
-            Real a_i = cluster_dist_sum[my_cluster] / static_cast<Real>(cluster_sizes[my_cluster] - 1);
+            const Real a_i = cluster_dist_sum[my_cluster] / static_cast<Real>(cluster_sizes[my_cluster] - 1);
 
             Real b_i = std::numeric_limits<Real>::max();
             for (Index c = 0; c < n_clusters; ++c) {
                 if (c != my_cluster && cluster_sizes[c] > 0) {
-                    Real mean_dist = cluster_dist_sum[c] / static_cast<Real>(cluster_sizes[c]);
+                    const Real mean_dist = cluster_dist_sum[c] / static_cast<Real>(cluster_sizes[c]);
                     if (mean_dist < b_i) {
                         b_i = mean_dist;
                     }
@@ -365,7 +363,7 @@ void silhouette_samples(
             }
 
             if (b_i < std::numeric_limits<Real>::max()) {
-                Real max_ab = scl::algo::max2(a_i, b_i);
+                const Real max_ab = scl::algo::max2(a_i, b_i);
                 if (max_ab > config::EPSILON) {
                     scores.ptr[i] = (b_i - a_i) / max_ab;
                 } else {
@@ -375,11 +373,7 @@ void silhouette_samples(
                 scores.ptr[i] = Real(0.0);
             }
         }
-
-        scl::memory::aligned_free(cluster_dist_sum);
     }
-
-    scl::memory::aligned_free(cluster_sizes);
 }
 
 // =============================================================================
@@ -399,13 +393,18 @@ Real adjusted_rand_index(
     Index n_clusters2 = detail::find_max_label(labels2) + 1;
 
     // Build contingency table
-    Size* contingency = scl::memory::aligned_alloc<Size>(
+    auto contingency_ptr = scl::memory::aligned_alloc<Size>(
         static_cast<Size>(n_clusters1) * static_cast<Size>(n_clusters2), SCL_ALIGNMENT);
+    Size* contingency = contingency_ptr.get();
     detail::build_contingency_table(labels1, labels2, n_clusters1, n_clusters2, contingency);
 
     // Compute row and column sums
-    Size* row_sums = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
-    Size* col_sums = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
+    auto row_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
+
+    Size* row_sums = row_sums_ptr.release();
+    auto col_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
+
+    Size* col_sums = col_sums_ptr.release();
 
     for (Index i = 0; i < n_clusters1; ++i) row_sums[i] = 0;
     for (Index j = 0; j < n_clusters2; ++j) col_sums[j] = 0;
@@ -440,10 +439,6 @@ Real adjusted_rand_index(
     Real expected = sum_ai_comb * sum_bj_comb / n_comb;
     Real mean_comb = (sum_ai_comb + sum_bj_comb) / Real(2.0);
 
-    scl::memory::aligned_free(contingency);
-    scl::memory::aligned_free(row_sums);
-    scl::memory::aligned_free(col_sums);
-
     Real denom = mean_comb - expected;
     if (std::abs(denom) < config::EPSILON) {
         return Real(1.0);
@@ -469,13 +464,18 @@ Real normalized_mutual_information(
     Index n_clusters2 = detail::find_max_label(labels2) + 1;
 
     // Build contingency table
-    Size* contingency = scl::memory::aligned_alloc<Size>(
+    auto contingency_ptr = scl::memory::aligned_alloc<Size>(
         static_cast<Size>(n_clusters1) * static_cast<Size>(n_clusters2), SCL_ALIGNMENT);
+    Size* contingency = contingency_ptr.get();
     detail::build_contingency_table(labels1, labels2, n_clusters1, n_clusters2, contingency);
 
     // Compute row and column sums
-    Size* row_sums = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
-    Size* col_sums = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
+    auto row_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
+
+    Size* row_sums = row_sums_ptr.release();
+    auto col_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
+
+    Size* col_sums = col_sums_ptr.release();
 
     for (Index i = 0; i < n_clusters1; ++i) row_sums[i] = 0;
     for (Index j = 0; j < n_clusters2; ++j) col_sums[j] = 0;
@@ -508,10 +508,6 @@ Real normalized_mutual_information(
         }
     }
 
-    scl::memory::aligned_free(contingency);
-    scl::memory::aligned_free(row_sums);
-    scl::memory::aligned_free(col_sums);
-
     // Normalized by arithmetic mean of entropies
     Real denom = (H1 + H2) / Real(2.0);
     if (denom < config::EPSILON) {
@@ -539,13 +535,15 @@ Real graph_connectivity(
     if (n_clusters == 0) return Real(1.0);
 
     // For each cluster, count how many connected components exist
-    Index* component_id = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto component_id_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    Index* component_id = component_id_ptr.get();
     for (Size i = 0; i < n_cells; ++i) {
         component_id[i] = -1;
     }
 
     Size total_components = 0;
-    Index* queue = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto queue_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    Index* queue = queue_ptr.get();
 
     // BFS to find connected components within each cluster
     for (Size start = 0; start < n_cells; ++start) {
@@ -576,13 +574,15 @@ Real graph_connectivity(
     }
 
     // Count components per cluster
-    Size* components_per_cluster = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto components_per_cluster_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    Size* components_per_cluster = components_per_cluster_ptr.get();
     for (Index c = 0; c < n_clusters; ++c) {
         components_per_cluster[c] = 0;
     }
 
     // Use a set-like approach: track unique component IDs per cluster
-    Index* seen_components = scl::memory::aligned_alloc<Index>(total_components, SCL_ALIGNMENT);
+    auto seen_components_ptr = scl::memory::aligned_alloc<Index>(total_components, SCL_ALIGNMENT);
+    Index* seen_components = seen_components_ptr.get();
     for (Size i = 0; i < total_components; ++i) {
         seen_components[i] = -1;
     }
@@ -607,11 +607,6 @@ Real graph_connectivity(
             }
         }
     }
-
-    scl::memory::aligned_free(component_id);
-    scl::memory::aligned_free(queue);
-    scl::memory::aligned_free(components_per_cluster);
-    scl::memory::aligned_free(seen_components);
 
     if (non_empty_clusters == 0) return Real(1.0);
     return static_cast<Real>(connected_clusters) / static_cast<Real>(non_empty_clusters);
@@ -673,17 +668,17 @@ void batch_entropy(
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
         scl::threading::WorkspacePool<Size> workspace;
-        workspace.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_batches));
+        workspace.init(scl::threading::get_num_threads_runtime(), static_cast<Size>(n_batches));
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
             compute_cell_entropy(i, workspace.get(thread_id));
         });
     } else {
-        Size* batch_counts = scl::memory::aligned_alloc<Size>(n_batches, SCL_ALIGNMENT);
+        auto batch_counts_ptr = scl::memory::aligned_alloc<Size>(n_batches, SCL_ALIGNMENT);
+        Size* batch_counts = batch_counts_ptr.get();
         for (Size i = 0; i < n_cells; ++i) {
             compute_cell_entropy(i, batch_counts);
         }
-        scl::memory::aligned_free(batch_counts);
     }
 }
 
@@ -745,17 +740,17 @@ void lisi(
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
         scl::threading::WorkspacePool<Size> workspace;
-        workspace.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_labels));
+        workspace.init(scl::threading::get_num_threads_runtime(), static_cast<Size>(n_labels));
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
             compute_lisi(i, workspace.get(thread_id));
         });
     } else {
-        Size* label_counts = scl::memory::aligned_alloc<Size>(n_labels, SCL_ALIGNMENT);
+        auto label_counts_ptr = scl::memory::aligned_alloc<Size>(n_labels, SCL_ALIGNMENT);
+        Size* label_counts = label_counts_ptr.get();
         for (Size i = 0; i < n_cells; ++i) {
             compute_lisi(i, label_counts);
         }
-        scl::memory::aligned_free(label_counts);
     }
 }
 
@@ -776,12 +771,18 @@ Real fowlkes_mallows_index(
     Index n_clusters1 = detail::find_max_label(labels1) + 1;
     Index n_clusters2 = detail::find_max_label(labels2) + 1;
 
-    Size* contingency = scl::memory::aligned_alloc<Size>(
+    auto contingency_ptr = scl::memory::aligned_alloc<Size>(
         static_cast<Size>(n_clusters1) * static_cast<Size>(n_clusters2), SCL_ALIGNMENT);
+    Size* contingency = contingency_ptr.release();
     detail::build_contingency_table(labels1, labels2, n_clusters1, n_clusters2, contingency);
 
-    Size* row_sums = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
-    Size* col_sums = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
+    auto row_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
+
+
+    Size* row_sums = row_sums_ptr.release();
+    auto col_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
+
+    Size* col_sums = col_sums_ptr.release();
 
     for (Index i = 0; i < n_clusters1; ++i) row_sums[i] = 0;
     for (Index j = 0; j < n_clusters2; ++j) col_sums[j] = 0;
@@ -809,10 +810,6 @@ Real fowlkes_mallows_index(
     Real P = detail::sum_comb2(row_sums, n_clusters1);
     Real Q = detail::sum_comb2(col_sums, n_clusters2);
 
-    scl::memory::aligned_free(contingency);
-    scl::memory::aligned_free(row_sums);
-    scl::memory::aligned_free(col_sums);
-
     if (P < config::EPSILON || Q < config::EPSILON) {
         return Real(0.0);
     }
@@ -833,9 +830,9 @@ Real v_measure(
 
     Index n_classes = detail::find_max_label(labels_true) + 1;
     Index n_clusters = detail::find_max_label(labels_pred) + 1;
-
-    Size* contingency = scl::memory::aligned_alloc<Size>(
+    auto contingency_ptr = scl::memory::aligned_alloc<Size>(
         static_cast<Size>(n_classes) * static_cast<Size>(n_clusters), SCL_ALIGNMENT);
+    Size* contingency = contingency_ptr.get();
 
     // Build contingency with classes as rows, clusters as columns
     const Size table_size = static_cast<Size>(n_classes) * static_cast<Size>(n_clusters);
@@ -849,8 +846,10 @@ Real v_measure(
         ++contingency[c * n_clusters + k];
     }
 
-    Size* class_sums = scl::memory::aligned_alloc<Size>(n_classes, SCL_ALIGNMENT);
-    Size* cluster_sums = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto class_sums_ptr = scl::memory::aligned_alloc<Size>(n_classes, SCL_ALIGNMENT);
+    Size* class_sums = class_sums_ptr.get();
+    auto cluster_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    Size* cluster_sums = cluster_sums_ptr.get();
 
     for (Index c = 0; c < n_classes; ++c) class_sums[c] = 0;
     for (Index k = 0; k < n_clusters; ++k) cluster_sums[k] = 0;
@@ -876,7 +875,6 @@ Real v_measure(
             Size n_ck = contingency[c * n_clusters + k];
             if (n_ck > 0 && cluster_sums[k] > 0) {
                 Real p_ck = static_cast<Real>(n_ck) / n_real;
-                Real p_k = static_cast<Real>(cluster_sums[k]) / n_real;
                 H_C_given_K -= p_ck * std::log(static_cast<Real>(n_ck) / static_cast<Real>(cluster_sums[k]));
             }
         }
@@ -893,10 +891,6 @@ Real v_measure(
             }
         }
     }
-
-    scl::memory::aligned_free(contingency);
-    scl::memory::aligned_free(class_sums);
-    scl::memory::aligned_free(cluster_sums);
 
     // Homogeneity h = 1 - H(C|K)/H(C)
     Real h = (H_C > config::EPSILON) ? (Real(1.0) - H_C_given_K / H_C) : Real(1.0);
@@ -942,8 +936,9 @@ Real purity_score(
     Index n_classes = detail::find_max_label(labels_true) + 1;
     Index n_clusters = detail::find_max_label(labels_pred) + 1;
 
-    Size* contingency = scl::memory::aligned_alloc<Size>(
+    auto contingency_ptr = scl::memory::aligned_alloc<Size>(
         static_cast<Size>(n_classes) * static_cast<Size>(n_clusters), SCL_ALIGNMENT);
+    Size* contingency = contingency_ptr.get();
 
     const Size table_size = static_cast<Size>(n_classes) * static_cast<Size>(n_clusters);
     for (Size i = 0; i < table_size; ++i) {
@@ -969,8 +964,6 @@ Real purity_score(
         total_correct += max_count;
     }
 
-    scl::memory::aligned_free(contingency);
-
     return static_cast<Real>(total_correct) / static_cast<Real>(n);
 }
 
@@ -983,14 +976,13 @@ Real mean_lisi(
     const Size n_cells = static_cast<Size>(neighbors.rows());
     if (n_cells == 0) return Real(1.0);
 
-    Real* scores = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto scores_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* scores = scores_ptr.get();
     Array<Real> scores_array = {scores, n_cells};
 
     lisi(neighbors, labels, scores_array);
 
     Real sum = scl::vectorize::sum(Array<const Real>(scores, n_cells));
-
-    scl::memory::aligned_free(scores);
 
     return sum / static_cast<Real>(n_cells);
 }
@@ -1004,14 +996,13 @@ Real mean_batch_entropy(
     const Size n_cells = static_cast<Size>(neighbors.rows());
     if (n_cells == 0) return Real(1.0);
 
-    Real* scores = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto scores_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* scores = scores_ptr.get();
     Array<Real> scores_array = {scores, n_cells};
 
     batch_entropy(neighbors, batch_labels, scores_array);
 
     Real sum = scl::vectorize::sum(Array<const Real>(scores, n_cells));
-
-    scl::memory::aligned_free(scores);
 
     return sum / static_cast<Real>(n_cells);
 }

@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <concepts>
+#include <memory>
 
 // =============================================================================
 // FILE: scl/kernel/clonotype.hpp
@@ -21,10 +23,21 @@
 
 namespace scl::kernel::clonotype {
 
+// =============================================================================
+// C++20 Concepts
+// =============================================================================
+
+template <typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
 namespace config {
-    constexpr Real EPSILON = Real(1e-10);
-    constexpr Index NO_CLONE = -1;
-    constexpr Size MIN_CLONE_SIZE = 2;
+    inline constexpr Real EPSILON = Real(1e-10);
+    inline constexpr Index NO_CLONE = -1;
+    inline constexpr Size MIN_CLONE_SIZE = 2;
 }
 
 namespace detail {
@@ -79,7 +92,8 @@ SCL_FORCE_INLINE Real gini_coefficient(const Size* sizes, Size n) {
     if (n == 0) return Real(0.0);
 
     // Sort sizes (copy first)
-    Size* sorted = scl::memory::aligned_alloc<Size>(n, SCL_ALIGNMENT);
+    auto sorted_ptr = scl::memory::aligned_alloc<Size>(n, SCL_ALIGNMENT);
+    Size* sorted = sorted_ptr.release();
     for (Size i = 0; i < n; ++i) {
         sorted[i] = sizes[i];
     }
@@ -154,8 +168,9 @@ void clonal_diversity(
     Size n_possible_clones = static_cast<Size>(max_clone + 1);
 
     // Count clone sizes
-    Size* clone_sizes = scl::memory::aligned_alloc<Size>(n_possible_clones, SCL_ALIGNMENT);
-    Size n_clones = detail::count_clones(clone_ids.ptr, n, clone_sizes, n_possible_clones);
+    auto clone_sizes_ptr = scl::memory::aligned_alloc<Size>(n_possible_clones, SCL_ALIGNMENT);
+    Size* clone_sizes = clone_sizes_ptr.release();
+    [[maybe_unused]] Size n_clones = detail::count_clones(clone_ids.ptr, n, clone_sizes, n_possible_clones);
 
     // Count non-empty clones and total cells with clone
     Size n_with_clone = 0;
@@ -173,8 +188,10 @@ void clonal_diversity(
     }
 
     // Compute frequencies
-    Real* freqs = scl::memory::aligned_alloc<Real>(n_nonempty, SCL_ALIGNMENT);
-    Size* sizes = scl::memory::aligned_alloc<Size>(n_nonempty, SCL_ALIGNMENT);
+    auto freqs_ptr = scl::memory::aligned_alloc<Real>(n_nonempty, SCL_ALIGNMENT);
+    auto sizes_ptr = scl::memory::aligned_alloc<Size>(n_nonempty, SCL_ALIGNMENT);
+    Real* freqs = freqs_ptr.release();
+    Size* sizes = sizes_ptr.release();
     Size idx = 0;
 
     for (Size c = 0; c < n_possible_clones; ++c) {
@@ -223,8 +240,10 @@ void clone_dynamics(
     Size n_possible = std::min(max_clones, static_cast<Size>(max_clone + 1));
 
     // Count clone sizes at each timepoint
-    Size* sizes_t1 = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
-    Size* sizes_t2 = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    auto sizes_t1_ptr = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    auto sizes_t2_ptr = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    Size* sizes_t1 = sizes_t1_ptr.release();
+    Size* sizes_t2 = sizes_t2_ptr.release();
 
     for (Size c = 0; c < n_possible; ++c) {
         sizes_t1[c] = 0;
@@ -294,8 +313,10 @@ void shared_clonotypes(
     Size n_possible = static_cast<Size>(max_clone + 1);
 
     // Track presence in each sample
-    bool* in_sample1 = scl::memory::aligned_alloc<bool>(n_possible, SCL_ALIGNMENT);
-    bool* in_sample2 = scl::memory::aligned_alloc<bool>(n_possible, SCL_ALIGNMENT);
+    auto in_sample1_ptr = scl::memory::aligned_alloc<bool>(n_possible, SCL_ALIGNMENT);
+    auto in_sample2_ptr = scl::memory::aligned_alloc<bool>(n_possible, SCL_ALIGNMENT);
+    bool* in_sample1 = in_sample1_ptr.release();
+    bool* in_sample2 = in_sample2_ptr.release();
 
     for (Size c = 0; c < n_possible; ++c) {
         in_sample1[c] = false;
@@ -340,7 +361,7 @@ void shared_clonotypes(
 // Clone Phenotype (mean expression per clone)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void clone_phenotype(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> clone_ids,
@@ -366,7 +387,8 @@ void clone_phenotype(
     n_clones = std::min(max_clones, static_cast<Size>(max_clone + 1));
 
     // Initialize profiles and counts
-    Size* clone_sizes = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    auto clone_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    Size* clone_sizes = clone_sizes_ptr.release();
 
     for (Size c = 0; c < n_clones; ++c) {
         clone_sizes[c] = 0;
@@ -447,8 +469,10 @@ void clonality_score(
     Size n_possible_clones = static_cast<Size>(max_clone + 1);
 
     // Count per cluster
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
-    Size* clone_counts = scl::memory::aligned_alloc<Size>(n_clusters * n_possible_clones, SCL_ALIGNMENT);
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto clone_counts_ptr = scl::memory::aligned_alloc<Size>(n_clusters * n_possible_clones, SCL_ALIGNMENT);
+    Size* cluster_sizes = cluster_sizes_ptr.release();
+    Size* clone_counts = clone_counts_ptr.release();
 
     for (Index c = 0; c < n_clusters; ++c) {
         cluster_sizes[c] = 0;
@@ -523,8 +547,10 @@ Real repertoire_overlap_morisita(
     Size n_possible = static_cast<Size>(max_clone + 1);
 
     // Count clone sizes
-    Size* sizes_1 = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
-    Size* sizes_2 = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    auto sizes_1_ptr = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    auto sizes_2_ptr = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    Size* sizes_1 = sizes_1_ptr.release();
+    Size* sizes_2 = sizes_2_ptr.release();
 
     for (Size c = 0; c < n_possible; ++c) {
         sizes_1[c] = 0;
@@ -619,7 +645,8 @@ void diversity_per_cluster(
             continue;
         }
 
-        Index* cluster_clones = scl::memory::aligned_alloc<Index>(cluster_size, SCL_ALIGNMENT);
+        auto cluster_clones_ptr = scl::memory::aligned_alloc<Index>(cluster_size, SCL_ALIGNMENT);
+        Index* cluster_clones = cluster_clones_ptr.release();
         Size idx = 0;
         for (Size i = 0; i < n; ++i) {
             if (cluster_labels.ptr[i] == c) {
@@ -628,7 +655,9 @@ void diversity_per_cluster(
         }
 
         Array<const Index> cluster_arr = {cluster_clones, cluster_size};
-        Real shannon, simpson, gini;
+        Real shannon = Real(0.0);
+        Real simpson = Real(0.0);
+        Real gini = Real(0.0);
         clonal_diversity(cluster_arr, shannon, simpson, gini);
 
         shannon_per_cluster.ptr[c] = shannon;
@@ -669,8 +698,9 @@ void clone_transition_matrix(
     Size n_possible_clones = static_cast<Size>(max_clone + 1);
 
     // For each clone, find which clusters its cells belong to
-    Size* cluster_count_per_clone = scl::memory::aligned_alloc<Size>(
+    auto cluster_count_per_clone_ptr = scl::memory::aligned_alloc<Size>(
         n_possible_clones * n_clusters, SCL_ALIGNMENT);
+    Size* cluster_count_per_clone = cluster_count_per_clone_ptr.release();
 
     for (Size i = 0; i < n_possible_clones * n_clusters; ++i) {
         cluster_count_per_clone[i] = 0;
@@ -751,9 +781,12 @@ void rarefaction_diversity(
         return state;
     };
 
-    Real* diversities = scl::memory::aligned_alloc<Real>(n_iterations, SCL_ALIGNMENT);
-    Index* subsample = scl::memory::aligned_alloc<Index>(subsample_size, SCL_ALIGNMENT);
-    Index* indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto diversities_ptr = scl::memory::aligned_alloc<Real>(n_iterations, SCL_ALIGNMENT);
+    auto subsample_ptr = scl::memory::aligned_alloc<Index>(subsample_size, SCL_ALIGNMENT);
+    auto indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    Real* diversities = diversities_ptr.release();
+    Index* subsample = subsample_ptr.release();
+    Index* indices = indices_ptr.release();
 
     for (Size iter = 0; iter < n_iterations; ++iter) {
         // Shuffle and take subsample
@@ -768,7 +801,9 @@ void rarefaction_diversity(
 
         // Compute diversity
         Array<const Index> subsample_arr = {subsample, subsample_size};
-        Real shannon, simpson, gini;
+        Real shannon = Real(0.0);
+        Real simpson = Real(0.0);
+        Real gini = Real(0.0);
         clonal_diversity(subsample_arr, shannon, simpson, gini);
 
         diversities[iter] = shannon;
@@ -822,10 +857,9 @@ void detect_expanded_clones(
     Size n_possible = static_cast<Size>(max_clone + 1);
 
     // Count clone sizes
-    Size* sizes = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
-    for (Size c = 0; c < n_possible; ++c) {
-        sizes[c] = 0;
-    }
+    auto sizes_ptr = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    Size* sizes = sizes_ptr.release();
+    scl::algo::zero(sizes, n_possible);
 
     for (Size i = 0; i < n; ++i) {
         Index clone = clone_ids.ptr[i];
@@ -839,7 +873,7 @@ void detect_expanded_clones(
         }
     }
 
-    scl::memory::aligned_free(sizes);
+    scl::memory::aligned_free(sizes, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -874,10 +908,9 @@ void clone_size_statistics(
     Size n_possible = static_cast<Size>(max_clone + 1);
 
     // Count clone sizes
-    Size* sizes = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
-    for (Size c = 0; c < n_possible; ++c) {
-        sizes[c] = 0;
-    }
+    auto sizes_ptr = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    Size* sizes = sizes_ptr.release();
+    scl::algo::zero(sizes, n_possible);
 
     for (Size i = 0; i < n; ++i) {
         Index clone = clone_ids.ptr[i];
@@ -885,7 +918,8 @@ void clone_size_statistics(
     }
 
     // Collect non-empty sizes
-    Size* nonempty_sizes = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    auto nonempty_sizes_ptr = scl::memory::aligned_alloc<Size>(n_possible, SCL_ALIGNMENT);
+    Size* nonempty_sizes = nonempty_sizes_ptr.release();
     Size n_nonempty = 0;
 
     for (Size c = 0; c < n_possible; ++c) {
@@ -917,10 +951,13 @@ void clone_size_statistics(
     // Median
     std::sort(nonempty_sizes, nonempty_sizes + n_nonempty);
     if (n_nonempty % 2 == 0) {
-        median_size = static_cast<Real>(nonempty_sizes[n_nonempty / 2 - 1] +
-                                        nonempty_sizes[n_nonempty / 2]) / Real(2.0);
+        const auto idx1 = static_cast<Size>(n_nonempty / 2 - 1);
+        const auto idx2 = static_cast<Size>(n_nonempty / 2);
+        median_size = (static_cast<Real>(nonempty_sizes[idx1]) +
+                      static_cast<Real>(nonempty_sizes[idx2])) / Real(2.0);
     } else {
-        median_size = static_cast<Real>(nonempty_sizes[n_nonempty / 2]);
+        const auto idx = static_cast<Size>(n_nonempty / 2);
+        median_size = static_cast<Real>(nonempty_sizes[idx]);
     }
 
     scl::memory::aligned_free(sizes);

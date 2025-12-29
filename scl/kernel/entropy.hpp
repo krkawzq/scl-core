@@ -9,12 +9,12 @@
 #include "scl/core/algo.hpp"
 #include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
 
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
-#include <atomic>
 
 // =============================================================================
 // FILE: scl/kernel/entropy.hpp
@@ -35,7 +35,7 @@ namespace config {
     constexpr Index DEFAULT_N_BINS = 10;
     constexpr Size PARALLEL_THRESHOLD = 128;
     constexpr Size SIMD_THRESHOLD = 16;
-    constexpr size_t PREFETCH_DISTANCE = 64;
+    constexpr Size PREFETCH_DISTANCE = 64;
 }
 
 // =============================================================================
@@ -66,7 +66,7 @@ SCL_HOT Real plogp_sum(const Real* probs, Size n, bool use_log2) noexcept {
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
     Real H = Real(0);
     const Real scale = use_log2 ? config::INV_LOG_2 : Real(1);
     
@@ -147,14 +147,14 @@ SCL_HOT Real plogp_sum(const Real* probs, Size n, bool use_log2) noexcept {
 
 // Fast PRNG (Xoshiro128+)
 struct alignas(16) FastRNG {
-    uint32_t s[4];
+    std::array<uint32_t, 4> s{};
     
     SCL_FORCE_INLINE explicit FastRNG(uint64_t seed) noexcept {
         uint64_t z = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (uint32_t& si : s) {
             z += 0x9e3779b97f4a7c15ULL;
             z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-            s[i] = static_cast<uint32_t>(z >> 32);
+            si = static_cast<uint32_t>(z >> 32);
         }
     }
     
@@ -192,30 +192,33 @@ SCL_HOT void histogram_parallel(
         }
         return;
     }
-    
+
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-    Size** thread_counts = static_cast<Size**>(
-        scl::memory::aligned_alloc<Size*>(n_threads, SCL_ALIGNMENT));
+
+    // Allocate thread-local counts array
+    auto thread_counts_ptr = scl::memory::aligned_alloc<Size*>(n_threads, SCL_ALIGNMENT);
+    Size** thread_counts = thread_counts_ptr.get();
+
     for (size_t t = 0; t < n_threads; ++t) {
-        thread_counts[t] = scl::memory::aligned_alloc<Size>(n_bins, SCL_ALIGNMENT);
+        auto count_ptr = scl::memory::aligned_alloc<Size>(n_bins, SCL_ALIGNMENT);
+        thread_counts[t] = count_ptr.release();
         scl::algo::zero(thread_counts[t], static_cast<Size>(n_bins));
     }
-    
-    scl::threading::parallel_for(Size(0), n, [&](size_t i, size_t thread_rank) {
+
+    scl::threading::parallel_for(Size(0), n, [&](Size i, Size thread_rank) {
         Index bin = binned[i];
         if (SCL_LIKELY(bin >= 0 && bin < n_bins)) {
             ++thread_counts[thread_rank][bin];
         }
     });
-    
-    // Reduce
+
+    // Reduce and deallocate thread-local arrays
     for (size_t t = 0; t < n_threads; ++t) {
         for (Index b = 0; b < n_bins; ++b) {
             counts[b] += thread_counts[t][b];
         }
         scl::memory::aligned_free(thread_counts[t], SCL_ALIGNMENT);
     }
-    scl::memory::aligned_free(thread_counts, SCL_ALIGNMENT);
 }
 
 // 2D histogram with thread-local accumulation
@@ -242,14 +245,15 @@ SCL_HOT void histogram_2d_parallel(
     }
     
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-    Size** thread_counts = static_cast<Size**>(
-        scl::memory::aligned_alloc<Size*>(n_threads, SCL_ALIGNMENT));
+    auto thread_counts_ptr = scl::memory::aligned_alloc<Size*>(n_threads, SCL_ALIGNMENT);
+    Size** thread_counts = thread_counts_ptr.get();
     for (size_t t = 0; t < n_threads; ++t) {
-        thread_counts[t] = scl::memory::aligned_alloc<Size>(total_bins, SCL_ALIGNMENT);
+        auto count_ptr = scl::memory::aligned_alloc<Size>(total_bins, SCL_ALIGNMENT);
+        thread_counts[t] = count_ptr.release();
         scl::algo::zero(thread_counts[t], total_bins);
     }
     
-    scl::threading::parallel_for(Size(0), n, [&](size_t i, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n, [&](Size i, Size thread_rank) {
         Index bx = x_binned[i];
         Index by = y_binned[i];
         if (SCL_LIKELY(bx >= 0 && bx < n_bins_x && by >= 0 && by < n_bins_y)) {
@@ -263,7 +267,6 @@ SCL_HOT void histogram_2d_parallel(
         }
         scl::memory::aligned_free(thread_counts[t], SCL_ALIGNMENT);
     }
-    scl::memory::aligned_free(thread_counts, SCL_ALIGNMENT);
 }
 
 // Optimized Discretization with SIMD min/max
@@ -288,7 +291,7 @@ SCL_HOT void discretize_equal_width_parallel(
             thread_maxs[t] = values[0];
         }
         
-        scl::threading::parallel_for(Size(0), n, [&](size_t i, size_t thread_rank) {
+        scl::threading::parallel_for(Size(0), n, [&](Size i, Size thread_rank) {
             thread_mins[thread_rank] = scl::algo::min2(thread_mins[thread_rank], values[i]);
             thread_maxs[thread_rank] = scl::algo::max2(thread_maxs[thread_rank], values[i]);
         });
@@ -323,9 +326,9 @@ SCL_HOT void discretize_equal_width_parallel(
     Real inv_bin_width = static_cast<Real>(n_bins) / range;
     Real min_real = static_cast<Real>(min_val);
     
-    scl::threading::parallel_for(Size(0), n, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n, [&](Size i) {
         Real offset = static_cast<Real>(values[i]) - min_real;
-        Index bin = static_cast<Index>(offset * inv_bin_width);
+        auto bin = static_cast<Index>(offset * inv_bin_width);
         binned[i] = scl::algo::min2(bin, n_bins - 1);
     });
 }
@@ -338,7 +341,7 @@ SCL_HOT void argsort_shell(const T* values, Index* indices, Size n) {
     }
     
     // Shell sort with Ciura gaps
-    Size gaps[] = {701, 301, 132, 57, 23, 10, 4, 1};
+    constexpr std::array<Size, 8> gaps = {701, 301, 132, 57, 23, 10, 4, 1};
     for (Size gap : gaps) {
         if (SCL_UNLIKELY(gap >= n)) continue;
         for (Size i = gap; i < n; ++i) {
@@ -363,19 +366,18 @@ SCL_HOT void discretize_equal_frequency(
 ) {
     if (SCL_UNLIKELY(n == 0 || n_bins == 0)) return;
     
-    Index* sorted_idx = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    Index* sorted_idx = sorted_idx_ptr.get();
     argsort_shell(values, sorted_idx, n);
     
     Size items_per_bin = (n + n_bins - 1) / n_bins;
     
     // Parallel bin assignment
-    scl::threading::parallel_for(Size(0), n, [&](size_t i) {
-        Index original_idx = sorted_idx[i];
-        Index bin = static_cast<Index>(i / items_per_bin);
+    scl::threading::parallel_for(Size(0), n, [&](Size i) {
+        Index original_idx = sorted_idx[static_cast<Index>(i)];
+        auto bin = static_cast<Index>(i / items_per_bin);
         binned[original_idx] = scl::algo::min2(bin, n_bins - 1);
     });
-    
-    scl::memory::aligned_free(sorted_idx, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -526,13 +528,14 @@ void row_entropy(
     SCL_CHECK_DIM(entropies.len >= static_cast<Size>(n),
                   "Entropy: output buffer too small");
     
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](Size i) {
         if constexpr (IsCSR) {
-            auto values = X.row_values_unsafe(static_cast<Index>(i));
-            const Index len = X.row_length_unsafe(static_cast<Index>(i));
+            const auto idx = static_cast<Index>(i);
+            auto values = X.row_values_unsafe(idx);
+            const Index len = X.row_length_unsafe(idx);
         
         if (SCL_UNLIKELY(len == 0)) {
-            entropies[i] = Real(0);
+            entropies[static_cast<Index>(i)] = Real(0);
             return;
         }
         
@@ -554,7 +557,7 @@ void row_entropy(
         }
         
         if (SCL_UNLIKELY(sum < config::EPSILON)) {
-            entropies[i] = Real(0);
+            entropies[static_cast<Index>(i)] = Real(0);
             return;
         }
         
@@ -593,10 +596,10 @@ void row_entropy(
             H = (max_H > config::EPSILON) ? H / max_H : Real(0);
         }
         
-            entropies[i] = H;
+            entropies[static_cast<Index>(i)] = H;
         } else {
             // For CSC, this operation is less efficient
-            entropies[i] = Real(0);  // TODO: implement CSC version
+            entropies[static_cast<Index>(i)] = Real(0);  // TODO: implement CSC version
         }
     });
 }
@@ -617,33 +620,38 @@ inline Real kl_divergence(
     Size k = 0;
     
     for (; k + 4 <= p.len; k += 4) {
-        if (SCL_LIKELY(p[k] > config::EPSILON)) {
-            kl0 += SCL_LIKELY(q[k] > config::EPSILON) 
-                   ? p[k] * std::log(p[k] / q[k])
+        const auto k0 = static_cast<Index>(k);
+        const auto k1 = static_cast<Index>(k + 1);
+        const auto k2 = static_cast<Index>(k + 2);
+        const auto k3 = static_cast<Index>(k + 3);
+        if (SCL_LIKELY(p[k0] > config::EPSILON)) {
+            kl0 += SCL_LIKELY(q[k0] > config::EPSILON) 
+                   ? p[k0] * std::log(p[k0] / q[k0])
                    : Real(1e10);
         }
-        if (SCL_LIKELY(p[k+1] > config::EPSILON)) {
-            kl1 += SCL_LIKELY(q[k+1] > config::EPSILON)
-                   ? p[k+1] * std::log(p[k+1] / q[k+1])
+        if (SCL_LIKELY(p[k1] > config::EPSILON)) {
+            kl1 += SCL_LIKELY(q[k1] > config::EPSILON)
+                   ? p[k1] * std::log(p[k1] / q[k1])
                    : Real(1e10);
         }
-        if (SCL_LIKELY(p[k+2] > config::EPSILON)) {
-            kl2 += SCL_LIKELY(q[k+2] > config::EPSILON)
-                   ? p[k+2] * std::log(p[k+2] / q[k+2])
+        if (SCL_LIKELY(p[k2] > config::EPSILON)) {
+            kl2 += SCL_LIKELY(q[k2] > config::EPSILON)
+                   ? p[k2] * std::log(p[k2] / q[k2])
                    : Real(1e10);
         }
-        if (SCL_LIKELY(p[k+3] > config::EPSILON)) {
-            kl3 += SCL_LIKELY(q[k+3] > config::EPSILON)
-                   ? p[k+3] * std::log(p[k+3] / q[k+3])
+        if (SCL_LIKELY(p[k3] > config::EPSILON)) {
+            kl3 += SCL_LIKELY(q[k3] > config::EPSILON)
+                   ? p[k3] * std::log(p[k3] / q[k3])
                    : Real(1e10);
         }
     }
     
     kl = kl0 + kl1 + kl2 + kl3;
     for (; k < p.len; ++k) {
-        if (SCL_LIKELY(p[k] > config::EPSILON)) {
-            kl += SCL_LIKELY(q[k] > config::EPSILON)
-                  ? p[k] * std::log(p[k] / q[k])
+        const auto k_idx = static_cast<Index>(k);
+        if (SCL_LIKELY(p[k_idx] > config::EPSILON)) {
+            kl += SCL_LIKELY(q[k_idx] > config::EPSILON)
+                  ? p[k_idx] * std::log(p[k_idx] / q[k_idx])
                   : Real(1e10);
         }
     }
@@ -667,26 +675,30 @@ inline Real js_divergence(
     
     for (; i + 4 <= p.len; i += 4) {
         // Unrolled: compute m = (p + q) / 2 and accumulate JS terms
-        Real m0 = (p[i] + q[i]) * Real(0.5);
-        Real m1 = (p[i+1] + q[i+1]) * Real(0.5);
-        Real m2 = (p[i+2] + q[i+2]) * Real(0.5);
-        Real m3 = (p[i+3] + q[i+3]) * Real(0.5);
+        const auto i0 = static_cast<Index>(i);
+        const auto i1 = static_cast<Index>(i + 1);
+        const auto i2 = static_cast<Index>(i + 2);
+        const auto i3 = static_cast<Index>(i + 3);
+        Real m0 = (p[i0] + q[i0]) * Real(0.5);
+        Real m1 = (p[i1] + q[i1]) * Real(0.5);
+        Real m2 = (p[i2] + q[i2]) * Real(0.5);
+        Real m3 = (p[i3] + q[i3]) * Real(0.5);
         
         if (SCL_LIKELY(m0 > config::EPSILON)) {
-            if (SCL_LIKELY(p[i] > config::EPSILON)) js0 += p[i] * std::log(p[i] / m0);
-            if (SCL_LIKELY(q[i] > config::EPSILON)) js0 += q[i] * std::log(q[i] / m0);
+            if (SCL_LIKELY(p[i0] > config::EPSILON)) js0 += p[i0] * std::log(p[i0] / m0);
+            if (SCL_LIKELY(q[i0] > config::EPSILON)) js0 += q[i0] * std::log(q[i0] / m0);
         }
         if (SCL_LIKELY(m1 > config::EPSILON)) {
-            if (SCL_LIKELY(p[i+1] > config::EPSILON)) js1 += p[i+1] * std::log(p[i+1] / m1);
-            if (SCL_LIKELY(q[i+1] > config::EPSILON)) js1 += q[i+1] * std::log(q[i+1] / m1);
+            if (SCL_LIKELY(p[i1] > config::EPSILON)) js1 += p[i1] * std::log(p[i1] / m1);
+            if (SCL_LIKELY(q[i1] > config::EPSILON)) js1 += q[i1] * std::log(q[i1] / m1);
         }
         if (SCL_LIKELY(m2 > config::EPSILON)) {
-            if (SCL_LIKELY(p[i+2] > config::EPSILON)) js2 += p[i+2] * std::log(p[i+2] / m2);
-            if (SCL_LIKELY(q[i+2] > config::EPSILON)) js2 += q[i+2] * std::log(q[i+2] / m2);
+            if (SCL_LIKELY(p[i2] > config::EPSILON)) js2 += p[i2] * std::log(p[i2] / m2);
+            if (SCL_LIKELY(q[i2] > config::EPSILON)) js2 += q[i2] * std::log(q[i2] / m2);
         }
         if (SCL_LIKELY(m3 > config::EPSILON)) {
-            if (SCL_LIKELY(p[i+3] > config::EPSILON)) js3 += p[i+3] * std::log(p[i+3] / m3);
-            if (SCL_LIKELY(q[i+3] > config::EPSILON)) js3 += q[i+3] * std::log(q[i+3] / m3);
+            if (SCL_LIKELY(p[i3] > config::EPSILON)) js3 += p[i3] * std::log(p[i3] / m3);
+            if (SCL_LIKELY(q[i3] > config::EPSILON)) js3 += q[i3] * std::log(q[i3] / m3);
         }
     }
     
@@ -694,13 +706,14 @@ inline Real js_divergence(
     
     // Scalar cleanup
     for (; i < p.len; ++i) {
-        Real m = (p[i] + q[i]) * Real(0.5);
+        const auto i_idx = static_cast<Index>(i);
+        Real m = (p[i_idx] + q[i_idx]) * Real(0.5);
         if (SCL_LIKELY(m > config::EPSILON)) {
-            if (SCL_LIKELY(p[i] > config::EPSILON)) {
-                js += p[i] * std::log(p[i] / m);
+            if (SCL_LIKELY(p[i_idx] > config::EPSILON)) {
+                js += p[i_idx] * std::log(p[i_idx] / m);
             }
-            if (SCL_LIKELY(q[i] > config::EPSILON)) {
-                js += q[i] * std::log(q[i] / m);
+            if (SCL_LIKELY(q[i_idx] > config::EPSILON)) {
+                js += q[i_idx] * std::log(q[i_idx] / m);
             }
         }
     }
@@ -725,25 +738,29 @@ inline Real symmetric_kl(
     Size i = 0;
     
     for (; i + 4 <= p.len; i += 4) {
-        if (SCL_LIKELY(p[i] > config::EPSILON && q[i] > config::EPSILON)) {
-            Real log_ratio = std::log(p[i] / q[i]);
-            kl_pq0 += p[i] * log_ratio;
-            kl_qp0 -= q[i] * log_ratio;
+        const auto i0 = static_cast<Index>(i);
+        const auto i1 = static_cast<Index>(i + 1);
+        const auto i2 = static_cast<Index>(i + 2);
+        const auto i3 = static_cast<Index>(i + 3);
+        if (SCL_LIKELY(p[i0] > config::EPSILON && q[i0] > config::EPSILON)) {
+            Real log_ratio = std::log(p[i0] / q[i0]);
+            kl_pq0 += p[i0] * log_ratio;
+            kl_qp0 -= q[i0] * log_ratio;
         }
-        if (SCL_LIKELY(p[i+1] > config::EPSILON && q[i+1] > config::EPSILON)) {
-            Real log_ratio = std::log(p[i+1] / q[i+1]);
-            kl_pq1 += p[i+1] * log_ratio;
-            kl_qp1 -= q[i+1] * log_ratio;
+        if (SCL_LIKELY(p[i1] > config::EPSILON && q[i1] > config::EPSILON)) {
+            Real log_ratio = std::log(p[i1] / q[i1]);
+            kl_pq1 += p[i1] * log_ratio;
+            kl_qp1 -= q[i1] * log_ratio;
         }
-        if (SCL_LIKELY(p[i+2] > config::EPSILON && q[i+2] > config::EPSILON)) {
-            Real log_ratio = std::log(p[i+2] / q[i+2]);
-            kl_pq2 += p[i+2] * log_ratio;
-            kl_qp2 -= q[i+2] * log_ratio;
+        if (SCL_LIKELY(p[i2] > config::EPSILON && q[i2] > config::EPSILON)) {
+            Real log_ratio = std::log(p[i2] / q[i2]);
+            kl_pq2 += p[i2] * log_ratio;
+            kl_qp2 -= q[i2] * log_ratio;
         }
-        if (SCL_LIKELY(p[i+3] > config::EPSILON && q[i+3] > config::EPSILON)) {
-            Real log_ratio = std::log(p[i+3] / q[i+3]);
-            kl_pq3 += p[i+3] * log_ratio;
-            kl_qp3 -= q[i+3] * log_ratio;
+        if (SCL_LIKELY(p[i3] > config::EPSILON && q[i3] > config::EPSILON)) {
+            Real log_ratio = std::log(p[i3] / q[i3]);
+            kl_pq3 += p[i3] * log_ratio;
+            kl_qp3 -= q[i3] * log_ratio;
         }
     }
     
@@ -751,10 +768,11 @@ inline Real symmetric_kl(
     Real kl_qp = kl_qp0 + kl_qp1 + kl_qp2 + kl_qp3;
     
     for (; i < p.len; ++i) {
-        if (SCL_LIKELY(p[i] > config::EPSILON && q[i] > config::EPSILON)) {
-            Real log_ratio = std::log(p[i] / q[i]);
-            kl_pq += p[i] * log_ratio;
-            kl_qp -= q[i] * log_ratio;
+        const auto i_idx = static_cast<Index>(i);
+        if (SCL_LIKELY(p[i_idx] > config::EPSILON && q[i_idx] > config::EPSILON)) {
+            Real log_ratio = std::log(p[i_idx] / q[i_idx]);
+            kl_pq += p[i_idx] * log_ratio;
+            kl_qp -= q[i_idx] * log_ratio;
         }
     }
     
@@ -818,10 +836,10 @@ inline Real joint_entropy(
     bool use_log2 = false
 ) {
     Size total_bins = static_cast<Size>(n_bins_x) * n_bins_y;
-    Size* counts = scl::memory::aligned_alloc<Size>(total_bins, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(total_bins, SCL_ALIGNMENT);
+    Size* counts = counts_ptr.get();
     detail::histogram_2d_parallel(x_binned, y_binned, n, n_bins_x, n_bins_y, counts);
     Real H = detail::entropy_from_counts(counts, static_cast<Index>(total_bins), n, use_log2);
-    scl::memory::aligned_free(counts, SCL_ALIGNMENT);
     return H;
 }
 
@@ -835,10 +853,10 @@ inline Real marginal_entropy(
     Index n_bins,
     bool use_log2 = false
 ) {
-    Size* counts = scl::memory::aligned_alloc<Size>(n_bins, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_bins, SCL_ALIGNMENT);
+    Size* counts = counts_ptr.get();
     detail::histogram_parallel(binned, n, n_bins, counts);
     Real H = detail::entropy_from_counts(counts, n_bins, n, use_log2);
-    scl::memory::aligned_free(counts, SCL_ALIGNMENT);
     return H;
 }
 
@@ -924,20 +942,23 @@ inline Real adjusted_mi(
 
     // Build contingency table
     Size table_size = static_cast<Size>(n_clusters1) * static_cast<Size>(n_clusters2);
-    Size* contingency = scl::memory::aligned_alloc<Size>(table_size, SCL_ALIGNMENT);
+    auto contingency_ptr = scl::memory::aligned_alloc<Size>(table_size, SCL_ALIGNMENT);
+    Size* contingency = contingency_ptr.get();
     scl::algo::zero(contingency, table_size);
 
     for (Size i = 0; i < n; ++i) {
-        Index c1 = labels1[i];
-        Index c2 = labels2[i];
+        Index c1 = labels1[static_cast<Index>(i)];
+        Index c2 = labels2[static_cast<Index>(i)];
         if (c1 >= 0 && c1 < n_clusters1 && c2 >= 0 && c2 < n_clusters2) {
             ++contingency[static_cast<Size>(c1) * n_clusters2 + c2];
         }
     }
 
     // Compute row and column sums
-    Size* row_sums = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
-    Size* col_sums = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
+    auto row_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
+    auto col_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
+    Size* row_sums = row_sums_ptr.get();
+    Size* col_sums = col_sums_ptr.get();
     scl::algo::zero(row_sums, static_cast<Size>(n_clusters1));
     scl::algo::zero(col_sums, static_cast<Size>(n_clusters2));
 
@@ -983,10 +1004,6 @@ inline Real adjusted_mi(
     Real H1 = marginal_entropy(labels1.ptr, n, n_clusters1, false);
     Real H2 = marginal_entropy(labels2.ptr, n, n_clusters2, false);
 
-    scl::memory::aligned_free(col_sums, SCL_ALIGNMENT);
-    scl::memory::aligned_free(row_sums, SCL_ALIGNMENT);
-    scl::memory::aligned_free(contingency, SCL_ALIGNMENT);
-
     // AMI = (MI - E[MI]) / (max(H1, H2) - E[MI])
     Real max_H = scl::algo::max2(H1, H2);
     Real denominator = max_H - E_MI;
@@ -1021,12 +1038,14 @@ void select_features_mi(
     // Find number of target classes
     Index n_classes = 0;
     for (Size i = 0; i < target.len; ++i) {
-        n_classes = scl::algo::max2(n_classes, target[i] + 1);
+        n_classes = scl::algo::max2(n_classes, target[static_cast<Index>(i)] + 1);
     }
 
     // Compute MI for each feature
-    Index* feature_binned = scl::memory::aligned_alloc<Index>(n_samples, SCL_ALIGNMENT);
-    Real* feature_values = scl::memory::aligned_alloc<Real>(n_samples, SCL_ALIGNMENT);
+    auto feature_binned_ptr = scl::memory::aligned_alloc<Index>(n_samples, SCL_ALIGNMENT);
+    auto feature_values_ptr = scl::memory::aligned_alloc<Real>(n_samples, SCL_ALIGNMENT);
+    Index* feature_binned = feature_binned_ptr.get();
+    Real* feature_values = feature_values_ptr.get();
 
     for (Index f = 0; f < n_features; ++f) {
         // Extract feature values
@@ -1068,11 +1087,9 @@ void select_features_mi(
         );
     }
 
-    scl::memory::aligned_free(feature_values, SCL_ALIGNMENT);
-    scl::memory::aligned_free(feature_binned, SCL_ALIGNMENT);
-
     // Select top features using partial_sort for O(n log k) instead of O(n*k) insertion sort
-    Index* sorted_idx = scl::memory::aligned_alloc<Index>(n_features, SCL_ALIGNMENT);
+    auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(n_features, SCL_ALIGNMENT);
+    Index* sorted_idx = sorted_idx_ptr.get();
     for (Index f = 0; f < n_features; ++f) {
         sorted_idx[f] = f;
     }
@@ -1088,8 +1105,6 @@ void select_features_mi(
     for (Index i = 0; i < k; ++i) {
         selected_features[i] = sorted_idx[i];
     }
-    
-    scl::memory::aligned_free(sorted_idx, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -1113,23 +1128,29 @@ void mrmr_selection(
     // Find number of target classes
     Index n_classes = 0;
     for (Size i = 0; i < target.len; ++i) {
-        n_classes = scl::algo::max2(n_classes, target[i] + 1);
+        n_classes = scl::algo::max2(n_classes, target[static_cast<Index>(i)] + 1);
     }
 
     // Allocate workspace
-    Real* relevance = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
-    Real* redundancy = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
-    bool* selected = reinterpret_cast<bool*>(scl::memory::aligned_alloc<char>(n_features, SCL_ALIGNMENT));
-    Index** binned_features = scl::memory::aligned_alloc<Index*>(n_features, SCL_ALIGNMENT);
+    auto relevance_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+    auto redundancy_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+    auto selected_ptr = scl::memory::aligned_alloc<bool>(n_features, SCL_ALIGNMENT);
+    auto binned_features_ptr = scl::memory::aligned_alloc<Index*>(n_features, SCL_ALIGNMENT);
+    Real* relevance = relevance_ptr.get();
+    Real* redundancy = redundancy_ptr.get();
+    bool* selected = selected_ptr.get();
+    Index** binned_features = binned_features_ptr.get();
 
-    std::memset(selected, 0, n_features);
+    std::memset(selected, 0, n_features * sizeof(bool));
     scl::algo::zero(redundancy, static_cast<Size>(n_features));
 
     // Pre-discretize all features
-    Real* temp_values = scl::memory::aligned_alloc<Real>(n_samples, SCL_ALIGNMENT);
+    auto temp_values_ptr = scl::memory::aligned_alloc<Real>(n_samples, SCL_ALIGNMENT);
+    Real* temp_values = temp_values_ptr.get();
 
     for (Index f = 0; f < n_features; ++f) {
-        binned_features[f] = scl::memory::aligned_alloc<Index>(n_samples, SCL_ALIGNMENT);
+        auto binned_ptr = scl::memory::aligned_alloc<Index>(n_samples, SCL_ALIGNMENT);
+        binned_features[f] = binned_ptr.release();
         scl::algo::zero(temp_values, static_cast<Size>(n_samples));
 
         if constexpr (IsCSR) {
@@ -1166,8 +1187,6 @@ void mrmr_selection(
             n_bins, n_classes, true
         );
     }
-
-    scl::memory::aligned_free(temp_values, SCL_ALIGNMENT);
 
     // Greedy selection
     Index n_selected = 0;
@@ -1212,10 +1231,6 @@ void mrmr_selection(
     for (Index f = 0; f < n_features; ++f) {
         scl::memory::aligned_free(binned_features[f], SCL_ALIGNMENT);
     }
-    scl::memory::aligned_free(binned_features, SCL_ALIGNMENT);
-    scl::memory::aligned_free(reinterpret_cast<char*>(selected), SCL_ALIGNMENT);
-    scl::memory::aligned_free(redundancy, SCL_ALIGNMENT);
-    scl::memory::aligned_free(relevance, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -1232,24 +1247,29 @@ inline Real cross_entropy(
     Size i = 0;
     
     for (; i + 4 <= true_probs.len; i += 4) {
-        if (SCL_LIKELY(true_probs[i] > config::EPSILON)) {
-            ce0 -= true_probs[i] * detail::safe_log(pred_probs[i]);
+        const auto i0 = static_cast<Index>(i);
+        const auto i1 = static_cast<Index>(i + 1);
+        const auto i2 = static_cast<Index>(i + 2);
+        const auto i3 = static_cast<Index>(i + 3);
+        if (SCL_LIKELY(true_probs[i0] > config::EPSILON)) {
+            ce0 -= true_probs[i0] * detail::safe_log(pred_probs[i0]);
         }
-        if (SCL_LIKELY(true_probs[i+1] > config::EPSILON)) {
-            ce1 -= true_probs[i+1] * detail::safe_log(pred_probs[i+1]);
+        if (SCL_LIKELY(true_probs[i1] > config::EPSILON)) {
+            ce1 -= true_probs[i1] * detail::safe_log(pred_probs[i1]);
         }
-        if (SCL_LIKELY(true_probs[i+2] > config::EPSILON)) {
-            ce2 -= true_probs[i+2] * detail::safe_log(pred_probs[i+2]);
+        if (SCL_LIKELY(true_probs[i2] > config::EPSILON)) {
+            ce2 -= true_probs[i2] * detail::safe_log(pred_probs[i2]);
         }
-        if (SCL_LIKELY(true_probs[i+3] > config::EPSILON)) {
-            ce3 -= true_probs[i+3] * detail::safe_log(pred_probs[i+3]);
+        if (SCL_LIKELY(true_probs[i3] > config::EPSILON)) {
+            ce3 -= true_probs[i3] * detail::safe_log(pred_probs[i3]);
         }
     }
     
     Real ce = ce0 + ce1 + ce2 + ce3;
     for (; i < true_probs.len; ++i) {
-        if (SCL_LIKELY(true_probs[i] > config::EPSILON)) {
-            ce -= true_probs[i] * detail::safe_log(pred_probs[i]);
+        const auto i_idx = static_cast<Index>(i);
+        if (SCL_LIKELY(true_probs[i_idx] > config::EPSILON)) {
+            ce -= true_probs[i_idx] * detail::safe_log(pred_probs[i_idx]);
         }
     }
     
@@ -1303,15 +1323,20 @@ inline Real gini_impurity(
     Size k = 0;
     
     for (; k + 4 <= probabilities.len; k += 4) {
-        s0 += probabilities[k] * probabilities[k];
-        s1 += probabilities[k+1] * probabilities[k+1];
-        s2 += probabilities[k+2] * probabilities[k+2];
-        s3 += probabilities[k+3] * probabilities[k+3];
+        const auto k0 = static_cast<Index>(k);
+        const auto k1 = static_cast<Index>(k + 1);
+        const auto k2 = static_cast<Index>(k + 2);
+        const auto k3 = static_cast<Index>(k + 3);
+        s0 += probabilities[k0] * probabilities[k0];
+        s1 += probabilities[k1] * probabilities[k1];
+        s2 += probabilities[k2] * probabilities[k2];
+        s3 += probabilities[k3] * probabilities[k3];
     }
     
     Real sum_sq = s0 + s1 + s2 + s3;
     for (; k < probabilities.len; ++k) {
-        sum_sq += probabilities[k] * probabilities[k];
+        const auto k_idx = static_cast<Index>(k);
+        sum_sq += probabilities[k_idx] * probabilities[k_idx];
     }
     
     return Real(1) - sum_sq;

@@ -55,9 +55,9 @@ namespace detail {
 
 // Xoshiro256++ PRNG (higher quality, consistent with enrichment.hpp)
 struct Xoshiro256pp {
-    alignas(32) uint64_t s[4];
+    alignas(32) std::array<uint64_t, 4> s{};
 
-    SCL_FORCE_INLINE explicit Xoshiro256pp(uint64_t seed) noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE explicit Xoshiro256pp(uint64_t seed) noexcept {
         uint64_t z = seed;
         for (int i = 0; i < 4; ++i) {
             z += 0x9e3779b97f4a7c15ULL;
@@ -67,7 +67,7 @@ struct Xoshiro256pp {
         }
     }
 
-    SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) const noexcept {
         return (x << k) | (x >> (64 - k));
     }
 
@@ -87,8 +87,7 @@ struct Xoshiro256pp {
     SCL_FORCE_INLINE Size bounded(Size n) noexcept {
         uint64_t x = next();
 #if defined(__SIZEOF_INT128__) && defined(__GNUC__)
-        uint64_t m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
-        uint64_t threshold = static_cast<uint64_t>(-static_cast<int64_t>(n)) % static_cast<uint64_t>(n);
+        auto m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
         while (static_cast<__uint128_t>(m) * static_cast<__uint128_t>(n) < static_cast<__uint128_t>(x)) {
             x = next();
             m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
@@ -114,8 +113,8 @@ SCL_FORCE_INLINE SCL_HOT Real squared_distance(
     Index dim
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    const auto d = s::SimdTagFor<Real>();
+    const size_t lanes = s::Lanes(d);
 
     // Multi-accumulator pattern for FMA latency hiding
     auto acc0 = s::Zero(d);
@@ -227,8 +226,10 @@ SCL_HOT void partial_sort_k_smallest(
     if (SCL_UNLIKELY(k == 0 || n == 0)) return;
     k = scl::algo::min2(k, n);
 
-    // Use max-heap of size k
-    HeapElement* heap = scl::memory::aligned_alloc<HeapElement>(k, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    // Using aligned_alloc returns unique_ptr for automatic cleanup
+    auto heap_ptr = scl::memory::aligned_alloc<HeapElement>(static_cast<Size>(k), SCL_ALIGNMENT);
+    HeapElement* heap = heap_ptr.get();
 
     // Initialize heap with first k elements
     for (Index i = 0; i < k; ++i) {
@@ -259,7 +260,7 @@ SCL_HOT void partial_sort_k_smallest(
         indices[i] = heap[i].index;
     }
 
-    scl::memory::aligned_free(heap, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 } // namespace detail
@@ -289,8 +290,8 @@ void simulate_doublets(
         detail::Xoshiro256pp rng(local_seed);
 
         // Select two random cells
-        Index cell1 = static_cast<Index>(rng.bounded(static_cast<Size>(n_cells)));
-        Index cell2 = static_cast<Index>(rng.bounded(static_cast<Size>(n_cells)));
+        auto cell1 = static_cast<Index>(rng.bounded(static_cast<Size>(n_cells)));
+        auto cell2 = static_cast<Index>(rng.bounded(static_cast<Size>(n_cells)));
         while (SCL_UNLIKELY(cell2 == cell1 && n_cells > 1)) {
             cell2 = static_cast<Index>(rng.bounded(static_cast<Size>(n_cells)));
         }
@@ -350,8 +351,8 @@ void simulate_doublets(
 
     if (use_parallel) {
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_doublets),
-            [&](size_t d, size_t thread_rank) {
-                uint64_t local_seed = seed + static_cast<uint64_t>(d) * 0x9e3779b97f4a7c15ULL;
+            [&](auto d) {
+                auto local_seed = seed + static_cast<uint64_t>(d) * 0x9e3779b97f4a7c15ULL;
                 simulate_one(static_cast<Index>(d), local_seed);
             });
     } else {
@@ -441,7 +442,7 @@ void compute_knn_doublet_scores(
         Real* query = reinterpret_cast<Real*>(ws);
         Real* neighbor = query + n_genes;
         Real* distances = neighbor + n_genes;
-        Index* knn_indices = reinterpret_cast<Index*>(distances + n_total);
+        auto knn_indices = reinterpret_cast<Index*>(distances + n_total);
 
         // Convert query cell to dense
         sparse_to_dense_row(X, i, n_genes, query);
@@ -523,7 +524,7 @@ inline void compute_knn_doublet_scores_pca(
     auto process_cell = [&](Index i, void* workspace) {
         char* ws = static_cast<char*>(workspace);
         Real* distances = reinterpret_cast<Real*>(ws);
-        Index* knn_indices = reinterpret_cast<Index*>(distances + n_total);
+        auto knn_indices = reinterpret_cast<Index*>(distances + n_total);
 
         const Real* query = cell_embeddings + static_cast<Size>(i) * n_dims;
 
@@ -592,7 +593,9 @@ void scrublet_scores(
 
     // Simulate doublets
     Size doublet_size = static_cast<Size>(n_doublets) * static_cast<Size>(n_genes);
-    Real* doublet_profiles = scl::memory::aligned_alloc<Real>(doublet_size, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto doublet_profiles_ptr = scl::memory::aligned_alloc<Real>(doublet_size, SCL_ALIGNMENT);
+    Real* doublet_profiles = doublet_profiles_ptr.get();
 
     simulate_doublets(X, n_cells, n_genes, n_doublets, doublet_profiles, seed);
 
@@ -601,7 +604,7 @@ void scrublet_scores(
         X, n_cells, n_genes, doublet_profiles, n_doublets, k_neighbors, scores
     );
 
-    scl::memory::aligned_free(doublet_profiles, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -621,7 +624,7 @@ inline void doubletfinder_pann(
                   "DoubletFinder: pann_scores buffer too small");
 
     // Number of neighbors based on pK
-    Index k = static_cast<Index>(std::ceil(pK * static_cast<Real>(n_cells + n_doublets)));
+    auto k = static_cast<Index>(std::ceil(pK * static_cast<Real>(n_cells + n_doublets)));
     k = scl::algo::max2(k, Index(1));
 
     compute_knn_doublet_scores_pca(
@@ -642,7 +645,9 @@ inline Real estimate_threshold(
     if (SCL_UNLIKELY(n == 0)) return config::DEFAULT_THRESHOLD;
 
     // Copy and sort using efficient SIMD sort
-    Real* sorted = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto sorted_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* sorted = sorted_ptr.get();
     scl::memory::copy_fast(
         Array<const Real>(scores.ptr, n),
         Array<Real>(sorted, n)
@@ -659,7 +664,7 @@ inline Real estimate_threshold(
 
     Real threshold = sorted[threshold_idx];
 
-    scl::memory::aligned_free(sorted, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
     return threshold;
 }
 
@@ -680,21 +685,21 @@ inline Index call_doublets(
     // 4-way unrolled for better ILP
     Size k = 0;
     for (; k + 4 <= n; k += 4) {
-        bool d0 = scores[k] > threshold;
-        bool d1 = scores[k + 1] > threshold;
-        bool d2 = scores[k + 2] > threshold;
-        bool d3 = scores[k + 3] > threshold;
-        is_doublet[k] = d0;
-        is_doublet[k + 1] = d1;
-        is_doublet[k + 2] = d2;
-        is_doublet[k + 3] = d3;
+        bool d0 = scores[static_cast<Index>(k)] > threshold;
+        bool d1 = scores[static_cast<Index>(k + 1)] > threshold;
+        bool d2 = scores[static_cast<Index>(k + 2)] > threshold;
+        bool d3 = scores[static_cast<Index>(k + 3)] > threshold;
+        is_doublet[static_cast<Index>(k)] = d0;
+        is_doublet[static_cast<Index>(k + 1)] = d1;
+        is_doublet[static_cast<Index>(k + 2)] = d2;
+        is_doublet[static_cast<Index>(k + 3)] = d3;
         count += static_cast<Index>(d0) + static_cast<Index>(d1) +
                  static_cast<Index>(d2) + static_cast<Index>(d3);
     }
 
     for (; k < n; ++k) {
-        is_doublet[k] = scores[k] > threshold;
-        if (is_doublet[k]) ++count;
+        is_doublet[static_cast<Index>(k)] = scores[static_cast<Index>(k)] > threshold;
+        if (is_doublet[static_cast<Index>(k)]) ++count;
     }
 
     return count;
@@ -712,10 +717,11 @@ inline Real detect_bimodal_threshold(
     if (SCL_UNLIKELY(n < 10)) return config::DEFAULT_THRESHOLD;
 
     // Find score range with SIMD min/max
-    Real min_score, max_score;
+    Real min_score = Real(0);
+    Real max_score = Real(0);
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    const auto d = s::SimdTagFor<Real>();
+    const auto lanes = s::Lanes(d);
 
     if (n >= lanes) {
         auto v_min = s::Set(d, scores[0]);
@@ -732,15 +738,15 @@ inline Real detect_bimodal_threshold(
         max_score = s::GetLane(s::MaxOfLanes(d, v_max));
 
         for (; i < n; ++i) {
-            min_score = scl::algo::min2(min_score, scores[i]);
-            max_score = scl::algo::max2(max_score, scores[i]);
+            min_score = scl::algo::min2(min_score, scores[static_cast<Index>(i)]);
+            max_score = scl::algo::max2(max_score, scores[static_cast<Index>(i)]);
         }
     } else {
         min_score = scores[0];
         max_score = scores[0];
         for (Size i = 1; i < n; ++i) {
-            min_score = scl::algo::min2(min_score, scores[i]);
-            max_score = scl::algo::max2(max_score, scores[i]);
+            min_score = scl::algo::min2(min_score, scores[static_cast<Index>(i)]);
+            max_score = scl::algo::max2(max_score, scores[static_cast<Index>(i)]);
         }
     }
 
@@ -748,7 +754,9 @@ inline Real detect_bimodal_threshold(
     if (range < config::MIN_SCORE) return config::DEFAULT_THRESHOLD;
 
     // Build histogram
-    Index* hist = scl::memory::aligned_alloc<Index>(n_bins, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto hist_ptr = scl::memory::aligned_alloc<Index>(static_cast<Size>(n_bins), SCL_ALIGNMENT);
+    Index* hist = hist_ptr.get();
     scl::algo::zero(hist, static_cast<Size>(n_bins));
 
     Real bin_width = range / static_cast<Real>(n_bins);
@@ -757,10 +765,10 @@ inline Real detect_bimodal_threshold(
     // 4-way unrolled histogram building
     Size i = 0;
     for (; i + 4 <= n; i += 4) {
-        Index b0 = static_cast<Index>((scores[i] - min_score) * inv_bin_width);
-        Index b1 = static_cast<Index>((scores[i + 1] - min_score) * inv_bin_width);
-        Index b2 = static_cast<Index>((scores[i + 2] - min_score) * inv_bin_width);
-        Index b3 = static_cast<Index>((scores[i + 3] - min_score) * inv_bin_width);
+        auto b0 = static_cast<Index>((scores[static_cast<Index>(i)] - min_score) * inv_bin_width);
+        auto b1 = static_cast<Index>((scores[static_cast<Index>(i + 1)] - min_score) * inv_bin_width);
+        auto b2 = static_cast<Index>((scores[static_cast<Index>(i + 2)] - min_score) * inv_bin_width);
+        auto b3 = static_cast<Index>((scores[static_cast<Index>(i + 3)] - min_score) * inv_bin_width);
         b0 = scl::algo::min2(b0, n_bins - 1);
         b1 = scl::algo::min2(b1, n_bins - 1);
         b2 = scl::algo::min2(b2, n_bins - 1);
@@ -772,7 +780,7 @@ inline Real detect_bimodal_threshold(
     }
 
     for (; i < n; ++i) {
-        Index bin = static_cast<Index>((scores[i] - min_score) * inv_bin_width);
+        auto bin = static_cast<Index>((scores[static_cast<Index>(i)] - min_score) * inv_bin_width);
         bin = scl::algo::min2(bin, n_bins - 1);
         ++hist[bin];
     }
@@ -803,7 +811,7 @@ inline Real detect_bimodal_threshold(
 
     Real threshold = min_score + (static_cast<Real>(valley) + Real(0.5)) * bin_width;
 
-    scl::memory::aligned_free(hist, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
     return threshold;
 }
 
@@ -838,7 +846,6 @@ inline Real estimate_doublet_rate(
 inline void classify_doublet_types(
     Array<const Index> cluster_labels,
     Array<const bool> is_doublet,
-    Index n_clusters,
     Array<Index> doublet_type  // 0=singlet, 1=heterotypic, 2=homotypic (heuristic)
 ) {
     Size n = cluster_labels.len;
@@ -846,11 +853,11 @@ inline void classify_doublet_types(
     SCL_CHECK_DIM(doublet_type.len >= n, "Doublet: doublet_type buffer too small");
 
     for (Size i = 0; i < n; ++i) {
-        if (!is_doublet[i]) {
-            doublet_type[i] = 0;  // Singlet
+        if (!is_doublet[static_cast<Index>(i)]) {
+            doublet_type[static_cast<Index>(i)] = 0;  // Singlet
         } else {
             // Heuristic: mark all as potentially heterotypic
-            doublet_type[i] = 1;
+            doublet_type[static_cast<Index>(i)] = 1;
         }
     }
 }
@@ -946,13 +953,13 @@ void classify_doublet_types_knn(
     if (use_parallel) {
         scl::threading::parallel_for(Size(0), static_cast<Size>(n),
             [&](size_t i, size_t thread_rank) {
-                Real* workspace = workspace_pool.get(thread_rank);
-                Index* counts = reinterpret_cast<Index*>(workspace);
+                auto workspace = workspace_pool.get(thread_rank);
+                auto counts = reinterpret_cast<Index*>(workspace);
                 process_cell(static_cast<Index>(i), counts);
             });
     } else {
-        Real* workspace = workspace_pool.get(0);
-        Index* counts = reinterpret_cast<Index*>(workspace);
+        auto workspace = workspace_pool.get(0);
+        auto counts = reinterpret_cast<Index*>(workspace);
         for (Index i = 0; i < n; ++i) {
             process_cell(i, counts);
         }
@@ -1107,8 +1114,8 @@ inline void combined_doublet_score(
     // Find max values with SIMD
     Real knn_max = knn_scores[0], density_max = density_scores[0], var_max = variance_scores[0];
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    const auto d = s::SimdTagFor<Real>();
+    const auto lanes = s::Lanes(d);
 
     // SIMD min/max reduction for normalization
     Size i = 0;
@@ -1132,9 +1139,9 @@ inline void combined_doublet_score(
     }
 
     for (; i < n; ++i) {
-        knn_max = scl::algo::max2(knn_max, knn_scores[i]);
-        density_max = scl::algo::max2(density_max, density_scores[i]);
-        var_max = scl::algo::max2(var_max, variance_scores[i]);
+        knn_max = scl::algo::max2(knn_max, knn_scores[static_cast<Index>(i)]);
+        density_max = scl::algo::max2(density_max, density_scores[static_cast<Index>(i)]);
+        var_max = scl::algo::max2(var_max, variance_scores[static_cast<Index>(i)]);
     }
 
     // Precompute inverse max values
@@ -1162,11 +1169,11 @@ inline void combined_doublet_score(
 
     // Scalar cleanup
     for (; i < n; ++i) {
-        Real norm_knn = knn_scores[i] * inv_knn_max;
-        Real norm_density = density_scores[i] * inv_density_max;
-        Real norm_var = variance_scores[i] * inv_var_max;
+        Real norm_knn = knn_scores[static_cast<Index>(i)] * inv_knn_max;
+        Real norm_density = density_scores[static_cast<Index>(i)] * inv_density_max;
+        Real norm_var = variance_scores[static_cast<Index>(i)] * inv_var_max;
 
-        combined_scores[i] = knn_weight * norm_knn +
+        combined_scores[static_cast<Index>(i)] = knn_weight * norm_knn +
                             density_weight * norm_density +
                             variance_weight * norm_var;
     }
@@ -1226,7 +1233,7 @@ inline Index get_singlet_indices(
 ) {
     Index count = 0;
     for (Size i = 0; i < is_doublet.len; ++i) {
-        if (!is_doublet[i]) {
+        if (!is_doublet[static_cast<Index>(i)]) {
             if (count < static_cast<Index>(singlet_indices.len)) {
                 singlet_indices[count] = static_cast<Index>(i);
             }
@@ -1262,8 +1269,8 @@ inline void doublet_score_stats(
     Real var = Real(0);
     Real m = *mean;
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    const auto d = s::SimdTagFor<Real>();
+    const auto lanes = s::Lanes(d);
 
     auto mean_vec = s::Set(d, m);
     auto acc0 = s::Zero(d);
@@ -1283,21 +1290,23 @@ inline void doublet_score_stats(
 
     for (; k + lanes <= n; k += lanes) {
         auto v = s::Load(d, scores.ptr + k);
-        auto d = s::Sub(v, mean_vec);
-        acc0 = s::MulAdd(d, d, acc0);
+        auto diff = s::Sub(v, mean_vec);
+        acc0 = s::MulAdd(diff, diff, acc0);
     }
 
     var = s::GetLane(s::SumOfLanes(d, acc0));
 
     for (; k < n; ++k) {
-        Real d = scores[k] - m;
-        var += d * d;
+        Real diff = scores[static_cast<Index>(k)] - m;
+        var += diff * diff;
     }
 
     *std_dev = std::sqrt(var / static_cast<Real>(n));
 
     // Median using efficient sort
-    Real* sorted = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto sorted_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* sorted = sorted_ptr.get();
     scl::memory::copy_fast(
         Array<const Real>(scores.ptr, n),
         Array<Real>(sorted, n)
@@ -1309,7 +1318,7 @@ inline void doublet_score_stats(
         (sorted[n / 2 - 1] + sorted[n / 2]) / Real(2) :
         sorted[n / 2];
 
-    scl::memory::aligned_free(sorted, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -1342,22 +1351,25 @@ inline void cluster_doublet_enrichment(
                   "Doublet: cluster_doublet_fraction buffer too small");
 
     // Compute per-cluster statistics
-    Real* cluster_sums = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
-    Index* cluster_counts = scl::memory::aligned_alloc<Index>(n_clusters, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto cluster_sums_ptr = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_clusters), SCL_ALIGNMENT);
+    auto cluster_counts_ptr = scl::memory::aligned_alloc<Index>(static_cast<Size>(n_clusters), SCL_ALIGNMENT);
+    Real* cluster_sums = cluster_sums_ptr.get();
+    Index* cluster_counts = cluster_counts_ptr.get();
     scl::algo::zero(cluster_sums, static_cast<Size>(n_clusters));
     scl::algo::zero(cluster_counts, static_cast<Size>(n_clusters));
 
     // Global threshold for doublet calling (use median + MAD)
     Real global_mean = Real(0);
     for (Size i = 0; i < n; ++i) {
-        global_mean += doublet_scores[i];
+        global_mean += doublet_scores[static_cast<Index>(i)];
     }
     global_mean /= static_cast<Real>(n);
 
     for (Size i = 0; i < n; ++i) {
-        Index c = cluster_labels[i];
+        auto c = cluster_labels[static_cast<Index>(i)];
         if (c >= 0 && c < n_clusters) {
-            cluster_sums[c] += doublet_scores[i];
+            cluster_sums[c] += doublet_scores[static_cast<Index>(i)];
             ++cluster_counts[c];
         }
     }
@@ -1373,8 +1385,8 @@ inline void cluster_doublet_enrichment(
     // Compute fraction with score > global mean (enrichment proxy)
     scl::algo::zero(cluster_sums, static_cast<Size>(n_clusters));
     for (Size i = 0; i < n; ++i) {
-        Index c = cluster_labels[i];
-        if (c >= 0 && c < n_clusters && doublet_scores[i] > global_mean) {
+        auto c = cluster_labels[static_cast<Index>(i)];
+        if (c >= 0 && c < n_clusters && doublet_scores[static_cast<Index>(i)] > global_mean) {
             cluster_sums[c] += Real(1);
         }
     }
@@ -1387,8 +1399,7 @@ inline void cluster_doublet_enrichment(
         }
     }
 
-    scl::memory::aligned_free(cluster_counts, SCL_ALIGNMENT);
-    scl::memory::aligned_free(cluster_sums, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 } // namespace scl::kernel::doublet

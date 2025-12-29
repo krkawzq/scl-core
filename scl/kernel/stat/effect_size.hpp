@@ -40,8 +40,8 @@ SCL_FORCE_INLINE Real compute_cohens_d(
         return Real(0);
     }
 
-    double df1 = static_cast<double>(n1 - 1);
-    double df2 = static_cast<double>(n2 - 1);
+    auto df1 = static_cast<double>(n1 - 1);
+    auto df2 = static_cast<double>(n2 - 1);
     double pooled_var = (df1 * var1 + df2 * var2) / (df1 + df2);
     double pooled_sd = std::sqrt(pooled_var);
 
@@ -143,7 +143,8 @@ void effect_size(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
-    Size n1_total, n2_total;
+    Size n1_total{};
+    Size n2_total{};
     count_groups(group_ids, n1_total, n2_total);
 
     SCL_CHECK_ARG(n1_total > 0 && n2_total > 0,
@@ -157,12 +158,12 @@ void effect_size(
         if (len > max_len) max_len = len;
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const size_t n_threads = scl::threading::get_num_threads_runtime();
     scl::threading::DualWorkspacePool<T> buf_pool;
     buf_pool.init(n_threads, max_len);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -206,7 +207,7 @@ void effect_size(
             if (var2 < 0.0) var2 = 0.0;
         }
 
-        out_effect_size[p] = compute_effect_size(
+        out_effect_size[static_cast<Index>(p)] = compute_effect_size(
             mean1, var1, n1_total,
             mean2, var2, n2_total,
             type
@@ -232,7 +233,8 @@ void ttest_with_effect_size(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
-    Size n1_total, n2_total;
+    Size n1_total{};
+    Size n2_total{};
     count_groups(group_ids, n1_total, n2_total);
 
     SCL_CHECK_ARG(n1_total > 0 && n2_total > 0,
@@ -247,12 +249,12 @@ void ttest_with_effect_size(
         if (len > max_len) max_len = len;
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const size_t n_threads = scl::threading::get_num_threads_runtime();
     scl::threading::DualWorkspacePool<T> buf_pool;
     buf_pool.init(n_threads, max_len);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -274,7 +276,7 @@ void ttest_with_effect_size(
         double mean1 = sum1 * c.inv_n1;
         double mean2 = sum2 * c.inv_n2;
 
-        out_log2_fc[p] = compute_log2_fc(mean1, mean2);
+        out_log2_fc[static_cast<Index>(p)] = compute_log2_fc(mean1, mean2);
 
         double var1 = 0.0, var2 = 0.0;
 
@@ -320,11 +322,11 @@ void ttest_with_effect_size(
             }
         }
 
-        out_t_stats[p] = static_cast<Real>(t_stat);
-        out_p_values[p] = static_cast<Real>(p_val);
+        out_t_stats[static_cast<Index>(p)] = static_cast<Real>(t_stat);
+        out_p_values[static_cast<Index>(p)] = static_cast<Real>(p_val);
 
         // Effect size
-        out_effect_size[p] = compute_effect_size(
+        out_effect_size[static_cast<Index>(p)] = compute_effect_size(
             mean1, var1, n1_total,
             mean2, var2, n2_total,
             es_type

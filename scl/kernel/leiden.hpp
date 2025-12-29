@@ -63,18 +63,19 @@ namespace detail {
 // =============================================================================
 
 struct alignas(16) FastRNG {
-    uint32_t s[4];
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    uint32_t s[4]{0, 0, 0, 0};
 
     SCL_FORCE_INLINE explicit FastRNG(uint64_t seed) noexcept {
         uint64_t z = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (auto& si : s) {
             z += 0x9e3779b97f4a7c15ULL;
             z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-            s[i] = static_cast<uint32_t>(z >> 32);
+            si = static_cast<uint32_t>(z >> 32);
         }
     }
 
-    SCL_FORCE_INLINE uint32_t rotl(uint32_t x, int k) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE uint32_t rotl(uint32_t x, int k) const noexcept {
         return (x << k) | (x >> (32 - k));
     }
 
@@ -116,12 +117,12 @@ struct alignas(16) FastRNG {
 struct alignas(64) CommunityHashTable {
     static constexpr Index EMPTY = -1;
     
-    Index* keys;
-    Real* values;
-    Size capacity;
-    Size size;
+    Index* keys = nullptr;
+    Real* values = nullptr;
+    Size capacity{0};
+    Size size{0};
 
-    CommunityHashTable() noexcept : keys(nullptr), values(nullptr), capacity(0), size(0) {}
+    CommunityHashTable() noexcept = default;
 
     void init(Size max_size) {
         capacity = max_size * config::HASH_LOAD_FACTOR_INV;
@@ -129,11 +130,13 @@ struct alignas(64) CommunityHashTable {
         Size cap = 1;
         while (cap < capacity) cap <<= 1;
         capacity = cap;
-        
-        keys = scl::memory::aligned_alloc<Index>(capacity, SCL_ALIGNMENT);
-        values = scl::memory::aligned_alloc<Real>(capacity, SCL_ALIGNMENT);
+
+        // Use .release() to convert unique_ptr to raw pointer as required by interface
+        keys = scl::memory::aligned_alloc<Index>(capacity, SCL_ALIGNMENT).release();
+        values = scl::memory::aligned_alloc<Real>(capacity, SCL_ALIGNMENT).release();
         clear();
     }
+
 
     void destroy() {
         if (keys) scl::memory::aligned_free(keys, SCL_ALIGNMENT);
@@ -149,7 +152,7 @@ struct alignas(64) CommunityHashTable {
         size = 0;
     }
 
-    SCL_FORCE_INLINE Size hash(Index key) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE Size hash(Index key) const noexcept {
         // Fibonacci hashing
         uint32_t h = static_cast<uint32_t>(key) * 2654435769u;
         return static_cast<Size>(h) & (capacity - 1);
@@ -173,7 +176,7 @@ struct alignas(64) CommunityHashTable {
         }
     }
 
-    SCL_FORCE_INLINE Real get(Index key) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE Real get(Index key) const noexcept {
         Size idx = hash(key);
         
         while (keys[idx] != EMPTY) {
@@ -209,8 +212,8 @@ struct alignas(64) CommunityState {
     void init(Size n) {
         n_nodes = n;
         n_communities = static_cast<Index>(n);
-        sigma_tot = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-        node_to_comm = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        sigma_tot = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT).release();
+        node_to_comm = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT).release();
     }
 
     void destroy() {
@@ -247,7 +250,7 @@ SCL_HOT Real compute_total_weight_simd(const Sparse<T, IsCSR>& adj) {
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
     
     Real total = Real(0);
     for (Index i = 0; i < n; ++i) {
@@ -279,12 +282,12 @@ SCL_HOT Real compute_total_weight_simd(const Sparse<T, IsCSR>& adj) {
 template <typename T, bool IsCSR>
 SCL_HOT void compute_node_degrees_simd(const Sparse<T, IsCSR>& adj, Real* degrees) {
     const Index n = adj.primary_dim();
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
     if (static_cast<Size>(n) >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i) {
             auto values = adj.primary_values_unsafe(static_cast<Index>(i));
@@ -456,11 +459,12 @@ SCL_HOT bool parallel_local_moving(
     const Index n = adj.primary_dim();
     const Size N = static_cast<Size>(n);
     const Real inv_m = Real(1) / (Real(2) * total_weight);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Atomic sigma_tot for parallel updates
-    std::atomic<int64_t>* atomic_sigma = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
-    
+    auto atomic_sigma_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
+    std::atomic<int64_t>* atomic_sigma = atomic_sigma_ptr.get();
+
     // Convert sigma_tot to fixed-point for atomic operations
     constexpr int64_t SCALE = 1000000;
     for (Size i = 0; i < N; ++i) {
@@ -481,7 +485,7 @@ SCL_HOT bool parallel_local_moving(
         std::atomic<Size> pass_moves{0};
 
         scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
-            const Index node = static_cast<Index>(i);
+            const auto node = static_cast<Index>(i);
             const Index current_comm = state.node_to_comm[node];
             const Real k_i = degrees[node];
             if (k_i <= Real(0)) return;
@@ -513,7 +517,9 @@ SCL_HOT bool parallel_local_moving(
                     k_i_current += w;
                 }
                 // Hash insert
-                Size idx = (static_cast<uint32_t>(comm_j) * 2654435769u) & mask;
+                // Cast each operand to Size before multiplication to avoid
+                // implicit widening of multiplication result.
+                Size idx = (static_cast<Size>(static_cast<uint32_t>(comm_j)) * static_cast<Size>(2654435769u)) & mask;
                 while (keys[idx] != -1 && keys[idx] != comm_j) {
                     idx = (idx + 1) & mask;
                 }
@@ -555,7 +561,7 @@ SCL_HOT bool parallel_local_moving(
 
             // Atomic move
             if (best_comm != current_comm) {
-                int64_t k_i_scaled = static_cast<int64_t>(k_i * SCALE);
+                auto k_i_scaled = static_cast<int64_t>(k_i * SCALE);
                 atomic_sigma[current_comm].fetch_sub(k_i_scaled, std::memory_order_relaxed);
                 atomic_sigma[best_comm].fetch_add(k_i_scaled, std::memory_order_relaxed);
                 state.node_to_comm[node] = best_comm;
@@ -608,7 +614,9 @@ void refinement_phase(
     }
 
     // Process each community
-    Index* comm_nodes = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto comm_nodes_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+    Index* comm_nodes = comm_nodes_ptr.release();
     for (Index c = 0; c < n_communities; ++c) {
         // Collect nodes in this community
         Index comm_size = 0;
@@ -647,7 +655,6 @@ void refinement_phase(
             Index current_ref = refined[i];
             Index best_comm = current_ref;
             Real best_delta = Real(0);
-            Real sigma_current = refined_sigma[current_ref];
 
             neighbor_weights.for_each([&](Index target_ref, Real k_i_in) {
                 if (target_ref == current_ref) return;
@@ -712,15 +719,14 @@ SCL_FORCE_INLINE Index relabel_communities(
 
 template <typename T>
 struct AggregatedGraph {
-    Index* indptr;
-    Index* indices;
-    T* values;
-    Index n_nodes;
-    Size n_edges;
-    bool owns_data;
+    Index* indptr = nullptr;
+    Index* indices = nullptr;
+    T* values = nullptr;
+    Index n_nodes{};
+    Size n_edges{};
+    bool owns_data{false};
 
-    AggregatedGraph() : indptr(nullptr), indices(nullptr), values(nullptr),
-                        n_nodes(0), n_edges(0), owns_data(false) {}
+    AggregatedGraph() noexcept = default;
 
     void destroy() {
         if (owns_data) {
@@ -744,7 +750,9 @@ AggregatedGraph<T> aggregate_graph(
     result.owns_data = true;
 
     // First pass: count edges per community
-    Index* edge_counts = scl::memory::aligned_alloc<Index>(n_communities, SCL_ALIGNMENT);
+    auto edge_counts_ptr = scl::memory::aligned_alloc<Index>(n_communities, SCL_ALIGNMENT);
+
+    Index* edge_counts = edge_counts_ptr.release();
     scl::algo::zero(edge_counts, static_cast<Size>(n_communities));
 
     for (Index c = 0; c < n_communities; ++c) {
@@ -834,30 +842,41 @@ void cluster(
     }
 
     // Allocate working memory
-    Real* degrees = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto degrees_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* degrees = degrees_ptr.release();
     detail::compute_node_degrees_simd(adjacency, degrees);
 
-    detail::CommunityState state;
+    detail::CommunityState state{};
     state.init(N);
     state.init_singletons(degrees);
 
-    Index* refined = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
-    Real* refined_sigma = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Index* relabel_map = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
-    Index* node_order = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    auto refined_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+
+    Index* refined = refined_ptr.release();
+    auto refined_sigma_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* refined_sigma = refined_sigma_ptr.release();
+    auto relabel_map_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* relabel_map = relabel_map_ptr.release();
+    auto node_order_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* node_order = node_order_ptr.release();
 
     detail::CommunityHashTable neighbor_weights;
     neighbor_weights.init(N);
 
     detail::FastRNG rng(seed);
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD && n_threads > 1);
 
     // Main Leiden loop
     for (Index iter = 0; iter < max_iter; ++iter) {
         // Phase 1: Local moving
-        bool moved;
+        bool moved{};
         if (use_parallel) {
             moved = detail::parallel_local_moving(
                 adjacency, degrees, state,
@@ -948,13 +967,15 @@ void cluster_multilevel(
     // Count initial communities
     Index max_label = 0;
     for (Size i = 0; i < N; ++i) {
-        max_label = scl::algo::max2(max_label, labels[i]);
+        max_label = scl::algo::max2(max_label, labels[static_cast<Index>(i)]);
     }
     Index n_communities = max_label + 1;
     if (n_communities <= 1 || n_communities >= n) return;
 
     // Prepare for aggregation
-    Index* current_labels = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    auto current_labels_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* current_labels = current_labels_ptr.release();
     std::memcpy(current_labels, labels.ptr, N * sizeof(Index));
 
     detail::CommunityHashTable edge_weights;
@@ -1007,32 +1028,39 @@ Real compute_modularity(
     const Real inv_m2 = Real(1) / m2;
     const Real inv_m2_sq = inv_m2 * inv_m2;
 
-    Real* degrees = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto degrees_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+
+    Real* degrees = degrees_ptr.release();
     detail::compute_node_degrees_simd(adjacency, degrees);
 
     // Find number of communities
     Index max_comm = 0;
     for (Size i = 0; i < N; ++i) {
-        max_comm = scl::algo::max2(max_comm, labels[i]);
+        max_comm = scl::algo::max2(max_comm, labels[static_cast<Index>(i)]);
     }
     Index n_communities = max_comm + 1;
 
     // Compute sigma_tot
-    Real* sigma_tot = scl::memory::aligned_alloc<Real>(n_communities, SCL_ALIGNMENT);
+    auto sigma_tot_ptr = scl::memory::aligned_alloc<Real>(n_communities, SCL_ALIGNMENT);
+
+    Real* sigma_tot = sigma_tot_ptr.release();
     scl::algo::zero(sigma_tot, static_cast<Size>(n_communities));
 
     for (Size i = 0; i < N; ++i) {
-        sigma_tot[labels[i]] += degrees[i];
+        sigma_tot[labels[static_cast<Index>(i)]] += degrees[i];
     }
 
     // Compute modularity
     Real Q = Real(0);
 
     // Sum of internal edges
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     
     if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
-        Real* partial_Q = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
+        auto partial_Q_ptr = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
+
+        Real* partial_Q = partial_Q_ptr.release();
         scl::algo::zero(partial_Q, n_threads);
 
         scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
@@ -1042,14 +1070,14 @@ Real compute_modularity(
 
             Real local_sum = Real(0);
             for (Index k = 0; k < len; ++k) {
-                if (labels[indices[k]] == labels[i]) {
+                if (labels[indices[k]] == labels[static_cast<Index>(i)]) {
                     local_sum += static_cast<Real>(values[k]);
                 }
             }
             partial_Q[thread_rank] += local_sum;
         });
 
-        for (size_t t = 0; t < n_threads; ++t) {
+        for (Size t = 0; t < n_threads; ++t) {
             Q += partial_Q[t];
         }
 
@@ -1093,7 +1121,7 @@ inline void community_sizes(
     const Size n = labels.len;
     Index max_label = 0;
     for (Size i = 0; i < n; ++i) {
-        max_label = scl::algo::max2(max_label, labels[i]);
+        max_label = scl::algo::max2(max_label, labels[static_cast<Index>(i)]);
     }
     n_communities = max_label + 1;
 
@@ -1103,7 +1131,7 @@ inline void community_sizes(
     scl::algo::zero(sizes.ptr, static_cast<Size>(n_communities));
 
     for (Size i = 0; i < n; ++i) {
-        ++sizes[labels[i]];
+        ++sizes[labels[static_cast<Index>(i)]];
     }
 }
 
@@ -1115,15 +1143,19 @@ inline void sort_communities_by_size(
     const Size n = labels.len;
 
     // Count sizes
-    Index* sizes = scl::memory::aligned_alloc<Index>(n_communities, SCL_ALIGNMENT);
+    auto sizes_ptr = scl::memory::aligned_alloc<Index>(n_communities, SCL_ALIGNMENT);
+
+    Index* sizes = sizes_ptr.release();
     scl::algo::zero(sizes, static_cast<Size>(n_communities));
 
     for (Size i = 0; i < n; ++i) {
-        ++sizes[labels[i]];
+        ++sizes[labels[static_cast<Index>(i)]];
     }
 
     // Create sort order
-    Index* order = scl::memory::aligned_alloc<Index>(n_communities, SCL_ALIGNMENT);
+    auto order_ptr = scl::memory::aligned_alloc<Index>(n_communities, SCL_ALIGNMENT);
+
+    Index* order = order_ptr.release();
     for (Index c = 0; c < n_communities; ++c) {
         order[c] = c;
     }
@@ -1141,14 +1173,16 @@ inline void sort_communities_by_size(
     }
 
     // Create relabeling map
-    Index* relabel = scl::memory::aligned_alloc<Index>(n_communities, SCL_ALIGNMENT);
+    auto relabel_ptr = scl::memory::aligned_alloc<Index>(n_communities, SCL_ALIGNMENT);
+
+    Index* relabel = relabel_ptr.release();
     for (Index c = 0; c < n_communities; ++c) {
         relabel[order[c]] = c;
     }
 
     // Relabel
     for (Size i = 0; i < n; ++i) {
-        labels[i] = relabel[labels[i]];
+        labels[static_cast<Index>(i)] = relabel[labels[static_cast<Index>(i)]];
     }
 
     scl::memory::aligned_free(relabel, SCL_ALIGNMENT);

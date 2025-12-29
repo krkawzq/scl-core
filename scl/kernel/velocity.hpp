@@ -7,7 +7,6 @@
 #include "scl/core/macros.hpp"
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
-#include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
 #include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
@@ -96,7 +95,7 @@ SCL_HOT SCL_FORCE_INLINE void linear_regression(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     // Compute means with multi-accumulator
     auto v_sum_x0 = s::Zero(d), v_sum_x1 = s::Zero(d);
@@ -214,7 +213,7 @@ SCL_FORCE_INLINE void fit_kinetics_steady_state(
     Real& gamma,
     Real& r2
 ) {
-    Real slope, intercept;
+    Real slope = NAN, intercept = NAN;
     linear_regression(spliced, unspliced, n_cells, slope, intercept, r2);
     gamma = scl::algo::max2(slope, config::EPSILON);
 }
@@ -228,14 +227,14 @@ SCL_HOT SCL_FORCE_INLINE Real cosine_similarity(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_dot0 = s::Zero(d), v_dot1 = s::Zero(d);
     auto v_norm_a0 = s::Zero(d), v_norm_a1 = s::Zero(d);
     auto v_norm_b0 = s::Zero(d), v_norm_b1 = s::Zero(d);
 
     Index i = 0;
-    for (; i + 2 * lanes <= dim; i += 2 * lanes) {
+    for (; i + static_cast<Index>(2 * lanes) <= dim; i += static_cast<Index>(2 * lanes)) {
         auto va0 = s::Load(d, a + i);
         auto va1 = s::Load(d, a + i + lanes);
         auto vb0 = s::Load(d, b + i);
@@ -271,7 +270,7 @@ SCL_HOT void softmax(Real* SCL_RESTRICT values, Size n) {
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     // Find max with SIMD
     Real max_val = values[0];
@@ -333,10 +332,10 @@ SCL_HOT SCL_FORCE_INLINE void vec_diff(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     Index i = 0;
-    for (; i + lanes <= dim; i += lanes) {
+    for (; i + static_cast<Index>(lanes) <= dim; i += static_cast<Index>(lanes)) {
         auto va = s::Load(d, a + i);
         auto vb = s::Load(d, b + i);
         s::Store(s::Sub(va, vb), d, out + i);
@@ -357,12 +356,12 @@ SCL_HOT SCL_FORCE_INLINE void vec_accumulate(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_w = s::Set(d, weight);
 
     Index i = 0;
-    for (; i + lanes <= dim; i += lanes) {
+    for (; i + static_cast<Index>(lanes) <= dim; i += static_cast<Index>(lanes)) {
         auto v_out = s::Load(d, out + i);
         auto v_vec = s::Load(d, vec + i);
         s::Store(s::MulAdd(v_w, v_vec, v_out), d, out + i);
@@ -395,12 +394,12 @@ void fit_gene_kinetics(
     const Size n_cells_sz = static_cast<Size>(n_cells);
     const Size n_genes_sz = static_cast<Size>(n_genes);
     const bool use_parallel = (n_genes_sz >= config::PARALLEL_THRESHOLD);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Per-thread workspace
     scl::threading::DualWorkspacePool<Real> workspace;
     if (use_parallel) {
-        workspace.init(n_threads, n_cells_sz, n_cells_sz);
+        workspace.init(n_threads, n_cells_sz);
     }
 
     auto process_gene = [&](Index g, Real* s_vals, Real* u_vals) {
@@ -419,7 +418,7 @@ void fit_gene_kinetics(
                     s_indices.ptr, s_indices.ptr + s_len, g);
 
                 if (s_found != s_indices.ptr + s_len && *s_found == g) {
-                    Index k = static_cast<Index>(s_found - s_indices.ptr);
+                    auto k = static_cast<Index>(s_found - s_indices.ptr);
                     s_vals[c] = static_cast<Real>(s_values[k]);
                 }
 
@@ -431,7 +430,7 @@ void fit_gene_kinetics(
                     u_indices.ptr, u_indices.ptr + u_len, g);
 
                 if (u_found != u_indices.ptr + u_len && *u_found == g) {
-                    Index k = static_cast<Index>(u_found - u_indices.ptr);
+                    auto k = static_cast<Index>(u_found - u_indices.ptr);
                     u_vals[c] = static_cast<Real>(u_values[k]);
                 }
             }
@@ -469,14 +468,18 @@ void fit_gene_kinetics(
     };
 
     if (use_parallel) {
-        scl::threading::parallel_for(Size(0), n_genes_sz, [&](size_t g, size_t thread_rank) {
+        scl::threading::parallel_for(Size(0), n_genes_sz, [&](Size g, Size thread_rank) {
             Real* s_vals = workspace.get1(thread_rank);
             Real* u_vals = workspace.get2(thread_rank);
             process_gene(static_cast<Index>(g), s_vals, u_vals);
         });
     } else {
-        Real* s_vals = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
-        Real* u_vals = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+        auto s_vals_ptr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+
+        Real* s_vals = s_vals_ptr.release();
+        auto u_vals_ptr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+
+        Real* u_vals = u_vals_ptr.release();
 
         for (Index g = 0; g < n_genes; ++g) {
             process_gene(g, s_vals, u_vals);
@@ -539,7 +542,7 @@ void compute_velocity(
         };
 
         if (use_parallel) {
-            scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t c) {
+            scl::threading::parallel_for(Size(0), n_cells_sz, [&](Size c) {
                 process_cell(static_cast<Index>(c));
             });
         } else {
@@ -579,7 +582,7 @@ void compute_velocity(
 
         const Size n_genes_sz = static_cast<Size>(n_genes);
         if (n_genes_sz >= config::PARALLEL_THRESHOLD) {
-            scl::threading::parallel_for(Size(0), n_genes_sz, [&](size_t g) {
+            scl::threading::parallel_for(Size(0), n_genes_sz, [&](Size g) {
                 process_gene(static_cast<Index>(g));
             });
         } else {
@@ -605,7 +608,10 @@ void splice_ratio(
     const Size total = static_cast<Size>(n_cells) * static_cast<Size>(n_genes);
     std::memset(ratio_out, 0, total * sizeof(Real));
 
-    Real* s_dense = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto s_dense_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+
+
+    Real* s_dense = s_dense_ptr.release();
     std::memset(s_dense, 0, total * sizeof(Real));
 
     // Fill spliced values
@@ -695,7 +701,7 @@ void velocity_graph(
     const Size n_genes_sz = static_cast<Size>(n_genes);
     const Size k_sz = static_cast<Size>(k_neighbors);
     const bool use_parallel = (n_cells_sz >= config::PARALLEL_THRESHOLD);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Per-thread delta buffer
     scl::threading::WorkspacePool<Real> delta_pool;
@@ -731,12 +737,14 @@ void velocity_graph(
     };
 
     if (use_parallel) {
-        scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
+        scl::threading::parallel_for(Size(0), n_cells_sz, [&](Size i, Size thread_rank) {
             Real* delta = delta_pool.get(thread_rank);
             process_cell(static_cast<Index>(i), delta);
         });
     } else {
-        Real* delta = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+        auto delta_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+
+        Real* delta = delta_ptr.release();
         for (Index i = 0; i < n_cells; ++i) {
             process_cell(i, delta);
         }
@@ -788,7 +796,7 @@ inline void velocity_graph_cosine(
     };
 
     if (use_parallel) {
-        scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), n_cells_sz, [&](Size i) {
             process_cell(static_cast<Index>(i));
         });
     } else {
@@ -815,7 +823,7 @@ inline void velocity_embedding(
     const Size n_cells_sz = static_cast<Size>(n_cells);
     const Size n_dims_sz = static_cast<Size>(n_dims);
     const bool use_parallel = (n_cells_sz >= config::PARALLEL_THRESHOLD);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::WorkspacePool<Real> delta_pool;
     if (use_parallel) {
@@ -859,12 +867,14 @@ inline void velocity_embedding(
     };
 
     if (use_parallel) {
-        scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
+        scl::threading::parallel_for(Size(0), n_cells_sz, [&](Size i, Size thread_rank) {
             Real* delta_emb = delta_pool.get(thread_rank);
             process_cell(static_cast<Index>(i), delta_emb);
         });
     } else {
-        Real* delta_emb = scl::memory::aligned_alloc<Real>(n_dims_sz, SCL_ALIGNMENT);
+        auto delta_emb_ptr = scl::memory::aligned_alloc<Real>(n_dims_sz, SCL_ALIGNMENT);
+
+        Real* delta_emb = delta_emb_ptr.release();
         for (Index i = 0; i < n_cells; ++i) {
             process_cell(i, delta_emb);
         }
@@ -918,15 +928,18 @@ inline void velocity_grid(
     // Initialize
     std::memset(grid_velocity, 0, n_grid_sz * 2 * sizeof(Real));
 
-    Index* counts = scl::memory::aligned_alloc<Index>(n_grid_sz, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Index>(n_grid_sz, SCL_ALIGNMENT);
+
+
+    Index* counts = counts_ptr.release();
     std::memset(counts, 0, n_grid_sz * sizeof(Index));
 
     // Generate grid coordinates
     for (Index gy = 0; gy < grid_size; ++gy) {
         for (Index gx = 0; gx < grid_size; ++gx) {
             Index gi = gy * grid_size + gx;
-            grid_coords[static_cast<Size>(gi) * 2] = min_x + gx * step_x;
-            grid_coords[static_cast<Size>(gi) * 2 + 1] = min_y + gy * step_y;
+            grid_coords[static_cast<Size>(gi) * 2] = min_x + static_cast<Real>(gx) * step_x;
+            grid_coords[static_cast<Size>(gi) * 2 + static_cast<Size>(1)] = min_y + static_cast<Real>(gy) * step_y;
         }
     }
 
@@ -935,8 +948,8 @@ inline void velocity_grid(
         Real x = embedding[static_cast<Size>(i) * 2];
         Real y = embedding[static_cast<Size>(i) * 2 + 1];
 
-        Index gx = static_cast<Index>((x - min_x) * inv_step_x);
-        Index gy = static_cast<Index>((y - min_y) * inv_step_y);
+        auto gx = static_cast<Index>((x - min_x) * inv_step_x);
+        auto gy = static_cast<Index>((y - min_y) * inv_step_y);
         gx = scl::algo::clamp(gx, Index(0), grid_size - 1);
         gy = scl::algo::clamp(gy, Index(0), grid_size - 1);
 
@@ -994,7 +1007,7 @@ inline void velocity_confidence(
     };
 
     if (use_parallel) {
-        scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), n_cells_sz, [&](Size i) {
             process_cell(static_cast<Index>(i));
         });
     } else {
@@ -1022,7 +1035,7 @@ inline void latent_time(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_inf = s::Set(d, config::INF_VALUE);
 
@@ -1037,7 +1050,10 @@ inline void latent_time(
 
     latent_time_out[root_cell] = Real(0);
 
-    Real* prev_time = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+    auto prev_time_ptr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+
+
+    Real* prev_time = prev_time_ptr.release();
     std::memcpy(prev_time, latent_time_out, n_cells_sz * sizeof(Real));
 
     const Real half_inf = config::INF_VALUE * Real(0.5);
@@ -1045,11 +1061,12 @@ inline void latent_time(
     for (Index iter = 0; iter < config::DEFAULT_N_ITERATIONS; ++iter) {
         bool changed = false;
 
-        for (Index i = 0; i < n_cells; ++i) {
-            if (SCL_UNLIKELY(prev_time[i] >= half_inf)) continue;
+        // Outer loop index 'i' is scoped and does not shadow earlier declarations.
+        for (Index cell_i = 0; cell_i < n_cells; ++cell_i) {
+            if (SCL_UNLIKELY(prev_time[cell_i] >= half_inf)) continue;
 
-            const Index* neighbors = knn_indices + static_cast<Size>(i) * k_neighbors;
-            const Real* probs = transition_probs + static_cast<Size>(i) * k_neighbors;
+            const Index* neighbors = knn_indices + static_cast<Size>(cell_i) * k_neighbors;
+            const Real* probs = transition_probs + static_cast<Size>(cell_i) * k_neighbors;
 
             for (Index k = 0; k < k_neighbors; ++k) {
                 Index j = neighbors[k];
@@ -1058,7 +1075,7 @@ inline void latent_time(
                 Real weight = (probs[k] > config::EPSILON) ?
                     -std::log(probs[k]) : config::INF_VALUE;
 
-                Real new_time = prev_time[i] + weight;
+                Real new_time = prev_time[cell_i] + weight;
 
                 if (new_time < latent_time_out[j]) {
                     latent_time_out[j] = new_time;
@@ -1073,19 +1090,20 @@ inline void latent_time(
 
     // Normalize to [0, 1]
     Real max_time = Real(0);
-    for (Index i = 0; i < n_cells; ++i) {
-        if (latent_time_out[i] < half_inf) {
-            max_time = scl::algo::max2(max_time, latent_time_out[i]);
+    for (Index cell_i = 0; cell_i < n_cells; ++cell_i) {
+        if (latent_time_out[cell_i] < half_inf) {
+            max_time = scl::algo::max2(max_time, latent_time_out[cell_i]);
         }
     }
 
+    // Normalize latent times to [0, 1]
     if (SCL_LIKELY(max_time > config::EPSILON)) {
-        Real inv_max = Real(1) / max_time;
-        for (Index i = 0; i < n_cells; ++i) {
-            if (latent_time_out[i] < half_inf) {
-                latent_time_out[i] *= inv_max;
+        const Real inv_max_time = Real(1) / max_time;
+        for (Index cell_i = 0; cell_i < n_cells; ++cell_i) {
+            if (latent_time_out[cell_i] < half_inf) {
+                latent_time_out[cell_i] *= inv_max_time;
             } else {
-                latent_time_out[i] = Real(1);
+                latent_time_out[cell_i] = Real(1);
             }
         }
     }
@@ -1105,7 +1123,7 @@ inline void cell_fate_probability(
     Array<const Index> terminal_cells,
     Real* SCL_RESTRICT fate_probs
 ) {
-    const Index n_terminal = static_cast<Index>(terminal_cells.len);
+    const auto n_terminal = static_cast<Index>(terminal_cells.len);
     const Size n_cells_sz = static_cast<Size>(n_cells);
     const Size n_terminal_sz = static_cast<Size>(n_terminal);
     const Size total = n_cells_sz * n_terminal_sz;
@@ -1113,18 +1131,23 @@ inline void cell_fate_probability(
     std::memset(fate_probs, 0, total * sizeof(Real));
 
     // Mark terminal cells
-    bool* is_terminal = scl::memory::aligned_alloc<bool>(n_cells_sz, SCL_ALIGNMENT);
+    auto is_terminal_ptr = scl::memory::aligned_alloc<bool>(n_cells_sz, SCL_ALIGNMENT);
+
+    bool* is_terminal = is_terminal_ptr.release();
     std::memset(is_terminal, 0, n_cells_sz * sizeof(bool));
 
     for (Size t = 0; t < terminal_cells.len; ++t) {
-        Index cell = terminal_cells[t];
+        auto cell = terminal_cells[static_cast<Index>(t)];
         if (SCL_LIKELY(cell >= 0 && cell < n_cells)) {
             is_terminal[cell] = true;
             fate_probs[static_cast<Size>(cell) * n_terminal_sz + t] = Real(1);
         }
     }
 
-    Real* prev_probs = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto prev_probs_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+
+
+    Real* prev_probs = prev_probs_ptr.release();
 
     for (Index iter = 0; iter < config::DEFAULT_N_ITERATIONS; ++iter) {
         std::memcpy(prev_probs, fate_probs, total * sizeof(Real));
@@ -1178,7 +1201,10 @@ inline void predict_future_state(
         future_probs[static_cast<Size>(i) * n_cells + i] = Real(1);
     }
 
-    Real* prev_probs = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto prev_probs_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+
+
+    Real* prev_probs = prev_probs_ptr.release();
 
     for (Index step = 0; step < n_steps; ++step) {
         std::memcpy(prev_probs, future_probs, total * sizeof(Real));
@@ -1216,7 +1242,6 @@ inline void predict_future_state(
 
 inline void select_velocity_genes(
     const Real* SCL_RESTRICT velocity,
-    const Real* SCL_RESTRICT gamma,
     const Real* SCL_RESTRICT r2,
     Index n_cells,
     Index n_genes,
@@ -1269,7 +1294,10 @@ inline void velocity_pseudotime(
     // First compute basic latent time
     latent_time(transition_probs, knn_indices, n_cells, k_neighbors, root_cell, pseudotime);
 
-    Real* refined = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+    auto refined_ptr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+
+
+    Real* refined = refined_ptr.release();
 
     for (Index iter = 0; iter < 10; ++iter) {
         for (Index i = 0; i < n_cells; ++i) {
@@ -1321,9 +1349,7 @@ inline void velocity_pseudotime(
 inline void velocity_stream(
     const Real* SCL_RESTRICT embedding,
     const Real* SCL_RESTRICT velocity_embedded,
-    const Index* SCL_RESTRICT knn_indices,
     Index n_cells,
-    Index k_neighbors,
     Index start_cell,
     Index max_steps,
     Real step_size,
@@ -1423,7 +1449,7 @@ inline void velocity_divergence(
     };
 
     if (use_parallel) {
-        scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), n_cells_sz, [&](Size i) {
             process_cell(static_cast<Index>(i));
         });
     } else {
@@ -1444,7 +1470,9 @@ inline Index select_root_by_velocity(
     Index k_neighbors
 ) {
     const Size n_cells_sz = static_cast<Size>(n_cells);
-    Real* incoming = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+    auto incoming_ptr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+
+    Real* incoming = incoming_ptr.release();
     std::memset(incoming, 0, n_cells_sz * sizeof(Real));
 
     for (Index i = 0; i < n_cells; ++i) {
@@ -1489,7 +1517,10 @@ inline Index detect_terminal_states(
     const Size n_cells_sz = static_cast<Size>(n_cells);
     Index n_terminal = 0;
 
-    Real* outgoing = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+    auto outgoing_ptr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+
+
+    Real* outgoing = outgoing_ptr.release();
 
     for (Index i = 0; i < n_cells; ++i) {
         const Index* neighbors = knn_indices + static_cast<Size>(i) * k_neighbors;

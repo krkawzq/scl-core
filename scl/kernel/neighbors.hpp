@@ -310,7 +310,7 @@ void compute_norms(
     SCL_CHECK_DIM(norms_sq.len >= static_cast<Size>(primary_dim), "Norms size mismatch");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         auto values = matrix.primary_values_unsafe(idx);
         norms_sq[p] = scl::vectorize::sum_squared(Array<const T>(values.data(), values.size()));
     });
@@ -333,7 +333,7 @@ void knn(
     };
 
     // Pre-allocate heap storage for all threads
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     scl::threading::WorkspacePool<KnnEntry> heap_pool;
     heap_pool.init(n_threads, k);
 
@@ -388,7 +388,7 @@ void knn(
 
         T norm_i = norms_sq[i];
         T sqrt_norm_i = std::sqrt(norm_i);
-        const Index idx_i = static_cast<Index>(i);
+        const auto idx_i = static_cast<Index>(i);
         auto vals_i_arr = matrix.primary_values_unsafe(idx_i);
         auto inds_i_arr = matrix.primary_indices_unsafe(idx_i);
         const Size len_i_sz = vals_i_arr.size();
@@ -410,7 +410,7 @@ void knn(
             // Early pruning using lower bound
             if (SCL_UNLIKELY(min_dist_sq >= max_dist_sq)) continue;
 
-            const Index idx_j = static_cast<Index>(j);
+            const auto idx_j = static_cast<Index>(j);
             auto vals_j_arr = matrix.primary_values_unsafe(idx_j);
             auto inds_j_arr = matrix.primary_indices_unsafe(idx_j);
             const Size len_j_sz = vals_j_arr.size();
@@ -468,11 +468,11 @@ void knn(
 
         for (Size m = 0; m < heap_count; ++m) {
             out_distances[i * k + m] = std::sqrt(heap_storage[m].dist_sq);
-            out_indices[i * k + m] = heap_storage[m].idx;
+            out_indices[static_cast<Index>(i * k + m)] = heap_storage[m].idx;
         }
         for (Size m = heap_count; m < k; ++m) {
             out_distances[i * k + m] = std::numeric_limits<T>::infinity();
-            out_indices[i * k + m] = -1;
+            out_indices[static_cast<Index>(i * k + m)] = -1;
         }
     });
 }

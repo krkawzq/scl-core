@@ -120,8 +120,8 @@ SCL_FORCE_INLINE Real chisq_pvalue(Real chi2, Size df) {
         return Real(1);
     }
 
-    double d = static_cast<double>(df);
-    double x = static_cast<double>(chi2);
+    auto d = static_cast<double>(df);
+    auto x = static_cast<double>(chi2);
 
     // Wilson-Hilferty transformation
     double cube_root = std::cbrt(x / d);
@@ -137,9 +137,9 @@ SCL_FORCE_INLINE Real f_pvalue(Real F, Size df1, Size df2) {
         return Real(1);
     }
 
-    double f = static_cast<double>(F);
-    double d1 = static_cast<double>(df1);
-    double d2 = static_cast<double>(df2);
+    auto f = static_cast<double>(F);
+    auto d1 = static_cast<double>(df1);
+    auto d2 = static_cast<double>(df2);
 
     // Approximation using normal distribution
     double lambda = (d1 * f) / (d1 * f + d2);

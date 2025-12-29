@@ -8,7 +8,6 @@
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
 
 #include <cmath>
@@ -66,8 +65,10 @@ enum class TransitionType {
 namespace detail {
 
 // Fast PRNG (Xoshiro128+)
+// PERFORMANCE: C-style array for SIMD-friendly initialization
 struct FastRNG {
-    uint64_t s[2];
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    uint64_t s[2]{};  // NOLINT(cppcoreguidelines-pro-type-member-init)
 
     SCL_FORCE_INLINE explicit FastRNG(uint64_t seed) noexcept {
         s[0] = seed ^ 0x9e3779b97f4a7c15ULL;
@@ -106,6 +107,8 @@ SCL_FORCE_INLINE Real dot_product(const Real* a, const Real* b, Index n) noexcep
         sum = _mm256_fmadd_pd(va, vb, sum);
     }
 
+    // PERFORMANCE: Aligned storage for SIMD reduction
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(32) double temp[4];
     _mm256_store_pd(temp, sum);
     Real result = temp[0] + temp[1] + temp[2] + temp[3];
@@ -129,6 +132,8 @@ SCL_FORCE_INLINE Real vector_sum(const Real* v, Index n) noexcept {
         sum = _mm256_add_pd(sum, _mm256_loadu_pd(v + i));
     }
 
+    // PERFORMANCE: Aligned storage for SIMD reduction
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(32) double temp[4];
     _mm256_store_pd(temp, sum);
     Real result = temp[0] + temp[1] + temp[2] + temp[3];
@@ -297,7 +302,10 @@ void sparse_matvec(const Sparse<T, IsCSR>& mat, const Real* x, Real* y, Index n)
 // Transpose SpMV with atomic accumulation for parallelism
 template <typename T, bool IsCSR>
 void sparse_matvec_transpose(const Sparse<T, IsCSR>& mat, const Real* x, Real* y, Index n) {
-    std::memset(y, 0, sizeof(Real) * n);
+    // PERFORMANCE: memset is faster than loop for zero initialization
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+    // Intentional: zero-initialization for performance
+    std::memset(y, 0, sizeof(Real) * static_cast<size_t>(n));
     
     // Sequential for correctness (atomic would be too slow)
     for (Index i = 0; i < n; ++i) {
@@ -349,6 +357,9 @@ void transition_matrix_from_velocity(
     Real* row_stochastic_out
 ) {
     Size total = static_cast<Size>(n) * static_cast<Size>(n);
+    // PERFORMANCE: memset is faster than loop for zero initialization
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+    // Intentional: zero-initialization for performance
     std::memset(row_stochastic_out, 0, sizeof(Real) * total);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
@@ -357,9 +368,12 @@ void transition_matrix_from_velocity(
         Index len = velocity_graph.primary_length_unsafe(static_cast<Index>(i));
         Real row_sum = 0;
 
+        // PERFORMANCE: Use branchless max to avoid branch misprediction in hot loop
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        // Intentional: zero-overhead array indexing for performance
         for (Index k = 0; k < len; ++k) {
             Real v = static_cast<Real>(values[k]);
-            row_sum += (v > 0) ? v : 0;  // Branchless would be: row_sum += v * (v > 0)
+            row_sum += scl::algo::max2(v, Real(0));
         }
 
         Real* row = row_stochastic_out + i * n;
@@ -387,24 +401,28 @@ void row_normalize_to_stochastic(
     Index n,
     Array<Real> output_values
 ) {
-    // Compute row pointers for output indexing
+    // Precompute row offsets for efficient parallel processing
+    // PERFORMANCE: Precompute offsets to avoid O(n^2) computation in parallel loop
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    std::vector<Size> offsets(static_cast<Size>(n) + 1);
+    offsets[0] = 0;
+    for (Index i = 0; i < n; ++i) {
+        offsets[static_cast<Size>(i) + 1] = offsets[i] + static_cast<Size>(input.primary_length_unsafe(i));
+    }
+    
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        auto values = input.primary_values_unsafe(static_cast<Index>(i));
-        Index len = input.primary_length_unsafe(static_cast<Index>(i));
-        
-        // Find offset
-        Size offset = 0;
-        for (Index r = 0; r < static_cast<Index>(i); ++r) {
-            offset += input.primary_length_unsafe(r);
-        }
+        const auto row_idx = static_cast<Index>(i);
+        auto values = input.primary_values_unsafe(row_idx);
+        const Index len = input.primary_length_unsafe(row_idx);
+        const Size offset = offsets[i];
         
         Real row_sum = 0;
         for (Index k = 0; k < len; ++k) {
             row_sum += static_cast<Real>(values[k]);
         }
-        Real inv_sum = (row_sum > config::EPSILON) ? Real(1) / row_sum : Real(0);
+        const Real inv_sum = (row_sum > config::EPSILON) ? Real(1) / row_sum : Real(0);
         for (Index k = 0; k < len; ++k) {
-            output_values[offset + k] = static_cast<Real>(values[k]) * inv_sum;
+            output_values[static_cast<Index>(offset + static_cast<Size>(k))] = static_cast<Real>(values[k]) * inv_sum;
         }
     });
 }
@@ -420,6 +438,9 @@ void symmetrize_transition(
     Real* symmetric_out
 ) {
     Size total = static_cast<Size>(n) * static_cast<Size>(n);
+    // PERFORMANCE: memset is faster than loop for zero initialization
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+    // Intentional: zero-initialization for performance
     std::memset(symmetric_out, 0, sizeof(Real) * total);
 
     // T_sym = (T + T^T) / 2 - needs atomic or sequential
@@ -430,8 +451,11 @@ void symmetrize_transition(
         for (Index k = 0; k < len; ++k) {
             Index j = indices[k];
             Real v = static_cast<Real>(values[k]) * Real(0.5);
-            symmetric_out[static_cast<Size>(i) * n + j] += v;
-            symmetric_out[static_cast<Size>(j) * n + i] += v;
+            // PERFORMANCE: Direct pointer arithmetic for matrix indexing
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            // Intentional: zero-overhead matrix indexing for performance
+            symmetric_out[static_cast<Size>(i) * static_cast<Size>(n) + static_cast<Size>(j)] += v;
+            symmetric_out[static_cast<Size>(j) * static_cast<Size>(n) + static_cast<Size>(i)] += v;
         }
     }
 
@@ -465,14 +489,16 @@ void stationary_distribution(
         stationary[i] = init_val;
     }
 
-    Real* temp = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* prev = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto prev_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* temp = temp_ptr.release();
+    Real* prev = prev_ptr.release();
     
     Real prev_diff = config::INF_VALUE;
     Real prev_prev_diff = config::INF_VALUE;
 
     for (Index iter = 0; iter < max_iter; ++iter) {
-        std::memcpy(prev, stationary.ptr, sizeof(Real) * n);
+        std::memcpy(prev, stationary.ptr, sizeof(Real) * static_cast<size_t>(n));
         
         // π^T * P (left eigenvector)
         detail::sparse_matvec_transpose(transition_mat, stationary.ptr, temp, n);
@@ -481,7 +507,7 @@ void stationary_distribution(
         // Convergence check
         Real diff = detail::max_abs_diff(temp, stationary.ptr, n);
         
-        std::memcpy(stationary.ptr, temp, sizeof(Real) * n);
+        std::memcpy(stationary.ptr, temp, sizeof(Real) * static_cast<size_t>(n));
         if (diff < tol) break;
         
         // Aitken acceleration check
@@ -528,7 +554,7 @@ void identify_terminal_states(
             self_prob += v * (indices[k] == static_cast<Index>(i));
         }
 
-        is_terminal[i] = (self_prob >= self_loop_threshold * total) || (len <= 1);
+        is_terminal[static_cast<Index>(i)] = (self_prob >= self_loop_threshold * total) || (len <= 1);
     });
 }
 
@@ -553,8 +579,10 @@ void absorption_probability(
     if (n_terminal == 0) return;
 
     // Map terminal indices
-    Index* terminal_map = scl::memory::aligned_alloc<Index>(n_terminal, SCL_ALIGNMENT);
-    Index* reverse_map = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto terminal_map_ptr = scl::memory::aligned_alloc<Index>(n_terminal, SCL_ALIGNMENT);
+    auto reverse_map_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    Index* terminal_map = terminal_map_ptr.release();
+    Index* reverse_map = reverse_map_ptr.release();
     
     Index t_idx = 0;
     for (Index i = 0; i < n; ++i) {
@@ -581,7 +609,7 @@ void absorption_probability(
         std::atomic<Real> max_diff{0};
         
         scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-            if (is_terminal[i]) return;
+            if (is_terminal[static_cast<Index>(i)]) return;
 
             auto indices = transition_mat.primary_indices_unsafe(static_cast<Index>(i));
             auto values = transition_mat.primary_values_unsafe(static_cast<Index>(i));
@@ -634,10 +662,14 @@ void hitting_time(
     SCL_CHECK_DIM(mean_hitting_time.len >= static_cast<Size>(n), "buffer too small");
 
     // Mark targets
-    bool* is_target = scl::memory::aligned_alloc<bool>(n, SCL_ALIGNMENT);
-    std::memset(is_target, 0, sizeof(bool) * n);
+    auto is_target_ptr = scl::memory::aligned_alloc<bool>(n, SCL_ALIGNMENT);
+    bool* is_target = is_target_ptr.release();
+    // PERFORMANCE: memset is faster than loop for zero initialization
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+    // Intentional: zero-initialization for performance
+    std::memset(is_target, 0, sizeof(bool) * static_cast<size_t>(n));
     for (Size i = 0; i < target_states.len; ++i) {
-        Index t = target_states[i];
+        Index t = target_states[static_cast<Index>(i)];
         if (t >= 0 && t < n) is_target[t] = true;
     }
 
@@ -705,11 +737,12 @@ void time_to_absorption(
         expected_time[i] = is_absorbing[i] ? Real(0) : Real(1);
     }
 
-    Real* prev = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto prev_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* prev = prev_ptr.release();
     const Real omega = config::SOR_OMEGA;
 
     for (Index iter = 0; iter < max_iter; ++iter) {
-        std::memcpy(prev, expected_time.ptr, sizeof(Real) * n);
+        std::memcpy(prev, expected_time.ptr, sizeof(Real) * static_cast<size_t>(n));
         
         Real max_change = 0;
         
@@ -753,7 +786,8 @@ void compute_top_eigenvectors(
     k = scl::algo::min2(k, n);
     
     detail::FastRNG rng(42);
-    Real* temp = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* temp = temp_ptr.release();
 
     // Initialize randomly
     for (Index c = 0; c < k; ++c) {
@@ -787,7 +821,7 @@ void compute_top_eigenvectors(
             detail::normalize_l2(temp, n);
 
             Real diff = detail::max_abs_diff(temp, v, n);
-            std::memcpy(v, temp, sizeof(Real) * n);
+            std::memcpy(v, temp, sizeof(Real) * static_cast<size_t>(n));
             if (diff < config::DEFAULT_TOLERANCE) break;
             
             // Aitken check
@@ -823,31 +857,38 @@ void metastable_states(
 
     n_states = scl::algo::min2(n_states, n);
 
-    Real* eigenvalues = scl::memory::aligned_alloc<Real>(n_states, SCL_ALIGNMENT);
-    Real* eigenvectors = scl::memory::aligned_alloc<Real>(
+    auto eigenvalues_ptr = scl::memory::aligned_alloc<Real>(n_states, SCL_ALIGNMENT);
+    auto eigenvectors_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(n) * n_states, SCL_ALIGNMENT);
+    Real* eigenvalues = eigenvalues_ptr.release();
+    Real* eigenvectors = eigenvectors_ptr.release();
     compute_top_eigenvectors(transition_mat, n, n_states, eigenvalues, eigenvectors);
 
     Real* membership = membership_probs.ptr;
     bool own_membership = (membership == nullptr);
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>> membership_ptr;
     if (own_membership) {
-        membership = scl::memory::aligned_alloc<Real>(
+        membership_ptr = scl::memory::aligned_alloc<Real>(
             static_cast<Size>(n) * n_states, SCL_ALIGNMENT);
+        membership = membership_ptr.release();
     }
 
     // K-means++ initialization
-    Real* centroids = scl::memory::aligned_alloc<Real>(
+    auto centroids_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(n_states) * n_states, SCL_ALIGNMENT);
+    Real* centroids = centroids_ptr.release();
     
     // First centroid: random
     detail::FastRNG rng(123);
-    Index first = static_cast<Index>(rng.next() % static_cast<uint64_t>(n));
+    auto first = static_cast<Index>(rng.next() % static_cast<Index>(n));
     for (Index d = 0; d < n_states; ++d) {
         centroids[d] = eigenvectors[static_cast<Size>(d) * n + first];
     }
 
     // Remaining centroids: k-means++
-    Real* min_dists = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto min_dists_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* min_dists = min_dists_ptr.release();
     
     for (Index c = 1; c < n_states; ++c) {
         // Compute min distances to existing centroids
@@ -886,7 +927,8 @@ void metastable_states(
     }
 
     // K-means iterations (parallel assignment)
-    Index* counts = scl::memory::aligned_alloc<Index>(n_states, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Index>(n_states, SCL_ALIGNMENT);
+    Index* counts = counts_ptr.release();
     
     for (Index iter = 0; iter < 20; ++iter) {
         // Parallel assignment
@@ -907,8 +949,8 @@ void metastable_states(
                     best_s = s;
                 }
             }
-            if (state_labels[i] != best_s) {
-                state_labels[i] = best_s;
+            if (state_labels[static_cast<Index>(i)] != best_s) {
+                state_labels[static_cast<Index>(i)] = best_s;
                 changed.store(true, std::memory_order_relaxed);
             }
         });
@@ -916,8 +958,11 @@ void metastable_states(
         if (!changed.load()) break;
 
         // Update centroids
-        std::memset(centroids, 0, sizeof(Real) * n_states * n_states);
-        std::memset(counts, 0, sizeof(Index) * n_states);
+        // PERFORMANCE: memset is faster than loop for zero initialization
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+        // Intentional: zero-initialization for performance
+        std::memset(centroids, 0, sizeof(Real) * static_cast<size_t>(n_states) * n_states);
+        std::memset(counts, 0, sizeof(Index) * static_cast<size_t>(n_states));
         for (Index i = 0; i < n; ++i) {
             Index s = state_labels[i];
             ++counts[s];
@@ -961,7 +1006,9 @@ void metastable_states(
     scl::memory::aligned_free(min_dists, SCL_ALIGNMENT);
     scl::memory::aligned_free(counts, SCL_ALIGNMENT);
     scl::memory::aligned_free(centroids, SCL_ALIGNMENT);
-    if (own_membership) scl::memory::aligned_free(membership, SCL_ALIGNMENT);
+    if (own_membership) {
+        scl::memory::aligned_free(membership, SCL_ALIGNMENT);
+    }
     scl::memory::aligned_free(eigenvectors, SCL_ALIGNMENT);
     scl::memory::aligned_free(eigenvalues, SCL_ALIGNMENT);
 }
@@ -983,11 +1030,15 @@ void coarse_grain_transition(
 
     // Thread-local accumulation
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-    Real* thread_buffers = scl::memory::aligned_alloc<Real>(total * n_threads, SCL_ALIGNMENT);
+    auto thread_buffers_ptr = scl::memory::aligned_alloc<Real>(total * n_threads, SCL_ALIGNMENT);
+    Real* thread_buffers = thread_buffers_ptr.release();
+    // PERFORMANCE: memset is faster than loop for zero initialization
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+    // Intentional: zero-initialization for performance
     std::memset(thread_buffers, 0, sizeof(Real) * total * n_threads);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t tid) {
-        Index s_i = state_labels[i];
+        Index s_i = state_labels[static_cast<Index>(i)];
         if (s_i < 0 || s_i >= n_states) return;
 
         Real* local = thread_buffers + tid * total;
@@ -1105,7 +1156,7 @@ void lineage_drivers(
         cov = cov / n_real - expr_mean * fate_mean;
         Real denom = std::sqrt(expr_var * fate_var);
 
-        driver_scores[g] = (denom > config::EPSILON) ? cov / denom : Real(0);
+        driver_scores[static_cast<Index>(g)] = (denom > config::EPSILON) ? cov / denom : Real(0);
     });
 }
 
@@ -1129,7 +1180,7 @@ inline void fate_entropy(
             // Branchless: use p * log(p + epsilon) to avoid branch
             h -= (p > config::EPSILON) ? p * std::log(p) : Real(0);
         }
-        entropy[i] = h;
+        entropy[static_cast<Index>(i)] = h;
     });
 }
 
@@ -1203,7 +1254,6 @@ inline void random_walk(
         
         // Binary search for efficiency on larger n
         if (n > 64) {
-            Real cumsum = 0;
             Index lo = 0;
             Index hi = n;
             while (lo < hi) {
@@ -1250,7 +1300,7 @@ void directional_score(
         Index len = transition_mat.primary_length_unsafe(static_cast<Index>(i));
         Real forward = 0;
         Real backward = 0;
-        Real pt_i = pseudotime[i];
+        Real pt_i = pseudotime[static_cast<Index>(i)];
 
         for (Index k = 0; k < len; ++k) {
             Real p = static_cast<Real>(values[k]);
@@ -1262,7 +1312,7 @@ void directional_score(
         }
 
         Real total = forward + backward;
-        scores[i] = (total > config::EPSILON) ? (forward - backward) / total : Real(0);
+        scores[static_cast<Index>(i)] = (total > config::EPSILON) ? (forward - backward) / total : Real(0);
     });
 }
 

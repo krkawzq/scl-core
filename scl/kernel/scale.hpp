@@ -65,8 +65,9 @@ SCL_FORCE_INLINE void standardize_medium(
     bool do_clip
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     const auto v_mu = s::Set(d, mu);
     const auto v_inv_sigma = s::Set(d, inv_sigma);
@@ -137,8 +138,9 @@ SCL_FORCE_INLINE void standardize_long(
     bool do_clip
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     const auto v_mu = s::Set(d, mu);
     const auto v_inv_sigma = s::Set(d, inv_sigma);
@@ -279,8 +281,9 @@ SCL_FORCE_INLINE void scale_values(
     T scale
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     const auto v_scale = s::Set(d, scale);
 
@@ -319,8 +322,9 @@ SCL_FORCE_INLINE void shift_values(
     T offset
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     const auto v_offset = s::Set(d, offset);
 
@@ -373,11 +377,11 @@ void standardize(
 
     const bool do_clip = (max_value > T(0));
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
         T sigma = stds[p];
         if (sigma == T(0)) return;
 
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return;
 
@@ -402,11 +406,11 @@ void scale_rows(
 
     SCL_CHECK_DIM(scales.len == static_cast<Size>(primary_dim), "Scales dim mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
         T scale = scales[p];
         if (scale == T(1)) return;
 
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return;
 
@@ -424,11 +428,11 @@ void shift_rows(
 
     SCL_CHECK_DIM(offsets.len == static_cast<Size>(primary_dim), "Offsets dim mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
         T offset = offsets[p];
         if (offset == T(0)) return;
 
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return;
 

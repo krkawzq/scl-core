@@ -4,8 +4,9 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/memory.hpp"
+#include "scl/core/algo.hpp"
+#include "scl/core/macros.hpp"
 
-#include <algorithm>
 #include <cmath>
 
 // =============================================================================
@@ -191,7 +192,7 @@ SCL_FORCE_INLINE Real estimate_bandwidth(
     // Compute average nearest neighbor distance
     Real total_dist = Real(0.0);
 
-    for (Size i = 0; i < std::min(n_cells, Size(100)); ++i) {
+    for (Size i = 0; i < scl::algo::min2(n_cells, Size(100)); ++i) {
         Real min_dist = std::numeric_limits<Real>::max();
 
         for (Size j = 0; j < n_cells; ++j) {
@@ -212,7 +213,7 @@ SCL_FORCE_INLINE Real estimate_bandwidth(
         }
     }
 
-    Size sample_size = std::min(n_cells, Size(100));
+    Size sample_size = scl::algo::min2(n_cells, Size(100));
     Real avg_nn_dist = total_dist / static_cast<Real>(sample_size);
 
     return avg_nn_dist * config::DEFAULT_N_NEIGHBORS * config::BANDWIDTH_SCALE;
@@ -243,13 +244,21 @@ void spatial_variability(
     Real bandwidth = detail::estimate_bandwidth(coordinates, n_cells, n_dims);
 
     // Compute spatial weights matrix
-    Real* weights = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
+    auto weights_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
+
+    Real* weights = weights_ptr.release();
     detail::compute_spatial_weights(coordinates, n_cells, n_dims, bandwidth, weights);
 
     // Extract gene expression values
-    Real* gene_values = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* permuted_values = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Index* perm_indices = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto gene_values_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* gene_values = gene_values_ptr.release();
+    auto permuted_values_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* permuted_values = permuted_values_ptr.release();
+    auto perm_indices_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+
+    Index* perm_indices = perm_indices_ptr.release();
 
     detail::LCG rng(seed);
 
@@ -330,7 +339,9 @@ void spatial_gradient(
 
     // Compute means
     Real expr_mean = Real(0.0);
-    Real* coord_means = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+    auto coord_means_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+
+    Real* coord_means = coord_means_ptr.release();
 
     for (Size d = 0; d < n_dims; ++d) {
         coord_means[d] = Real(0.0);
@@ -349,8 +360,12 @@ void spatial_gradient(
     }
 
     // Compute covariance and variance
-    Real* cov = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
-    Real* var = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+    auto cov_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+
+    Real* cov = cov_ptr.release();
+    auto var_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+
+    Real* var = var_ptr.release();
 
     for (Size d = 0; d < n_dims; ++d) {
         cov[d] = Real(0.0);
@@ -412,9 +427,16 @@ void periodic_pattern(
 
     if (n_cells == 0 || n_genes == 0 || n_wavelengths == 0) return;
 
-    Real* gene_values = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* cos_basis = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* sin_basis = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto gene_values_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+
+    Real* gene_values = gene_values_ptr.release();
+    auto cos_basis_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* cos_basis = cos_basis_ptr.release();
+    auto sin_basis_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* sin_basis = sin_basis_ptr.release();
 
     for (Size g = 0; g < n_genes; ++g) {
         // Extract gene expression
@@ -528,12 +550,18 @@ void boundary_detection(
 
     if (n_cells == 0 || n_genes == 0) return;
 
-    n_neighbors = std::min(n_neighbors, n_cells - 1);
+    n_neighbors = scl::algo::min2(n_neighbors, n_cells - 1);
 
     // Find k-nearest neighbors for each cell
-    Index* neighbors = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
-    Real* distances = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Index* sorted_idx = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto neighbors_ptr = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
+
+    Index* neighbors = neighbors_ptr.release();
+    auto distances_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* distances = distances_ptr.release();
+    auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+
+    Index* sorted_idx = sorted_idx_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
         // Compute distances to all other cells
@@ -546,7 +574,7 @@ void boundary_detection(
         }
 
         // Partial sort to get k nearest
-        std::partial_sort(sorted_idx, sorted_idx + n_neighbors + 1, sorted_idx + n_cells,
+        scl::algo::partial_sort(sorted_idx, static_cast<Size>(n_cells), n_neighbors + 1,
             [&](Index a, Index b) { return distances[a] < distances[b]; });
 
         // Skip self (index 0)
@@ -556,8 +584,12 @@ void boundary_detection(
     }
 
     // Compute boundary score based on expression heterogeneity
-    Real* expr_i = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Real* expr_j = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto expr_i_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* expr_i = expr_i_ptr.release();
+    auto expr_j_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* expr_j = expr_j_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
         // Extract expression for cell i
@@ -642,16 +674,23 @@ void spatial_domain(
 
     if (n_cells == 0 || n_domains == 0) return;
 
-    n_domains = std::min(static_cast<Size>(n_domains), n_cells);
+    n_domains = scl::algo::min2(static_cast<Size>(n_domains), n_cells);
 
     // Combined feature space: spatial + expression (PCA-reduced)
-    Size n_features = n_dims + std::min(n_genes, Size(10));
+    Size n_features = n_dims + scl::algo::min2(n_genes, Size(10));
 
-    Real* features = scl::memory::aligned_alloc<Real>(n_cells * n_features, SCL_ALIGNMENT);
+    auto features_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_features, SCL_ALIGNMENT);
+
+
+    Real* features = features_ptr.release();
 
     // Copy spatial coordinates (normalized)
-    Real* coord_min = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
-    Real* coord_max = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+    auto coord_min_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+
+    Real* coord_min = coord_min_ptr.release();
+    auto coord_max_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+
+    Real* coord_max = coord_max_ptr.release();
 
     for (Size d = 0; d < n_dims; ++d) {
         coord_min[d] = std::numeric_limits<Real>::max();
@@ -679,8 +718,12 @@ void spatial_domain(
     }
 
     // Add expression features (top variable genes)
-    Real* gene_var = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Real* gene_mean = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto gene_var_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* gene_var = gene_var_ptr.release();
+    auto gene_mean_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* gene_mean = gene_mean_ptr.release();
 
     for (Size g = 0; g < n_genes; ++g) {
         gene_mean[g] = Real(0.0);
@@ -716,12 +759,14 @@ void spatial_domain(
 
     // Select top variable genes
     Size n_expr_features = n_features - n_dims;
-    Index* top_genes = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    auto top_genes_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+
+    Index* top_genes = top_genes_ptr.release();
     for (Size g = 0; g < n_genes; ++g) {
         top_genes[g] = static_cast<Index>(g);
     }
 
-    std::partial_sort(top_genes, top_genes + n_expr_features, top_genes + n_genes,
+    scl::algo::partial_sort(top_genes, static_cast<Size>(n_genes), n_expr_features,
         [&](Index a, Index b) { return gene_var[a] > gene_var[b]; });
 
     // Add expression features
@@ -751,8 +796,12 @@ void spatial_domain(
     }
 
     // K-means clustering on combined features
-    Real* centroids = scl::memory::aligned_alloc<Real>(n_domains * n_features, SCL_ALIGNMENT);
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_domains, SCL_ALIGNMENT);
+    auto centroids_ptr = scl::memory::aligned_alloc<Real>(n_domains * n_features, SCL_ALIGNMENT);
+
+    Real* centroids = centroids_ptr.release();
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_domains, SCL_ALIGNMENT);
+
+    Size* cluster_sizes = cluster_sizes_ptr.release();
 
     detail::LCG rng(seed);
 
@@ -919,10 +968,16 @@ void spatial_autocorrelation(
     // Estimate bandwidth and compute weights
     Real bandwidth = detail::estimate_bandwidth(coordinates, n_cells, n_dims);
 
-    Real* weights = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
+    auto weights_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
+
+
+    Real* weights = weights_ptr.release();
     detail::compute_spatial_weights(coordinates, n_cells, n_dims, bandwidth, weights);
 
-    Real* gene_values = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto gene_values_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+
+    Real* gene_values = gene_values_ptr.release();
 
     for (Size g = 0; g < n_genes; ++g) {
         // Extract gene expression
@@ -968,7 +1023,9 @@ void spatial_smoothing(
     if (n_cells == 0 || n_genes == 0) return;
 
     // Compute spatial weights
-    Real* weights = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
+    auto weights_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
+
+    Real* weights = weights_ptr.release();
     detail::compute_spatial_weights(coordinates, n_cells, n_dims, bandwidth, weights);
 
     // Initialize smoothed expression
@@ -1015,11 +1072,18 @@ void spatial_coexpression(
 
     // Compute spatial weights
     Real bandwidth = detail::estimate_bandwidth(coordinates, n_cells, n_dims);
-    Real* weights = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
+    auto weights_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
+
+    Real* weights = weights_ptr.release();
     detail::compute_spatial_weights(coordinates, n_cells, n_dims, bandwidth, weights);
 
-    Real* expr1 = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* expr2 = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto expr1_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+
+    Real* expr1 = expr1_ptr.release();
+    auto expr2_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* expr2 = expr2_ptr.release();
 
     for (Size p = 0; p < n_pairs; ++p) {
         Index gene1 = gene_pairs[p * 2];
@@ -1153,7 +1217,10 @@ void spatial_entropy(
         }
     }
 
-    Real* local_counts = scl::memory::aligned_alloc<Real>(n_labels, SCL_ALIGNMENT);
+    auto local_counts_ptr = scl::memory::aligned_alloc<Real>(n_labels, SCL_ALIGNMENT);
+
+
+    Real* local_counts = local_counts_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
         // Compute local label distribution

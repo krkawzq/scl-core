@@ -15,6 +15,8 @@
 #include <cmath>
 #include <atomic>
 #include <algorithm>
+#include <concepts>
+#include <memory>
 
 // =============================================================================
 // FILE: scl/kernel/alignment.hpp
@@ -29,18 +31,29 @@
 
 namespace scl::kernel::alignment {
 
+// =============================================================================
+// C++20 Concepts
+// =============================================================================
+
+template <typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
 namespace config {
-    constexpr Real EPSILON = Real(1e-10);
-    constexpr Size DEFAULT_K = 30;
-    constexpr Real ANCHOR_SCORE_THRESHOLD = Real(0.5);
-    constexpr Size MAX_ANCHORS_PER_CELL = 10;
-    constexpr Size PARALLEL_THRESHOLD = 32;
+    inline constexpr Real EPSILON = Real(1e-10);
+    inline constexpr Size DEFAULT_K = 30;
+    inline constexpr Real ANCHOR_SCORE_THRESHOLD = Real(0.5);
+    inline constexpr Size MAX_ANCHORS_PER_CELL = 10;
+    inline constexpr Size PARALLEL_THRESHOLD = 32;
 }
 
 namespace detail {
 
 // Compute squared Euclidean distance between sparse vectors
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 SCL_FORCE_INLINE Real sparse_distance_squared(
     const Sparse<T, IsCSR1>& data1,
     Index row1,
@@ -51,7 +64,7 @@ SCL_FORCE_INLINE Real sparse_distance_squared(
 
     Array<T> row1_vals;
     Array<Index> row1_idxs;
-    Index row1_len;
+    Index row1_len = 0;
     
     if constexpr (IsCSR1) {
         row1_vals = data1.row_values_unsafe(row1);
@@ -65,7 +78,7 @@ SCL_FORCE_INLINE Real sparse_distance_squared(
     
     Array<T> row2_vals;
     Array<Index> row2_idxs;
-    Index row2_len;
+    Index row2_len = 0;
     
     if constexpr (IsCSR2) {
         row2_vals = data2.row_values_unsafe(row2);
@@ -111,7 +124,7 @@ SCL_FORCE_INLINE Real sparse_distance_squared(
 }
 
 // Find k nearest neighbors from data2 for each row in data1
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void find_cross_knn(
     const Sparse<T, IsCSR1>& data1,
     const Sparse<T, IsCSR2>& data2,
@@ -131,7 +144,7 @@ void find_cross_knn(
     indices_pool.init(scl::threading::Scheduler::get_num_threads(), n2);
 
     // Parallel over points in data1
-    scl::threading::parallel_for(Size(0), n1, [&](size_t i, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n1, [&](Size i, Size thread_rank) {
         Real* all_dists = dists_pool.get(thread_rank);
         Index* all_indices = indices_pool.get(thread_rank);
 
@@ -192,7 +205,7 @@ SCL_FORCE_INLINE bool is_mnn(
 // Mutual Nearest Neighbors (MNN) Pairs
 // =============================================================================
 
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void mnn_pairs(
     const Sparse<T, IsCSR1>& data1,
     const Sparse<T, IsCSR2>& data2,
@@ -210,10 +223,15 @@ void mnn_pairs(
     k = scl::algo::min2(k, static_cast<Index>(scl::algo::min2(n1, n2)));
 
     // Find k nearest neighbors in both directions
-    Index* knn1_to_2 = scl::memory::aligned_alloc<Index>(n1 * k, SCL_ALIGNMENT);
-    Real* dist1_to_2 = scl::memory::aligned_alloc<Real>(n1 * k, SCL_ALIGNMENT);
-    Index* knn2_to_1 = scl::memory::aligned_alloc<Index>(n2 * k, SCL_ALIGNMENT);
-    Real* dist2_to_1 = scl::memory::aligned_alloc<Real>(n2 * k, SCL_ALIGNMENT);
+    auto knn1_to_2_ptr = scl::memory::aligned_alloc<Index>(n1 * k, SCL_ALIGNMENT);
+    auto dist1_to_2_ptr = scl::memory::aligned_alloc<Real>(n1 * k, SCL_ALIGNMENT);
+    auto knn2_to_1_ptr = scl::memory::aligned_alloc<Index>(n2 * k, SCL_ALIGNMENT);
+    auto dist2_to_1_ptr = scl::memory::aligned_alloc<Real>(n2 * k, SCL_ALIGNMENT);
+
+    Index* knn1_to_2 = knn1_to_2_ptr.release();
+    Real* dist1_to_2 = dist1_to_2_ptr.release();
+    Index* knn2_to_1 = knn2_to_1_ptr.release();
+    Real* dist2_to_1 = dist2_to_1_ptr.release();
 
     detail::find_cross_knn(data1, data2, k, knn1_to_2, dist1_to_2);
     detail::find_cross_knn(data2, data1, k, knn2_to_1, dist2_to_1);
@@ -232,17 +250,17 @@ void mnn_pairs(
         }
     }
 
-    scl::memory::aligned_free(knn1_to_2);
-    scl::memory::aligned_free(dist1_to_2);
-    scl::memory::aligned_free(knn2_to_1);
-    scl::memory::aligned_free(dist2_to_1);
+    scl::memory::aligned_free(knn1_to_2, SCL_ALIGNMENT);
+    scl::memory::aligned_free(dist1_to_2, SCL_ALIGNMENT);
+    scl::memory::aligned_free(knn2_to_1, SCL_ALIGNMENT);
+    scl::memory::aligned_free(dist2_to_1, SCL_ALIGNMENT);
 }
 
 // =============================================================================
 // Anchor Finding (Seurat-style)
 // =============================================================================
 
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void find_anchors(
     const Sparse<T, IsCSR1>& data1,
     const Sparse<T, IsCSR2>& data2,
@@ -261,10 +279,15 @@ void find_anchors(
     k = scl::algo::min2(k, static_cast<Index>(scl::algo::min2(n1, n2)));
 
     // Find k nearest neighbors in both directions
-    Index* knn1_to_2 = scl::memory::aligned_alloc<Index>(n1 * k, SCL_ALIGNMENT);
-    Real* dist1_to_2 = scl::memory::aligned_alloc<Real>(n1 * k, SCL_ALIGNMENT);
-    Index* knn2_to_1 = scl::memory::aligned_alloc<Index>(n2 * k, SCL_ALIGNMENT);
-    Real* dist2_to_1 = scl::memory::aligned_alloc<Real>(n2 * k, SCL_ALIGNMENT);
+    auto knn1_to_2_ptr = scl::memory::aligned_alloc<Index>(n1 * k, SCL_ALIGNMENT);
+    auto dist1_to_2_ptr = scl::memory::aligned_alloc<Real>(n1 * k, SCL_ALIGNMENT);
+    auto knn2_to_1_ptr = scl::memory::aligned_alloc<Index>(n2 * k, SCL_ALIGNMENT);
+    auto dist2_to_1_ptr = scl::memory::aligned_alloc<Real>(n2 * k, SCL_ALIGNMENT);
+
+    Index* knn1_to_2 = knn1_to_2_ptr.release();
+    Real* dist1_to_2 = dist1_to_2_ptr.release();
+    Index* knn2_to_1 = knn2_to_1_ptr.release();
+    Real* dist2_to_1 = dist2_to_1_ptr.release();
 
     detail::find_cross_knn(data1, data2, k, knn1_to_2, dist1_to_2);
     detail::find_cross_knn(data2, data1, k, knn2_to_1, dist2_to_1);
@@ -299,10 +322,10 @@ void find_anchors(
         }
     }
 
-    scl::memory::aligned_free(knn1_to_2);
-    scl::memory::aligned_free(dist1_to_2);
-    scl::memory::aligned_free(knn2_to_1);
-    scl::memory::aligned_free(dist2_to_1);
+    scl::memory::aligned_free(knn1_to_2, SCL_ALIGNMENT);
+    scl::memory::aligned_free(dist1_to_2, SCL_ALIGNMENT);
+    scl::memory::aligned_free(knn2_to_1, SCL_ALIGNMENT);
+    scl::memory::aligned_free(dist2_to_1, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -335,7 +358,7 @@ void transfer_labels(
     pool.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_labels));
 
     // Parallel over target cells
-    scl::threading::parallel_for(Size(0), n_target, [&](size_t t, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n_target, [&](Size t, Size thread_rank) {
         Real* label_scores = pool.get(thread_rank);
 
         // Reset scores
@@ -379,7 +402,7 @@ void transfer_labels(
 // Integration Quality Score
 // =============================================================================
 
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 Real integration_score(
     const Sparse<T, IsCSR1>& integrated_data,
     Array<const Index> batch_labels,
@@ -404,10 +427,11 @@ Real integration_score(
     pool.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_batches));
 
     // Compute entropy per cell in parallel
-    Real* cell_entropies = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto cell_entropies_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* cell_entropies = cell_entropies_ptr.release();
     Real max_entropy = std::log(static_cast<Real>(n_batches));
 
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_rank) {
         Size* batch_counts = pool.get(thread_rank);
         scl::algo::zero(batch_counts, static_cast<Size>(n_batches));
 
@@ -443,7 +467,7 @@ Real integration_score(
         total_entropy += cell_entropies[i];
     }
 
-    scl::memory::aligned_free(cell_entropies);
+    scl::memory::aligned_free(cell_entropies, SCL_ALIGNMENT);
 
     return total_entropy / static_cast<Real>(n_cells);
 }
@@ -475,7 +499,7 @@ void batch_mixing(
     pool.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_batches));
 
     // Parallel over cells
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_rank) {
         Size* batch_counts = pool.get(thread_rank);
         scl::algo::zero(batch_counts, static_cast<Size>(n_batches));
 
@@ -507,7 +531,7 @@ void batch_mixing(
 // Compute Correction Vectors (MNN-based)
 // =============================================================================
 
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void compute_correction_vectors(
     const Sparse<T, IsCSR1>& data1,
     const Sparse<T, IsCSR2>& data2,
@@ -527,10 +551,9 @@ void compute_correction_vectors(
     }
 
     // Count pairs per cell in data2
-    Size* pair_count = scl::memory::aligned_alloc<Size>(n2, SCL_ALIGNMENT);
-    for (Size i = 0; i < n2; ++i) {
-        pair_count[i] = 0;
-    }
+    auto pair_count_ptr = scl::memory::aligned_alloc<Size>(n2, SCL_ALIGNMENT);
+    Size* pair_count = pair_count_ptr.release();
+    scl::algo::zero(pair_count, n2);
 
     for (Size p = 0; p < n_pairs; ++p) {
         Index cell2 = mnn_cell2[p];
@@ -538,8 +561,10 @@ void compute_correction_vectors(
     }
 
     // Accumulate correction vectors
-    Real* cell1_dense = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
-    Real* cell2_dense = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+    auto cell1_dense_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+    auto cell2_dense_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+    Real* cell1_dense = cell1_dense_ptr.release();
+    Real* cell2_dense = cell2_dense_ptr.release();
 
     for (Size p = 0; p < n_pairs; ++p) {
         Index cell1 = mnn_cell1[p];
@@ -611,16 +636,16 @@ void compute_correction_vectors(
         }
     }
 
-    scl::memory::aligned_free(pair_count);
-    scl::memory::aligned_free(cell1_dense);
-    scl::memory::aligned_free(cell2_dense);
+    scl::memory::aligned_free(pair_count, SCL_ALIGNMENT);
+    scl::memory::aligned_free(cell1_dense, SCL_ALIGNMENT);
+    scl::memory::aligned_free(cell2_dense, SCL_ALIGNMENT);
 }
 
 // =============================================================================
 // Smooth Correction Vectors using Gaussian Kernel
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void smooth_correction_vectors(
     const Sparse<T, IsCSR>& data2,
     Real* correction_vectors,  // [n2 * n_features]
@@ -632,8 +657,10 @@ void smooth_correction_vectors(
     if (n2 == 0) return;
 
     // Create a copy for smoothing
-    Real* smoothed = scl::memory::aligned_alloc<Real>(n2 * n_features, SCL_ALIGNMENT);
-    Real* weights = scl::memory::aligned_alloc<Real>(n2, SCL_ALIGNMENT);
+    auto smoothed_ptr = scl::memory::aligned_alloc<Real>(n2 * n_features, SCL_ALIGNMENT);
+    auto weights_ptr = scl::memory::aligned_alloc<Real>(n2, SCL_ALIGNMENT);
+    Real* smoothed = smoothed_ptr.release();
+    Real* weights = weights_ptr.release();
 
     Real sigma_sq = sigma * sigma;
 
@@ -671,15 +698,15 @@ void smooth_correction_vectors(
         correction_vectors[i] = smoothed[i];
     }
 
-    scl::memory::aligned_free(smoothed);
-    scl::memory::aligned_free(weights);
+    scl::memory::aligned_free(smoothed, SCL_ALIGNMENT);
+    scl::memory::aligned_free(weights, SCL_ALIGNMENT);
 }
 
 // =============================================================================
 // Canonical Correlation Analysis (CCA) for multimodal alignment
 // =============================================================================
 
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void cca_projection(
     const Sparse<T, IsCSR1>& data1,
     const Sparse<T, IsCSR2>& data2,
@@ -699,8 +726,10 @@ void cca_projection(
     // Simplified CCA: project onto shared PCA space
     // For simplicity, use random projection as approximation
 
-    Real* proj_matrix1 = scl::memory::aligned_alloc<Real>(d1 * n_components, SCL_ALIGNMENT);
-    Real* proj_matrix2 = scl::memory::aligned_alloc<Real>(d2 * n_components, SCL_ALIGNMENT);
+    auto proj_matrix1_ptr = scl::memory::aligned_alloc<Real>(d1 * n_components, SCL_ALIGNMENT);
+    auto proj_matrix2_ptr = scl::memory::aligned_alloc<Real>(d2 * n_components, SCL_ALIGNMENT);
+    Real* proj_matrix1 = proj_matrix1_ptr.release();
+    Real* proj_matrix2 = proj_matrix2_ptr.release();
 
     // Random orthogonal projection (simplified)
     uint64_t seed = 42;
@@ -714,7 +743,7 @@ void cca_projection(
     }
 
     // Project data1 in parallel
-    scl::threading::parallel_for(Size(0), n1, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n1, [&](Size i) {
         for (Size c = 0; c < n_components; ++c) {
             projection1[i * n_components + c] = Real(0.0);
         }
@@ -750,7 +779,7 @@ void cca_projection(
     });
 
     // Project data2 in parallel
-    scl::threading::parallel_for(Size(0), n2, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n2, [&](Size i) {
         for (Size c = 0; c < n_components; ++c) {
             projection2[i * n_components + c] = Real(0.0);
         }
@@ -785,8 +814,8 @@ void cca_projection(
         }
     });
 
-    scl::memory::aligned_free(proj_matrix1);
-    scl::memory::aligned_free(proj_matrix2);
+    scl::memory::aligned_free(proj_matrix1, SCL_ALIGNMENT);
+    scl::memory::aligned_free(proj_matrix2, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -809,14 +838,16 @@ Real kbet_score(
         n_batches = scl::algo::max2(n_batches, batch_labels.ptr[i] + 1);
     }
 
-    Size* batch_counts_global = scl::memory::aligned_alloc<Size>(n_batches, SCL_ALIGNMENT);
+    auto batch_counts_global_ptr = scl::memory::aligned_alloc<Size>(n_batches, SCL_ALIGNMENT);
+    Size* batch_counts_global = batch_counts_global_ptr.release();
     scl::algo::zero(batch_counts_global, static_cast<Size>(n_batches));
     for (Size i = 0; i < n_cells; ++i) {
         ++batch_counts_global[batch_labels.ptr[i]];
     }
 
     // Expected proportions
-    Real* expected_props = scl::memory::aligned_alloc<Real>(n_batches, SCL_ALIGNMENT);
+    auto expected_props_ptr = scl::memory::aligned_alloc<Real>(n_batches, SCL_ALIGNMENT);
+    Real* expected_props = expected_props_ptr.release();
     for (Index b = 0; b < n_batches; ++b) {
         expected_props[b] = static_cast<Real>(batch_counts_global[b]) / static_cast<Real>(n_cells);
     }
@@ -828,18 +859,19 @@ Real kbet_score(
     pool.init(scl::threading::Scheduler::get_num_threads(), static_cast<Size>(n_batches));
 
     // Count rejections per cell in parallel
-    Index* rejection_flags = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto rejection_flags_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    Index* rejection_flags = rejection_flags_ptr.release();
 
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_rank) {
         Size* batch_counts_local = pool.get(thread_rank);
         scl::algo::zero(batch_counts_local, static_cast<Size>(n_batches));
 
-        const Index row_start = neighbors.row_indices_unsafe()[i];
-        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
-        Size k = static_cast<Size>(row_end - row_start);
+        auto row_idxs = neighbors.row_indices_unsafe(static_cast<Index>(i));
+        Index row_len = neighbors.row_length_unsafe(static_cast<Index>(i));
+        Size k = static_cast<Size>(row_len);
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = neighbors.col_indices_unsafe()[j];
+        for (Index j = 0; j < row_len; ++j) {
+            Index neighbor = row_idxs.ptr[j];
             ++batch_counts_local[batch_labels.ptr[neighbor]];
         }
 
@@ -863,9 +895,9 @@ Real kbet_score(
         n_rejected += rejection_flags[i];
     }
 
-    scl::memory::aligned_free(batch_counts_global);
-    scl::memory::aligned_free(expected_props);
-    scl::memory::aligned_free(rejection_flags);
+    scl::memory::aligned_free(batch_counts_global, SCL_ALIGNMENT);
+    scl::memory::aligned_free(expected_props, SCL_ALIGNMENT);
+    scl::memory::aligned_free(rejection_flags, SCL_ALIGNMENT);
 
     // Acceptance rate (1 - rejection rate)
     return Real(1.0) - static_cast<Real>(n_rejected) / static_cast<Real>(n_cells);

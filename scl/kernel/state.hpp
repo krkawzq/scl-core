@@ -38,22 +38,16 @@ namespace config {
 
 namespace detail {
 
-// Binary search for gene in sorted CSR indices
+// Binary search for gene in sorted CSR indices using algo::lower_bound
 SCL_FORCE_INLINE Index binary_search_gene(
     const Index* indices,
-    Index start,
-    Index end,
+    Size len,
     Index gene
 ) noexcept {
-    while (start < end) {
-        Index mid = start + (end - start) / 2;
-        if (indices[mid] < gene) {
-            start = mid + 1;
-        } else if (indices[mid] > gene) {
-            end = mid;
-        } else {
-            return mid;
-        }
+    if (len == 0) return -1;
+    const Index* found = scl::algo::lower_bound(indices, indices + len, gene);
+    if (found < indices + len && *found == gene) {
+        return static_cast<Index>(found - indices);
     }
     return -1;
 }
@@ -71,9 +65,10 @@ SCL_FORCE_INLINE Real compute_geneset_score(
     Real sum = Real(0.0);
     Size count = 0;
 
-    const Index row_start = expression.row_indices_unsafe()[cell];
-    const Index row_end = expression.row_indices_unsafe()[cell + 1];
-    const Index row_len = row_end - row_start;
+    // Use primary access methods for generic CSR/CSC support
+    auto row_indices = expression.primary_indices_unsafe(cell);
+    auto row_values = expression.primary_values_unsafe(cell);
+    const Size row_len = static_cast<Size>(expression.primary_length_unsafe(cell));
 
     // For each gene in the gene set, use binary search
     for (Size g = 0; g < n_genes; ++g) {
@@ -81,10 +76,9 @@ SCL_FORCE_INLINE Real compute_geneset_score(
 
         // Binary search for gene in sorted row indices
         if (row_len > 0) {
-            Index pos = binary_search_gene(
-                expression.col_indices_unsafe(), row_start, row_end, gene);
+            Index pos = binary_search_gene(row_indices.ptr, row_len, gene);
             if (pos >= 0) {
-                sum += static_cast<Real>(expression.values()[pos]);
+                sum += static_cast<Real>(row_values.ptr[static_cast<Size>(pos)]);
                 ++count;
             }
         }
@@ -104,12 +98,12 @@ SCL_FORCE_INLINE Size count_expressed_genes(
     Index cell,
     Real threshold
 ) {
-    const Index row_start = expression.row_indices_unsafe()[cell];
-    const Index row_end = expression.row_indices_unsafe()[cell + 1];
+    auto row_values = expression.primary_values_unsafe(cell);
+    const Size row_len = static_cast<Size>(expression.primary_length_unsafe(cell));
 
     Size count = 0;
-    for (Index j = row_start; j < row_end; ++j) {
-        if (static_cast<Real>(expression.values()[j]) > threshold) {
+    for (Size j = 0; j < row_len; ++j) {
+        if (static_cast<Real>(row_values.ptr[j]) > threshold) {
             ++count;
         }
     }
@@ -122,13 +116,13 @@ SCL_FORCE_INLINE Real compute_expression_entropy(
     const Sparse<T, IsCSR>& expression,
     Index cell
 ) {
-    const Index row_start = expression.row_indices_unsafe()[cell];
-    const Index row_end = expression.row_indices_unsafe()[cell + 1];
+    auto row_values = expression.primary_values_unsafe(cell);
+    const Size row_len = static_cast<Size>(expression.primary_length_unsafe(cell));
 
     // Sum total expression
     Real total = Real(0.0);
-    for (Index j = row_start; j < row_end; ++j) {
-        Real val = static_cast<Real>(expression.values()[j]);
+    for (Size j = 0; j < row_len; ++j) {
+        Real val = static_cast<Real>(row_values.ptr[j]);
         if (val > Real(0.0)) {
             total += val;
         }
@@ -140,8 +134,8 @@ SCL_FORCE_INLINE Real compute_expression_entropy(
 
     // Compute entropy
     Real entropy = Real(0.0);
-    for (Index j = row_start; j < row_end; ++j) {
-        Real val = static_cast<Real>(expression.values()[j]);
+    for (Size j = 0; j < row_len; ++j) {
+        Real val = static_cast<Real>(row_values.ptr[j]);
         if (val > Real(0.0)) {
             Real p = val / total;
             entropy -= p * std::log(p + config::EPSILON);
@@ -158,7 +152,7 @@ SCL_HOT void zscore_normalize(Real* values, Size n) {
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = static_cast<Size>(s::Lanes(d));
 
     // Compute mean using SIMD
     auto v_sum = s::Zero(d);
@@ -211,9 +205,12 @@ SCL_HOT void zscore_normalize(Real* values, Size n) {
 SCL_HOT void rank_transform(Real* values, Size n) {
     if (n == 0) return;
 
-    Real* sorted_values = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Index* indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* ranks = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sorted_values_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto ranks_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* sorted_values = sorted_values_ptr.get();
+    Index* indices = indices_ptr.get();
+    Real* ranks = ranks_ptr.get();
 
     for (Size i = 0; i < n; ++i) {
         sorted_values[i] = values[i];
@@ -241,10 +238,7 @@ SCL_HOT void rank_transform(Real* values, Size n) {
     }
 
     scl::algo::copy(ranks, values, n);
-
-    scl::memory::aligned_free(indices);
-    scl::memory::aligned_free(ranks);
-    scl::memory::aligned_free(sorted_values);
+    // sorted_values_ptr, indices_ptr, ranks_ptr automatically freed via unique_ptr
 }
 
 } // namespace detail
@@ -265,7 +259,7 @@ void stemness_score(
     if (n_cells == 0) return;
 
     // Compute raw stemness scores (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         scores.ptr[i] = detail::compute_geneset_score(
             expression, static_cast<Index>(i),
             stemness_genes.ptr, stemness_genes.len);
@@ -291,36 +285,48 @@ void differentiation_potential(
     if (n_cells == 0 || n_genes == 0) return;
 
     // Step 1: Count genes expressed per cell (parallel)
-    Real* gene_counts = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto gene_counts_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* gene_counts = gene_counts_ptr.get();
 
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         gene_counts[i] = static_cast<Real>(
             detail::count_expressed_genes(expression, static_cast<Index>(i), Real(0.0)));
     });
 
     // Step 2: Compute gene-gene correlation with gene counts
-    Real* gene_correlations = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Real* gene_means = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto gene_correlations_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto gene_means_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    Real* gene_correlations = gene_correlations_ptr.get();
+    Real* gene_means = gene_means_ptr.get();
 
     scl::algo::zero(gene_means, n_genes);
 
     // Compute gene sums using atomic accumulation
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
     constexpr int64_t SCALE = 1000000LL;
 
-    std::atomic<int64_t>* atomic_sums = static_cast<std::atomic<int64_t>*>(
-        scl::memory::aligned_alloc<std::atomic<int64_t>>(n_genes, SCL_ALIGNMENT));
+    // PERFORMANCE: reinterpret_cast needed for placement new of atomic objects
+    // Byte array is allocated and cast to atomic array for proper alignment
+    auto raw_mem_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<int64_t>) * n_genes, SCL_ALIGNMENT);
+    Byte* raw_mem = raw_mem_ptr.release();
+    
+    SCL_ASSERT(raw_mem != nullptr, "differentiation_potential: Failed to allocate atomic array");
+    
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    auto* atomic_sums = reinterpret_cast<std::atomic<int64_t>*>(raw_mem);
+
+    // Initialize atomic array using placement new
     for (Size g = 0; g < n_genes; ++g) {
-        atomic_sums[g].store(0, std::memory_order_relaxed);
+        new (&atomic_sums[g]) std::atomic<int64_t>(0);
     }
 
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices_unsafe()[j];
-            int64_t scaled = static_cast<int64_t>(static_cast<Real>(expression.values()[j]) * SCALE);
+        for (Size j = 0; j < row_len; ++j) {
+            Index gene = row_indices.ptr[j];
+            auto scaled = static_cast<int64_t>(static_cast<Real>(row_values.ptr[j]) * SCALE);
             atomic_sums[gene].fetch_add(scaled, std::memory_order_relaxed);
         }
     });
@@ -328,7 +334,12 @@ void differentiation_potential(
     for (Size g = 0; g < n_genes; ++g) {
         gene_means[g] = static_cast<Real>(atomic_sums[g].load()) / SCALE / static_cast<Real>(n_cells);
     }
-    scl::memory::aligned_free(atomic_sums);
+
+    // Destroy atomic objects and free memory
+    for (Size g = 0; g < n_genes; ++g) {
+        atomic_sums[g].~atomic();
+    }
+    scl::memory::aligned_free(raw_mem, SCL_ALIGNMENT);
 
     // Compute gene_counts statistics
     Real gc_mean = Real(0.0);
@@ -345,20 +356,20 @@ void differentiation_potential(
     gc_var /= static_cast<Real>(n_cells);
 
     // Compute correlation of each gene with gene_counts (parallel)
-    scl::threading::parallel_for(Size(0), n_genes, [&](size_t g) {
+    scl::threading::parallel_for(Size(0), n_genes, [&](Size g) {
         Real cov = Real(0.0);
         Real gene_var = Real(0.0);
 
         for (Size i = 0; i < n_cells; ++i) {
             Real gene_val = Real(0.0);
-            const Index row_start = expression.row_indices_unsafe()[i];
-            const Index row_end = expression.row_indices_unsafe()[i + 1];
+            auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+            auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+            const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
             // Use binary search for gene lookup
-            Index pos = detail::binary_search_gene(
-                expression.col_indices_unsafe(), row_start, row_end, static_cast<Index>(g));
+            Index pos = detail::binary_search_gene(row_indices.ptr, row_len, static_cast<Index>(g));
             if (pos >= 0) {
-                gene_val = static_cast<Real>(expression.values()[pos]);
+                gene_val = static_cast<Real>(row_values.ptr[static_cast<Size>(pos)]);
             }
 
             Real gc_diff = gene_counts[i] - gc_mean;
@@ -379,8 +390,10 @@ void differentiation_potential(
     n_top = scl::algo::max2(n_top, Size(10));
     n_top = scl::algo::min2(n_top, n_genes);
 
-    Index* top_genes = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
-    Real* sorted_corr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto top_genes_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    auto sorted_corr_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    Index* top_genes = top_genes_ptr.get();
+    Real* sorted_corr = sorted_corr_ptr.get();
 
     for (Size g = 0; g < n_genes; ++g) {
         top_genes[g] = static_cast<Index>(g);
@@ -394,12 +407,13 @@ void differentiation_potential(
     );
 
     // Step 4: Compute final score as weighted sum of top gene expressions (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         Real score = Real(0.0);
         Real total_weight = Real(0.0);
 
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
         for (Size t = 0; t < n_top; ++t) {
             Index gene = top_genes[t];
@@ -408,10 +422,9 @@ void differentiation_potential(
 
             // Use binary search for gene lookup
             Real val = Real(0.0);
-            Index pos = detail::binary_search_gene(
-                expression.col_indices_unsafe(), row_start, row_end, gene);
+            Index pos = detail::binary_search_gene(row_indices.ptr, row_len, gene);
             if (pos >= 0) {
-                val = static_cast<Real>(expression.values()[pos]);
+                val = static_cast<Real>(row_values.ptr[static_cast<Size>(pos)]);
             }
 
             score += weight * val;
@@ -439,11 +452,7 @@ void differentiation_potential(
         });
     }
 
-    scl::memory::aligned_free(gene_counts);
-    scl::memory::aligned_free(gene_correlations);
-    scl::memory::aligned_free(gene_means);
-    scl::memory::aligned_free(sorted_corr);
-    scl::memory::aligned_free(top_genes);
+    // gene_counts_ptr, gene_correlations_ptr, gene_means_ptr, sorted_corr_ptr, top_genes_ptr automatically freed
 }
 
 // =============================================================================
@@ -462,7 +471,7 @@ void proliferation_score(
     if (n_cells == 0) return;
 
     // Compute raw proliferation scores (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         scores.ptr[i] = detail::compute_geneset_score(
             expression, static_cast<Index>(i),
             proliferation_genes.ptr, proliferation_genes.len);
@@ -488,7 +497,7 @@ void stress_score(
     if (n_cells == 0) return;
 
     // Compute raw stress scores (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         scores.ptr[i] = detail::compute_geneset_score(
             expression, static_cast<Index>(i),
             stress_genes.ptr, stress_genes.len);
@@ -516,7 +525,7 @@ void state_entropy(
     // Compute expression entropy for each cell (parallel)
     Real max_entropy = std::log(static_cast<Real>(n_genes));
 
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         Real entropy = detail::compute_expression_entropy(
             expression, static_cast<Index>(i));
 
@@ -550,7 +559,7 @@ void cell_cycle_score(
     if (n_cells == 0) return;
 
     // Compute S phase and G2/M phase scores (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         s_scores.ptr[i] = detail::compute_geneset_score(
             expression, static_cast<Index>(i),
             s_genes.ptr, s_genes.len);
@@ -564,7 +573,7 @@ void cell_cycle_score(
     detail::zscore_normalize(g2m_scores.ptr, n_cells);
 
     // Assign phase labels: 0 = G1, 1 = S, 2 = G2M (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         Real s = s_scores.ptr[i];
         Real g2m = g2m_scores.ptr[i];
 
@@ -594,11 +603,13 @@ void quiescence_score(
 
     if (n_cells == 0) return;
 
-    Real* q_raw = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* p_raw = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto q_raw_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto p_raw_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* q_raw = q_raw_ptr.get();
+    Real* p_raw = p_raw_ptr.get();
 
     // Compute quiescence and proliferation gene expression (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         q_raw[i] = detail::compute_geneset_score(
             expression, static_cast<Index>(i),
             quiescence_genes.ptr, quiescence_genes.len);
@@ -612,12 +623,10 @@ void quiescence_score(
     detail::zscore_normalize(p_raw, n_cells);
 
     // Quiescence = quiescence_score - proliferation_score (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         scores.ptr[i] = q_raw[i] - p_raw[i];
     });
-
-    scl::memory::aligned_free(q_raw);
-    scl::memory::aligned_free(p_raw);
+    // q_raw_ptr, p_raw_ptr automatically freed
 }
 
 // =============================================================================
@@ -639,7 +648,7 @@ void metabolic_score(
     if (n_cells == 0) return;
 
     // Compute glycolysis and OXPHOS scores (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         glycolysis_scores.ptr[i] = detail::compute_geneset_score(
             expression, static_cast<Index>(i),
             glycolysis_genes.ptr, glycolysis_genes.len);
@@ -669,7 +678,7 @@ void apoptosis_score(
     if (n_cells == 0) return;
 
     // Compute apoptosis scores (parallel)
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         scores.ptr[i] = detail::compute_geneset_score(
             expression, static_cast<Index>(i),
             apoptosis_genes.ptr, apoptosis_genes.len);
@@ -698,12 +707,13 @@ void signature_score(
     if (n_cells == 0 || n_signature == 0) return;
 
     // Parallel signature scoring
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         Real weighted_sum = Real(0.0);
         Real weight_sum = Real(0.0);
 
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
         for (Size g = 0; g < n_signature; ++g) {
             Index gene = gene_indices.ptr[g];
@@ -711,10 +721,9 @@ void signature_score(
 
             // Use binary search for gene lookup
             Real val = Real(0.0);
-            Index pos = detail::binary_search_gene(
-                expression.col_indices_unsafe(), row_start, row_end, gene);
+            Index pos = detail::binary_search_gene(row_indices.ptr, row_len, gene);
             if (pos >= 0) {
-                val = static_cast<Real>(expression.values()[pos]);
+                val = static_cast<Real>(row_values.ptr[static_cast<Size>(pos)]);
             }
 
             weighted_sum += weight * val;
@@ -749,7 +758,7 @@ void multi_signature_score(
     if (n_cells == 0 || n_signatures == 0) return;
 
     // Process each signature in parallel
-    scl::threading::parallel_for(Size(0), n_signatures, [&](size_t s) {
+    scl::threading::parallel_for(Size(0), n_signatures, [&](Size s) {
         const Size start = signature_offsets[s];
         const Size end = signature_offsets[s + 1];
         const Size sig_len = end - start;
@@ -763,11 +772,11 @@ void multi_signature_score(
     });
 
     // Z-score normalize each signature column (parallel)
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
     scl::threading::WorkspacePool<Real> col_pool;
     col_pool.init(n_threads, n_cells);
 
-    scl::threading::parallel_for(Size(0), n_signatures, [&](size_t s, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n_signatures, [&](Size s, Size thread_rank) {
         Real* col_buffer = col_pool.get(thread_rank);
 
         // Extract column
@@ -800,16 +809,16 @@ void transcriptional_diversity(
     if (n_cells == 0) return;
 
     // Parallel diversity computation
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
         // Simpson's diversity index
         Real total = Real(0.0);
         Real sum_sq = Real(0.0);
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Real val = static_cast<Real>(expression.values()[j]);
+        for (Size j = 0; j < row_len; ++j) {
+            Real val = static_cast<Real>(row_values.ptr[j]);
             if (val > Real(0.0)) {
                 total += val;
                 sum_sq += val * val;
@@ -872,13 +881,26 @@ void combined_state_score(
     if (n_cells == 0 || n_gene_sets == 0) return;
 
     // Compute individual scores for each gene set (parallel per gene set)
-    Real** individual_scores = scl::memory::aligned_alloc<Real*>(n_gene_sets, SCL_ALIGNMENT);
+    // PERFORMANCE: Array of pointers needed for parallel access to per-gene-set buffers
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, modernize-avoid-c-arrays)
+    auto individual_scores_ptr = scl::memory::aligned_alloc<Real*>(n_gene_sets, SCL_ALIGNMENT);
+    Real** individual_scores = individual_scores_ptr.get();
+    
+    // Allocate per-gene-set score buffers
+    // PERFORMANCE: Array of unique_ptrs would require indirection, raw pointers more efficient
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory, modernize-avoid-c-arrays)
+    // Intentional: unique_ptr<T[]> is standard library type for managing dynamic arrays
+    // The T[] syntax is a template parameter, not a C-style array declaration
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::vector<std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>>> score_buffers;
+    score_buffers.reserve(n_gene_sets);
     for (Size s = 0; s < n_gene_sets; ++s) {
-        individual_scores[s] = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+        score_buffers.emplace_back(scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT));
+        individual_scores[s] = score_buffers[s].get();
     }
 
     // Compute scores in parallel over gene sets
-    scl::threading::parallel_for(Size(0), n_gene_sets, [&](size_t s) {
+    scl::threading::parallel_for(Size(0), n_gene_sets, [&](Size s) {
         // Compute scores for all cells for this gene set
         for (Size i = 0; i < n_cells; ++i) {
             individual_scores[s][i] = detail::compute_geneset_score(
@@ -896,7 +918,7 @@ void combined_state_score(
     }
 
     // Parallel weighted combination
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i) {
         Real sum = Real(0.0);
         for (Size s = 0; s < n_gene_sets; ++s) {
             sum += weights[s] * individual_scores[s][i];
@@ -907,12 +929,7 @@ void combined_state_score(
             combined_scores.ptr[i] = Real(0.0);
         }
     });
-
-    // Cleanup
-    for (Size s = 0; s < n_gene_sets; ++s) {
-        scl::memory::aligned_free(individual_scores[s]);
-    }
-    scl::memory::aligned_free(individual_scores);
+    // individual_scores_ptr and score_buffers automatically freed
 }
 
 } // namespace scl::kernel::state

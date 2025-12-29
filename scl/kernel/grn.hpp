@@ -8,7 +8,6 @@
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
 #include "scl/core/sort.hpp"
-#include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
 #include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
@@ -91,9 +90,10 @@ SCL_HOT SCL_FORCE_INLINE Real compute_mean(const Real* SCL_RESTRICT values, Inde
     auto v_sum1 = s::Zero(d);
 
     Index i = 0;
-    for (; i + 2 * lanes <= n; i += 2 * lanes) {
+    const auto lanes_idx = static_cast<Index>(lanes);
+    for (; i + 2 * lanes_idx <= n; i += 2 * lanes_idx) {
         v_sum0 = s::Add(v_sum0, s::Load(d, values + i));
-        v_sum1 = s::Add(v_sum1, s::Load(d, values + i + lanes));
+        v_sum1 = s::Add(v_sum1, s::Load(d, values + i + lanes_idx));
     }
 
     auto v_sum = s::Add(v_sum0, v_sum1);
@@ -120,9 +120,10 @@ SCL_HOT SCL_FORCE_INLINE Real compute_variance(const Real* SCL_RESTRICT values, 
     auto v_var1 = s::Zero(d);
 
     Index i = 0;
-    for (; i + 2 * lanes <= n; i += 2 * lanes) {
+    const auto lanes_idx_var = static_cast<Index>(lanes);
+    for (; i + 2 * lanes_idx_var <= n; i += 2 * lanes_idx_var) {
         auto v0 = s::Sub(s::Load(d, values + i), v_mean);
-        auto v1 = s::Sub(s::Load(d, values + i + lanes), v_mean);
+        auto v1 = s::Sub(s::Load(d, values + i + lanes_idx_var), v_mean);
         v_var0 = s::MulAdd(v0, v0, v_var0);
         v_var1 = s::MulAdd(v1, v1, v_var1);
     }
@@ -155,11 +156,12 @@ SCL_HOT Real pearson_correlation(
     auto v_sum_y0 = s::Zero(d), v_sum_y1 = s::Zero(d);
 
     Index i = 0;
-    for (; i + 2 * lanes <= n; i += 2 * lanes) {
+    const auto lanes_idx = static_cast<Index>(lanes);
+    for (; i + 2 * lanes_idx <= n; i += 2 * lanes_idx) {
         v_sum_x0 = s::Add(v_sum_x0, s::Load(d, x + i));
-        v_sum_x1 = s::Add(v_sum_x1, s::Load(d, x + i + lanes));
+        v_sum_x1 = s::Add(v_sum_x1, s::Load(d, x + i + lanes_idx));
         v_sum_y0 = s::Add(v_sum_y0, s::Load(d, y + i));
-        v_sum_y1 = s::Add(v_sum_y1, s::Load(d, y + i + lanes));
+        v_sum_y1 = s::Add(v_sum_y1, s::Load(d, y + i + lanes_idx));
     }
 
     Real sum_x = s::GetLane(s::SumOfLanes(d, s::Add(v_sum_x0, v_sum_x1)));
@@ -182,11 +184,11 @@ SCL_HOT Real pearson_correlation(
     auto v_var_y0 = s::Zero(d), v_var_y1 = s::Zero(d);
 
     i = 0;
-    for (; i + 2 * lanes <= n; i += 2 * lanes) {
+    for (; i + 2 * lanes_idx <= n; i += 2 * lanes_idx) {
         auto dx0 = s::Sub(s::Load(d, x + i), v_mean_x);
-        auto dx1 = s::Sub(s::Load(d, x + i + lanes), v_mean_x);
+        auto dx1 = s::Sub(s::Load(d, x + i + lanes_idx), v_mean_x);
         auto dy0 = s::Sub(s::Load(d, y + i), v_mean_y);
-        auto dy1 = s::Sub(s::Load(d, y + i + lanes), v_mean_y);
+        auto dy1 = s::Sub(s::Load(d, y + i + lanes_idx), v_mean_y);
 
         v_cov0 = s::MulAdd(dx0, dy0, v_cov0);
         v_cov1 = s::MulAdd(dx1, dy1, v_cov1);
@@ -220,14 +222,19 @@ SCL_HOT Real spearman_correlation(
 ) {
     if (SCL_UNLIKELY(n < 2)) return Real(0);
 
-    Real* rank_x = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* rank_y = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Index* idx = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* x_copy = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* y_copy = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto rank_x_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto rank_y_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto idx_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto x_copy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto y_copy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* rank_x = rank_x_ptr.get();
+    Real* rank_y = rank_y_ptr.get();
+    Index* idx = idx_ptr.get();
+    Real* x_copy = x_copy_ptr.get();
+    Real* y_copy = y_copy_ptr.get();
 
-    std::memcpy(x_copy, x, static_cast<Size>(n) * sizeof(Real));
-    std::memcpy(y_copy, y, static_cast<Size>(n) * sizeof(Real));
+    scl::memory::copy_fast(Array<const Real>(x, static_cast<Size>(n)), Array<Real>(x_copy, static_cast<Size>(n)));
+    scl::memory::copy_fast(Array<const Real>(y, static_cast<Size>(n)), Array<Real>(y_copy, static_cast<Size>(n)));
 
     // Compute ranks for x using efficient sort
     for (Index i = 0; i < n; ++i) idx[i] = i;
@@ -250,12 +257,6 @@ SCL_HOT Real spearman_correlation(
     }
 
     Real corr = pearson_correlation(rank_x, rank_y, n);
-
-    scl::memory::aligned_free(y_copy, SCL_ALIGNMENT);
-    scl::memory::aligned_free(x_copy, SCL_ALIGNMENT);
-    scl::memory::aligned_free(idx, SCL_ALIGNMENT);
-    scl::memory::aligned_free(rank_y, SCL_ALIGNMENT);
-    scl::memory::aligned_free(rank_x, SCL_ALIGNMENT);
 
     return corr;
 }
@@ -281,7 +282,8 @@ SCL_HOT Real mutual_information(
     auto v_min_y = s::Set(d, min_y), v_max_y = s::Set(d, max_y);
 
     Index i = 0;
-    for (; i + lanes <= n; i += lanes) {
+    const auto lanes_idx_mi = static_cast<Index>(lanes);
+    for (; i + lanes_idx_mi <= n; i += lanes_idx_mi) {
         auto vx = s::Load(d, x + i);
         auto vy = s::Load(d, y + i);
         v_min_x = s::Min(v_min_x, vx);
@@ -307,9 +309,12 @@ SCL_HOT Real mutual_information(
 
     // Build joint and marginal histograms
     const Size hist_size = static_cast<Size>(n_bins) * static_cast<Size>(n_bins);
-    Real* joint = scl::memory::aligned_alloc<Real>(hist_size, SCL_ALIGNMENT);
-    Real* marg_x = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
-    Real* marg_y = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
+    auto joint_ptr = scl::memory::aligned_alloc<Real>(hist_size, SCL_ALIGNMENT);
+    auto marg_x_ptr = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
+    auto marg_y_ptr = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
+    Real* joint = joint_ptr.get();
+    Real* marg_x = marg_x_ptr.get();
+    Real* marg_y = marg_y_ptr.get();
 
     std::memset(joint, 0, hist_size * sizeof(Real));
     std::memset(marg_x, 0, static_cast<Size>(n_bins) * sizeof(Real));
@@ -317,9 +322,9 @@ SCL_HOT Real mutual_information(
 
     Real inv_n = Real(1) / static_cast<Real>(n);
 
-    for (Index i = 0; i < n; ++i) {
-        Index bin_x = static_cast<Index>((x[i] - min_x) * inv_range_x);
-        Index bin_y = static_cast<Index>((y[i] - min_y) * inv_range_y);
+    for (Index idx = 0; idx < n; ++idx) {
+        auto bin_x = static_cast<Index>((x[idx] - min_x) * inv_range_x);
+        auto bin_y = static_cast<Index>((y[idx] - min_y) * inv_range_y);
         bin_x = scl::algo::min2(bin_x, n_bins - 1);
         bin_y = scl::algo::min2(bin_y, n_bins - 1);
 
@@ -343,10 +348,6 @@ SCL_HOT Real mutual_information(
             }
         }
     }
-
-    scl::memory::aligned_free(marg_y, SCL_ALIGNMENT);
-    scl::memory::aligned_free(marg_x, SCL_ALIGNMENT);
-    scl::memory::aligned_free(joint, SCL_ALIGNMENT);
 
     return mi;
 }
@@ -372,7 +373,7 @@ SCL_HOT void extract_gene_expression(
                 indices.ptr, indices.ptr + len, gene);
 
             if (found != indices.ptr + len && *found == gene) {
-                Index k = static_cast<Index>(found - indices.ptr);
+                auto k = static_cast<Index>(found - indices.ptr);
                 output[c] = static_cast<Real>(values[k]);
             }
         }
@@ -396,13 +397,13 @@ SCL_HOT void random_forest_importance(
     const Real* SCL_RESTRICT y_target,
     Index n_cells,
     Index n_tfs,
-    Index n_trees,
+    Index /* n_trees */,
     Real* SCL_RESTRICT importance,
-    FastRNG& rng
+    FastRNG& /* rng */
 ) {
     std::memset(importance, 0, static_cast<Size>(n_tfs) * sizeof(Real));
 
-    if (SCL_UNLIKELY(n_cells < 4 || n_tfs == 0 || n_trees == 0)) return;
+    if (SCL_UNLIKELY(n_cells < 4 || n_tfs == 0)) return;
 
     Real base_mean = compute_mean(y_target, n_cells);
     Real base_var = compute_variance(y_target, n_cells, base_mean);
@@ -453,10 +454,10 @@ void correlation_network(
     }
 
     const bool use_parallel = (n_genes_sz >= config::PARALLEL_THRESHOLD);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Pre-extract all gene expressions for better cache locality
-    Real* all_gene_expr = scl::memory::aligned_alloc<Real>(n_genes_sz * n_cells_sz, SCL_ALIGNMENT);
+    auto all_gene_expr_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz * n_cells_sz, SCL_ALIGNMENT);
+    Real* all_gene_expr = all_gene_expr_ptr.get();
 
     if (use_parallel) {
         scl::threading::parallel_for(Size(0), n_genes_sz, [&](size_t g) {
@@ -477,7 +478,7 @@ void correlation_network(
         for (Index j = i + 1; j < n_genes; ++j) {
             const Real* expr_j = all_gene_expr + static_cast<Size>(j) * n_cells_sz;
 
-            Real corr;
+            Real corr = Real(0);
             if (use_spearman) {
                 corr = detail::spearman_correlation(expr_i, expr_j, n_cells);
             } else {
@@ -490,8 +491,6 @@ void correlation_network(
             }
         }
     }
-
-    scl::memory::aligned_free(all_gene_expr, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -513,13 +512,15 @@ Index correlation_network_sparse(
     const Size n_cells_sz = static_cast<Size>(n_cells);
     const Size n_genes_sz = static_cast<Size>(n_genes);
 
-    // Pre-extract all gene expressions
-    Real* all_gene_expr = scl::memory::aligned_alloc<Real>(n_genes_sz * n_cells_sz, SCL_ALIGNMENT);
+    // Pre-extract all gene expressions using unique_ptr for aligned memory
+    auto all_gene_expr_uptr = scl::memory::aligned_alloc<Real>(n_genes_sz * n_cells_sz, SCL_ALIGNMENT);
+    Real* all_gene_expr = all_gene_expr_uptr.get();
 
     for (Index g = 0; g < n_genes; ++g) {
         Real* gene_expr = all_gene_expr + static_cast<Size>(g) * n_cells_sz;
         detail::extract_gene_expression(expression, g, n_cells, gene_expr);
     }
+
 
     Index n_edges = 0;
     for (Index i = 0; i < n_genes && n_edges < max_edges; ++i) {
@@ -528,7 +529,7 @@ Index correlation_network_sparse(
         for (Index j = i + 1; j < n_genes && n_edges < max_edges; ++j) {
             const Real* expr_j = all_gene_expr + static_cast<Size>(j) * n_cells_sz;
 
-            Real corr;
+            Real corr = Real(0);
             if (use_spearman) {
                 corr = detail::spearman_correlation(expr_i, expr_j, n_cells);
             } else {
@@ -544,7 +545,6 @@ Index correlation_network_sparse(
         }
     }
 
-    scl::memory::aligned_free(all_gene_expr, SCL_ALIGNMENT);
     return n_edges;
 }
 
@@ -563,7 +563,8 @@ void partial_correlation_network(
 ) {
     const Size total = static_cast<Size>(n_genes) * static_cast<Size>(n_genes);
 
-    Real* corr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto corr_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    Real* corr = corr_ptr.get();
     correlation_network(expression, n_cells, n_genes, Real(0), corr, false);
 
     // Add regularization to diagonal
@@ -602,8 +603,6 @@ void partial_correlation_network(
             compute_row(i);
         }
     }
-
-    scl::memory::aligned_free(corr, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -631,7 +630,8 @@ void mutual_information_network(
     }
 
     // Pre-extract all gene expressions
-    Real* all_gene_expr = scl::memory::aligned_alloc<Real>(n_genes_sz * n_cells_sz, SCL_ALIGNMENT);
+    auto all_gene_expr_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz * n_cells_sz, SCL_ALIGNMENT);
+    Real* all_gene_expr = all_gene_expr_ptr.get();
 
     for (Index g = 0; g < n_genes; ++g) {
         Real* gene_expr = all_gene_expr + static_cast<Size>(g) * n_cells_sz;
@@ -692,8 +692,8 @@ void tf_target_score(
     Index n_genes,
     Real* SCL_RESTRICT scores
 ) {
-    const Index n_tfs = static_cast<Index>(tf_genes.len);
-    const Index n_targets = static_cast<Index>(target_genes.len);
+    const auto n_tfs = static_cast<Index>(tf_genes.len);
+    const auto n_targets = static_cast<Index>(target_genes.len);
     const Size total = static_cast<Size>(n_tfs) * static_cast<Size>(n_targets);
     const Size n_cells_sz = static_cast<Size>(n_cells);
 
@@ -702,8 +702,9 @@ void tf_target_score(
     if (SCL_UNLIKELY(n_tfs == 0 || n_targets == 0)) return;
 
     // Pre-extract TF expressions
-    Real* tf_expressions = scl::memory::aligned_alloc<Real>(
+    auto tf_expressions_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(n_tfs) * n_cells_sz, SCL_ALIGNMENT);
+    Real* tf_expressions = tf_expressions_ptr.get();
 
     for (Index t = 0; t < n_tfs; ++t) {
         Index tf = tf_genes[t];
@@ -717,8 +718,9 @@ void tf_target_score(
     }
 
     // Pre-extract target expressions
-    Real* target_expressions = scl::memory::aligned_alloc<Real>(
+    auto target_expressions_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(n_targets) * n_cells_sz, SCL_ALIGNMENT);
+    Real* target_expressions = target_expressions_ptr.get();
 
     for (Index g = 0; g < n_targets; ++g) {
         Index target = target_genes[g];
@@ -736,7 +738,7 @@ void tf_target_score(
 
     if (use_parallel) {
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_tfs), [&](size_t t) {
-            Index tf = tf_genes[t];
+            Index tf = tf_genes[static_cast<Index>(t)];
             const Real* tf_expr = tf_expressions + t * n_cells_sz;
 
             for (Index g = 0; g < n_targets; ++g) {
@@ -745,7 +747,7 @@ void tf_target_score(
 
                 const Real* target_expr = target_expressions + static_cast<Size>(g) * n_cells_sz;
                 Real corr = detail::pearson_correlation(tf_expr, target_expr, n_cells);
-                scores[t * n_targets + g] = corr;
+                scores[static_cast<Size>(t) * n_targets + g] = corr;
             }
         });
     } else {
@@ -763,9 +765,6 @@ void tf_target_score(
             }
         }
     }
-
-    scl::memory::aligned_free(target_expressions, SCL_ALIGNMENT);
-    scl::memory::aligned_free(tf_expressions, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -781,15 +780,16 @@ void genie3_importance(
     Real* SCL_RESTRICT importance_matrix,
     Index n_trees = config::DEFAULT_N_TREES
 ) {
-    const Index n_tfs = static_cast<Index>(tf_genes.len);
+    const auto n_tfs = static_cast<Index>(tf_genes.len);
     const Size total = static_cast<Size>(n_genes) * static_cast<Size>(n_tfs);
     const Size n_cells_sz = static_cast<Size>(n_cells);
 
     std::memset(importance_matrix, 0, total * sizeof(Real));
 
     // Pre-extract TF expressions
-    Real* tf_expressions = scl::memory::aligned_alloc<Real>(
+    auto tf_expressions_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(n_tfs) * n_cells_sz, SCL_ALIGNMENT);
+    Real* tf_expressions = tf_expressions_ptr.get();
 
     for (Index t = 0; t < n_tfs; ++t) {
         Index tf = tf_genes[t];
@@ -808,7 +808,7 @@ void genie3_importance(
     // Per-thread workspace
     scl::threading::DualWorkspacePool<Real> workspace;
     if (use_parallel) {
-        Size max_size = std::max(n_cells_sz, static_cast<Size>(n_tfs));
+        Size max_size = scl::algo::max2(n_cells_sz, static_cast<Size>(n_tfs));
         workspace.init(n_threads, max_size);
     }
 
@@ -846,18 +846,15 @@ void genie3_importance(
             process_gene(static_cast<Index>(g), target_expr, importance, 42 + g);
         });
     } else {
-        Real* target_expr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
-        Real* importance = scl::memory::aligned_alloc<Real>(n_tfs, SCL_ALIGNMENT);
+        auto target_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+        auto importance_ptr = scl::memory::aligned_alloc<Real>(n_tfs, SCL_ALIGNMENT);
+        Real* target_expr = target_expr_ptr.get();
+        Real* importance = importance_ptr.get();
 
         for (Index g = 0; g < n_genes; ++g) {
             process_gene(g, target_expr, importance, 42 + g);
         }
-
-        scl::memory::aligned_free(importance, SCL_ALIGNMENT);
-        scl::memory::aligned_free(target_expr, SCL_ALIGNMENT);
     }
-
-    scl::memory::aligned_free(tf_expressions, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -915,11 +912,10 @@ void regulon_activity(
                 Index g = genes[k];
                 if (SCL_UNLIKELY(g < 0 || g >= n_genes)) continue;
 
-                Real expr;
+                Real expr = Real(0);
                 if constexpr (IsCSR) {
                     expr = cell_expr[g];
                 } else {
-                    expr = Real(0);
                     auto indices = expression.col_indices_unsafe(g);
                     auto values = expression.col_values_unsafe(g);
                     Index len = expression.col_length_unsafe(g);
@@ -929,7 +925,7 @@ void regulon_activity(
                         indices.ptr, indices.ptr + len, c);
 
                     if (found != indices.ptr + len && *found == c) {
-                        Index idx = static_cast<Index>(found - indices.ptr);
+                        auto idx = static_cast<Index>(found - indices.ptr);
                         expr = static_cast<Real>(values[idx]);
                     }
                 }
@@ -958,16 +954,15 @@ void regulon_activity(
         }
     } else {
         Real* cell_expr = nullptr;
+        // NOLINTNEXTLINE(modernize-avoid-c-arrays) - unique_ptr with array deleter, not C-style array
+        std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>> cell_expr_ptr;
         if constexpr (IsCSR) {
-            cell_expr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+            cell_expr_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+            cell_expr = cell_expr_ptr.get();
         }
 
         for (Index c = 0; c < n_cells; ++c) {
             process_cell(c, cell_expr);
-        }
-
-        if (cell_expr) {
-            scl::memory::aligned_free(cell_expr, SCL_ALIGNMENT);
         }
     }
 }
@@ -1038,7 +1033,7 @@ void regulon_auc_score(
 
                 const Index* found = scl::algo::lower_bound(indices.ptr, indices.ptr + len, c);
                 if (found != indices.ptr + len && *found == c) {
-                    Index idx = static_cast<Index>(found - indices.ptr);
+                    auto idx = static_cast<Index>(found - indices.ptr);
                     cell_expr[g] = static_cast<Real>(values[idx]);
                 }
             }
@@ -1099,17 +1094,16 @@ void regulon_auc_score(
 
         scl::memory::aligned_free(workspaces, SCL_ALIGNMENT);
     } else {
-        Real* cell_expr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
-        Index* gene_indices = scl::memory::aligned_alloc<Index>(n_genes_sz, SCL_ALIGNMENT);
-        bool* in_regulon = scl::memory::aligned_alloc<bool>(n_genes_sz, SCL_ALIGNMENT);
+        auto cell_expr_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+        auto gene_indices_ptr = scl::memory::aligned_alloc<Index>(n_genes_sz, SCL_ALIGNMENT);
+        auto in_regulon_ptr = scl::memory::aligned_alloc<bool>(n_genes_sz, SCL_ALIGNMENT);
+        Real* cell_expr = cell_expr_ptr.get();
+        Index* gene_indices = gene_indices_ptr.get();
+        bool* in_regulon = in_regulon_ptr.get();
 
         for (Index c = 0; c < n_cells; ++c) {
             process_cell(c, cell_expr, gene_indices, in_regulon);
         }
-
-        scl::memory::aligned_free(in_regulon, SCL_ALIGNMENT);
-        scl::memory::aligned_free(gene_indices, SCL_ALIGNMENT);
-        scl::memory::aligned_free(cell_expr, SCL_ALIGNMENT);
     }
 }
 
@@ -1208,8 +1202,10 @@ inline Index identify_hub_genes(
 ) {
     const Size n_sz = static_cast<Size>(n);
 
-    Real* degrees = scl::memory::aligned_alloc<Real>(n_sz, SCL_ALIGNMENT);
-    Real* clustering = scl::memory::aligned_alloc<Real>(n_sz, SCL_ALIGNMENT);
+    auto degrees_ptr = scl::memory::aligned_alloc<Real>(n_sz, SCL_ALIGNMENT);
+    auto clustering_ptr = scl::memory::aligned_alloc<Real>(n_sz, SCL_ALIGNMENT);
+    Real* degrees = degrees_ptr.get();
+    Real* clustering = clustering_ptr.get();
 
     network_statistics(adjacency, n, degrees, clustering);
 
@@ -1235,16 +1231,14 @@ inline Index identify_hub_genes(
 
     // Identify hubs
     Index n_hubs = 0;
-    Real threshold = max_deg * degree_threshold;
+    Real threshold_val = max_deg * degree_threshold;
 
-    for (Index i = 0; i < n && n_hubs < max_hubs; ++i) {
-        if (degrees[i] >= threshold) {
-            hub_genes[n_hubs++] = i;
+    for (Index idx = 0; idx < n && n_hubs < max_hubs; ++idx) {
+        if (degrees[idx] >= threshold_val) {
+            hub_genes[n_hubs++] = idx;
         }
     }
 
-    scl::memory::aligned_free(clustering, SCL_ALIGNMENT);
-    scl::memory::aligned_free(degrees, SCL_ALIGNMENT);
     return n_hubs;
 }
 
@@ -1262,7 +1256,7 @@ void infer_grn(
     GRNMethod method = GRNMethod::Correlation,
     Real threshold = config::DEFAULT_CORRELATION_THRESHOLD
 ) {
-    const Index n_tfs = static_cast<Index>(tf_genes.len);
+    const auto n_tfs = static_cast<Index>(tf_genes.len);
     const Size total = static_cast<Size>(n_genes) * static_cast<Size>(n_tfs);
 
     std::memset(grn_matrix, 0, total * sizeof(Real));
@@ -1270,13 +1264,14 @@ void infer_grn(
     switch (method) {
         case GRNMethod::Correlation:
         case GRNMethod::Combined: {
-            Index* all_genes = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+            auto all_genes_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+            Index* all_genes = all_genes_ptr.get();
             for (Index g = 0; g < n_genes; ++g) {
                 all_genes[g] = g;
             }
 
             tf_target_score(expression, tf_genes,
-                           Array<const Index>(all_genes, n_genes),
+                           Array<const Index>(all_genes, static_cast<Size>(n_genes)),
                            n_cells, n_genes, grn_matrix);
 
             // Apply threshold
@@ -1286,7 +1281,6 @@ void infer_grn(
                 }
             }
 
-            scl::memory::aligned_free(all_genes, SCL_ALIGNMENT);
             break;
         }
 
@@ -1306,9 +1300,11 @@ void infer_grn(
             const Size n_cells_sz = static_cast<Size>(n_cells);
 
             // Pre-extract expressions
-            Real* tf_expressions = scl::memory::aligned_alloc<Real>(
+            auto tf_expressions_ptr = scl::memory::aligned_alloc<Real>(
                 static_cast<Size>(n_tfs) * n_cells_sz, SCL_ALIGNMENT);
-            Real* target_expr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+            auto target_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells_sz, SCL_ALIGNMENT);
+            Real* tf_expressions = tf_expressions_ptr.get();
+            Real* target_expr = target_expr_ptr.get();
 
             for (Index t = 0; t < n_tfs; ++t) {
                 Index tf = tf_genes[t];
@@ -1366,8 +1362,6 @@ void infer_grn(
                 }
             }
 
-            scl::memory::aligned_free(target_expr, SCL_ALIGNMENT);
-            scl::memory::aligned_free(tf_expressions, SCL_ALIGNMENT);
             break;
         }
 
@@ -1483,19 +1477,18 @@ void tf_activity_from_regulons(
                 if (SCL_UNLIKELY(target >= n_genes)) continue;
 
                 Real weight = std::abs(grn_matrix[static_cast<Size>(target) * n_tfs + tf]);
-                Real expr;
+                Real expr = Real(0);
 
                 if constexpr (IsCSR) {
                     expr = cell_expr[target];
                 } else {
-                    expr = Real(0);
                     auto indices = expression.col_indices_unsafe(target);
                     auto values = expression.col_values_unsafe(target);
                     Index len = expression.col_length_unsafe(target);
 
                     const Index* found = scl::algo::lower_bound(indices.ptr, indices.ptr + len, c);
                     if (found != indices.ptr + len && *found == c) {
-                        Index idx = static_cast<Index>(found - indices.ptr);
+                        auto idx = static_cast<Index>(found - indices.ptr);
                         expr = static_cast<Real>(values[idx]);
                     }
                 }
@@ -1523,16 +1516,15 @@ void tf_activity_from_regulons(
         }
     } else {
         Real* cell_expr = nullptr;
+        // NOLINTNEXTLINE(modernize-avoid-c-arrays) - unique_ptr with array deleter, not C-style array
+        std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>> cell_expr_ptr;
         if constexpr (IsCSR) {
-            cell_expr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+            cell_expr_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+            cell_expr = cell_expr_ptr.get();
         }
 
         for (Index c = 0; c < n_cells; ++c) {
             process_cell(c, cell_expr);
-        }
-
-        if (cell_expr) {
-            scl::memory::aligned_free(cell_expr, SCL_ALIGNMENT);
         }
     }
 }

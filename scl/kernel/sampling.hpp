@@ -9,6 +9,7 @@
 #include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
 
+#include <array>
 #include <cmath>
 
 // =============================================================================
@@ -41,18 +42,19 @@ SCL_FORCE_INLINE uint64_t hash_combine(uint64_t h1, uint64_t h2) {
 
 // Fast PRNG (Xoshiro128+) - higher quality than LCG
 struct alignas(16) FastRNG {
-    uint32_t s[4];
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::array<uint32_t, 4> s{};
 
     SCL_FORCE_INLINE explicit FastRNG(uint64_t seed) noexcept {
         uint64_t z = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (uint32_t& si : s) {
             z += 0x9e3779b97f4a7c15ULL;
             z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-            s[i] = static_cast<uint32_t>(z >> 32);
+            si = static_cast<uint32_t>(z >> 32);
         }
     }
 
-    SCL_FORCE_INLINE uint32_t rotl(uint32_t x, int k) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE uint32_t rotl(uint32_t x, int k) const noexcept {
         return (x << k) | (x >> (32 - k));
     }
 
@@ -103,7 +105,9 @@ SCL_FORCE_INLINE void weighted_reservoir(
     FastRNG& rng
 ) {
     // Compute prefix sum of weights
-    Real* cumsum = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto cumsum_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+
+    Real* cumsum = cumsum_ptr.release();
     cumsum[0] = weights[0];
     for (Size i = 1; i < n; ++i) {
         cumsum[i] = cumsum[i - 1] + weights[i];
@@ -139,10 +143,11 @@ void kmeans_pp_init(
     FastRNG& rng
 ) {
     const Size n = static_cast<Size>(data.rows());
-    const Size n_features = static_cast<Size>(data.cols());
 
     // Distance to nearest center for each point
-    Real* min_dist = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto min_dist_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+
+    Real* min_dist = min_dist_ptr.release();
     for (Size i = 0; i < n; ++i) {
         min_dist[i] = std::numeric_limits<Real>::max();
     }
@@ -257,9 +262,15 @@ void geometric_sketching(
     detail::FastRNG rng(seed);
 
     // Compute data bounds for grid
-    Real* min_vals = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
-    Real* max_vals = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
-    Real* cell_sizes = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+    auto min_vals_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+
+    Real* min_vals = min_vals_ptr.release();
+    auto max_vals_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+
+    Real* max_vals = max_vals_ptr.release();
+    auto cell_sizes_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+
+    Real* cell_sizes = cell_sizes_ptr.release();
 
     for (Size d = 0; d < n_features; ++d) {
         min_vals[d] = std::numeric_limits<Real>::max();
@@ -293,8 +304,12 @@ void geometric_sketching(
     }
 
     // Assign cells to grid buckets and sample from each
-    uint64_t* cell_hashes = scl::memory::aligned_alloc<uint64_t>(n_cells, SCL_ALIGNMENT);
-    Real* point_buffer = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+    auto cell_hashes_ptr = scl::memory::aligned_alloc<uint64_t>(n_cells, SCL_ALIGNMENT);
+
+    uint64_t* cell_hashes = cell_hashes_ptr.release();
+    auto point_buffer_ptr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+
+    Real* point_buffer = point_buffer_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
         // Build dense point representation
@@ -315,7 +330,9 @@ void geometric_sketching(
     }
 
     // Sort by cell hash using sort_pairs
-    Index* sorted_indices = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto sorted_indices_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+
+    Index* sorted_indices = sorted_indices_ptr.release();
     for (Size i = 0; i < n_cells; ++i) {
         sorted_indices[i] = static_cast<Index>(i);
     }
@@ -389,7 +406,9 @@ void density_preserving(
     target_size = scl::algo::min2(target_size, n_cells);
 
     // Compute local density for each cell
-    Real* density = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto density_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* density = density_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
         const Index row_start = neighbors.row_indices_unsafe()[i];
@@ -398,7 +417,9 @@ void density_preserving(
     }
 
     // Compute sampling weights (inverse density)
-    Real* weights = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto weights_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* weights = weights_ptr.release();
     Real total_weight = Real(0.0);
 
     for (Size i = 0; i < n_cells; ++i) {
@@ -412,7 +433,9 @@ void density_preserving(
     }
 
     // Sample without replacement using systematic sampling
-    Real* cumsum = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto cumsum_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* cumsum = cumsum_ptr.release();
     cumsum[0] = weights[0];
     for (Size i = 1; i < n_cells; ++i) {
         cumsum[i] = cumsum[i - 1] + weights[i];
@@ -473,7 +496,7 @@ void representative_cells(
     Size per_cluster,
     Index* representatives,
     Size& n_selected,
-    uint64_t seed
+    uint64_t /* seed */
 ) {
     const Size n_cells = static_cast<Size>(data.rows());
     SCL_CHECK_DIM(n_cells == cluster_labels.len, "Labels length must match data rows");
@@ -490,7 +513,8 @@ void representative_cells(
     }
 
     // Count cells per cluster
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    Size* cluster_sizes = cluster_sizes_ptr.get();
     for (Index c = 0; c < n_clusters; ++c) {
         cluster_sizes[c] = 0;
     }
@@ -499,11 +523,20 @@ void representative_cells(
     }
 
     // Collect indices per cluster
-    Index** cluster_indices = scl::memory::aligned_alloc<Index*>(n_clusters, SCL_ALIGNMENT);
-    Size* cluster_counts = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto cluster_indices_ptr = scl::memory::aligned_alloc<Index*>(n_clusters, SCL_ALIGNMENT);
+    Index** cluster_indices = cluster_indices_ptr.get();
+    auto cluster_counts_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    Size* cluster_counts = cluster_counts_ptr.get();
+
+    // Each Index* in cluster_indices needs its own unique_ptr for correct aligned_free
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::vector<std::unique_ptr<Index[], scl::memory::AlignedDeleter<Index>>> owned_cluster_indices;
+    owned_cluster_indices.reserve(n_clusters);
 
     for (Index c = 0; c < n_clusters; ++c) {
-        cluster_indices[c] = scl::memory::aligned_alloc<Index>(cluster_sizes[c], SCL_ALIGNMENT);
+        auto arr = scl::memory::aligned_alloc<Index>(cluster_sizes[c], SCL_ALIGNMENT);
+        cluster_indices[c] = arr.get();
+        owned_cluster_indices.push_back(std::move(arr));
         cluster_counts[c] = 0;
     }
 
@@ -512,16 +545,26 @@ void representative_cells(
         cluster_indices[c][cluster_counts[c]++] = static_cast<Index>(i);
     }
 
-    // Compute cluster centroids
+    // Allocate centroid storage
+    auto centroids_ptr = scl::memory::aligned_alloc<Real*>(n_clusters, SCL_ALIGNMENT);
+    Real** centroids = centroids_ptr.get();
     const Size n_features = static_cast<Size>(data.cols());
-    Real** centroids = scl::memory::aligned_alloc<Real*>(n_clusters, SCL_ALIGNMENT);
+
+    // Each Real* in centroids needs its own unique_ptr for correct aligned_free
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::vector<std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>>> owned_centroids;
+    owned_centroids.reserve(n_clusters);
+
     for (Index c = 0; c < n_clusters; ++c) {
-        centroids[c] = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+        auto arr = scl::memory::aligned_alloc<Real>(n_features, SCL_ALIGNMENT);
+        centroids[c] = arr.get();
         for (Size d = 0; d < n_features; ++d) {
             centroids[c][d] = Real(0.0);
         }
+        owned_centroids.push_back(std::move(arr));
     }
 
+    // Compute centroids
     for (Size i = 0; i < n_cells; ++i) {
         Index c = cluster_labels.ptr[i];
         const Index row_start = data.row_indices_unsafe()[i];
@@ -542,11 +585,11 @@ void representative_cells(
     }
 
     // Select representatives closest to centroid
-    Real* distances = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto distances_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* distances = distances_ptr.get();
 
     for (Index c = 0; c < n_clusters; ++c) {
         Size to_select = scl::algo::min2(per_cluster, cluster_sizes[c]);
-
         // Compute distances to centroid
         for (Size idx = 0; idx < cluster_sizes[c]; ++idx) {
             Index cell = cluster_indices[c][idx];
@@ -561,7 +604,6 @@ void representative_cells(
                 Real diff = static_cast<Real>(data.values()[j]) - centroids[c][feature];
                 dist += diff * diff;
             }
-
             // Add contribution from zero entries (centroid non-zero)
             for (Size d = 0; d < n_features; ++d) {
                 if (centroids[c][d] != Real(0.0)) {
@@ -577,12 +619,12 @@ void representative_cells(
                     }
                 }
             }
-
             distances[idx] = dist;
         }
 
         // Select top-k closest using partial_sort with comparator
-        Index* sorted = scl::memory::aligned_alloc<Index>(cluster_sizes[c], SCL_ALIGNMENT);
+        auto sorted_ptr = scl::memory::aligned_alloc<Index>(cluster_sizes[c], SCL_ALIGNMENT);
+        Index* sorted = sorted_ptr.get();
         for (Size idx = 0; idx < cluster_sizes[c]; ++idx) {
             sorted[idx] = static_cast<Index>(idx);
         }
@@ -593,20 +635,20 @@ void representative_cells(
             representatives[n_selected++] = cluster_indices[c][sorted[s]];
         }
 
-        scl::memory::aligned_free(sorted);
+        // sorted_ptr will free when out of scope
     }
 
-    // Cleanup
-    for (Index c = 0; c < n_clusters; ++c) {
-        scl::memory::aligned_free(cluster_indices[c]);
-        scl::memory::aligned_free(centroids[c]);
-    }
-    scl::memory::aligned_free(cluster_indices);
-    scl::memory::aligned_free(centroids);
-    scl::memory::aligned_free(cluster_sizes);
-    scl::memory::aligned_free(cluster_counts);
-    scl::memory::aligned_free(distances);
+    // Cleanup happens automatically via unique_ptrs (RAII)
+    // (for types not owned via unique_ptr, we must still free)
+
+    // Free cluster_sizes, cluster_counts, distances (single-level allocations)
+    // cluster_indices_ptr, centroids_ptr (outer arrays) are handled by unique_ptr, 
+    // but the internal arrays are in vectors owned_cluster_indices and owned_centroids
+    // which RAII-frees.
+
+    // No manual scl::memory::aligned_free needed.
 }
+
 
 // =============================================================================
 // Balanced Sampling
@@ -635,7 +677,8 @@ void balanced_sampling(
     }
 
     // Count elements per group
-    Size* group_sizes = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
+    auto group_sizes_ptr = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
+    Size* group_sizes = group_sizes_ptr.get();
     for (Index g = 0; g < n_groups; ++g) {
         group_sizes[g] = 0;
     }
@@ -643,12 +686,23 @@ void balanced_sampling(
         ++group_sizes[labels.ptr[i]];
     }
 
-    // Collect indices per group
-    Index** group_indices = scl::memory::aligned_alloc<Index*>(n_groups, SCL_ALIGNMENT);
-    Size* group_counts = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
+    // Collect indices per group arrays
+    // Allocate array of Index* (for group_indices)
+    auto group_indices_ptr = scl::memory::aligned_alloc<Index*>(n_groups, SCL_ALIGNMENT);
+    Index** group_indices = group_indices_ptr.get();
+
+    // Track ownership of each group_indices[g] so we can free later
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::vector<std::unique_ptr<Index[], scl::memory::AlignedDeleter<Index>>> owned_group_arrays;
+    owned_group_arrays.reserve(static_cast<size_t>(n_groups));
+
+    auto group_counts_ptr = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
+    Size* group_counts = group_counts_ptr.get();
 
     for (Index g = 0; g < n_groups; ++g) {
-        group_indices[g] = scl::memory::aligned_alloc<Index>(group_sizes[g], SCL_ALIGNMENT);
+        auto array_ptr = scl::memory::aligned_alloc<Index>(group_sizes[g], SCL_ALIGNMENT);
+        group_indices[g] = array_ptr.get();
+        owned_group_arrays.push_back(std::move(array_ptr));
         group_counts[g] = 0;
     }
 
@@ -689,14 +743,9 @@ void balanced_sampling(
         }
     }
 
-    // Cleanup
-    for (Index g = 0; g < n_groups; ++g) {
-        scl::memory::aligned_free(group_indices[g]);
-    }
-    scl::memory::aligned_free(group_indices);
-    scl::memory::aligned_free(group_sizes);
-    scl::memory::aligned_free(group_counts);
+    // Cleanup is automatic via unique_ptr's (owned_group_arrays, group_sizes_ptr, group_counts_ptr, group_indices_ptr)
 }
+
 
 // =============================================================================
 // Additional sampling methods
@@ -729,9 +778,11 @@ void stratified_sampling(
     if (stratum_width < config::EPSILON) stratum_width = Real(1.0);
 
     // Assign to strata
-    Index* strata = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto strata_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+    Index* strata = strata_ptr.release();
     for (Size i = 0; i < n; ++i) {
-        Index s = static_cast<Index>((values.ptr[i] - min_val) / stratum_width);
+        auto s = static_cast<Index>((values.ptr[i] - min_val) / stratum_width);
         s = scl::algo::min2(s, static_cast<Index>(n_strata - 1));
         strata[i] = s;
     }
@@ -759,7 +810,9 @@ void uniform_sampling(
     detail::FastRNG rng(seed);
 
     // Fisher-Yates shuffle approach
-    Index* indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+    Index* indices = indices_ptr.release();
     for (Size i = 0; i < n; ++i) {
         indices[i] = static_cast<Index>(i);
     }
@@ -800,7 +853,9 @@ void importance_sampling(
     }
 
     // Sample with replacement proportional to weights
-    Real* cumsum = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto cumsum_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+
+    Real* cumsum = cumsum_ptr.release();
     cumsum[0] = weights.ptr[0] / total;
     for (Size i = 1; i < n; ++i) {
         cumsum[i] = cumsum[i - 1] + weights.ptr[i] / total;

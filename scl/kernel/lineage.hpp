@@ -4,8 +4,8 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/memory.hpp"
+#include "scl/core/macros.hpp"
 
-#include <algorithm>
 #include <cmath>
 
 // =============================================================================
@@ -31,23 +31,91 @@ namespace detail {
 
 // Union-Find data structure for lineage clustering
 struct UnionFind {
-    Index* parent;
-    Index* rank;
-    Size n;
+    Index* parent = nullptr;
+    Index* rank = nullptr;
+    Size n{};
+    // Aligned memory owner for parent
+    // NOLINTNEXTLINE
+    std::unique_ptr<Index[], scl::memory::AlignedDeleter<Index>> parent_ptr = nullptr;
+    // Aligned memory owner for rank
+    // NOLINTNEXTLINE
+    std::unique_ptr<Index[], scl::memory::AlignedDeleter<Index>> rank_ptr = nullptr;
+
+    UnionFind() noexcept = default;
 
     UnionFind(Size size) : n(size) {
-        parent = scl::memory::aligned_alloc<Index>(size, SCL_ALIGNMENT);
-        rank = scl::memory::aligned_alloc<Index>(size, SCL_ALIGNMENT);
+        parent_ptr = scl::memory::aligned_alloc<Index>(size, SCL_ALIGNMENT);
+        rank_ptr = scl::memory::aligned_alloc<Index>(size, SCL_ALIGNMENT);
+        parent = parent_ptr.get();
+        rank = rank_ptr.get();
         for (Size i = 0; i < size; ++i) {
             parent[i] = static_cast<Index>(i);
             rank[i] = 0;
         }
     }
 
-    ~UnionFind() {
-        scl::memory::aligned_free(parent);
-        scl::memory::aligned_free(rank);
+    // Copy constructor
+    UnionFind(const UnionFind& other) : n(other.n) {
+        if (n > 0) {
+            parent_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+            rank_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+            parent = parent_ptr.get();
+            rank = rank_ptr.get();
+            std::copy(other.parent, other.parent + n, parent);
+            std::copy(other.rank, other.rank + n, rank);
+        }
     }
+
+    // Copy assignment operator
+    UnionFind& operator=(const UnionFind& other) {
+        if (this == &other) return *this;
+        n = other.n;
+        if (n > 0) {
+            parent_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+            rank_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+            parent = parent_ptr.get();
+            rank = rank_ptr.get();
+            std::copy(other.parent, other.parent + n, parent);
+            std::copy(other.rank, other.rank + n, rank);
+        } else {
+            parent_ptr.reset();
+            rank_ptr.reset();
+            parent = nullptr;
+            rank = nullptr;
+        }
+        return *this;
+    }
+
+    // Move constructor
+    UnionFind(UnionFind&& other) noexcept
+        : parent(other.parent)
+        , rank(other.rank)
+        , n(other.n)
+        , parent_ptr(std::move(other.parent_ptr))
+        , rank_ptr(std::move(other.rank_ptr)) 
+    {
+        other.parent = nullptr;
+        other.rank = nullptr;
+        other.n = 0;
+    }
+
+    // Move assignment operator
+    UnionFind& operator=(UnionFind&& other) noexcept {
+        if (this == &other) return *this;
+        parent = other.parent;
+        rank = other.rank;
+        n = other.n;
+        parent_ptr = std::move(other.parent_ptr);
+        rank_ptr = std::move(other.rank_ptr);
+
+        other.parent = nullptr;
+        other.rank = nullptr;
+        other.n = 0;
+
+        return *this;
+    }
+
+    ~UnionFind() = default;
 
     Index find(Index x) {
         if (parent[x] != x) {
@@ -106,8 +174,10 @@ void lineage_coupling(
     }
 
     // Count cells per clone per type
-    Size* counts = scl::memory::aligned_alloc<Size>(n_clones * n_types, SCL_ALIGNMENT);
-    Size* clone_sizes = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_clones * n_types, SCL_ALIGNMENT);
+    Size* counts = counts_ptr.get();
+    auto clone_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    Size* clone_sizes = clone_sizes_ptr.get();
 
     for (Size i = 0; i < n_clones * n_types; ++i) counts[i] = 0;
     for (Size c = 0; c < n_clones; ++c) clone_sizes[c] = 0;
@@ -165,8 +235,10 @@ void fate_bias(
     SCL_CHECK_DIM(bias_scores.len >= n_clones, "Bias scores array too small");
 
     // Count cells per clone per type
-    Size* counts = scl::memory::aligned_alloc<Size>(n_clones * n_types, SCL_ALIGNMENT);
-    Size* clone_sizes = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_clones * n_types, SCL_ALIGNMENT);
+    auto clone_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    Size* counts = counts_ptr.get();
+    Size* clone_sizes = clone_sizes_ptr.get();
 
     for (Size i = 0; i < n_clones * n_types; ++i) counts[i] = 0;
     for (Size c = 0; c < n_clones; ++c) clone_sizes[c] = 0;
@@ -207,9 +279,6 @@ void fate_bias(
             bias_scores.ptr[c] = Real(1.0);
         }
     }
-
-    scl::memory::aligned_free(counts);
-    scl::memory::aligned_free(clone_sizes);
 }
 
 // =============================================================================
@@ -233,8 +302,10 @@ void build_lineage_tree(
     }
 
     // Compute mean pseudotime per clone
-    Real* mean_time = scl::memory::aligned_alloc<Real>(n_clones, SCL_ALIGNMENT);
-    Size* clone_sizes = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    auto mean_time_ptr = scl::memory::aligned_alloc<Real>(n_clones, SCL_ALIGNMENT);
+    auto clone_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    Real* mean_time = mean_time_ptr.get();
+    Size* clone_sizes = clone_sizes_ptr.get();
 
     for (Size c = 0; c < n_clones; ++c) {
         mean_time[c] = Real(0.0);
@@ -256,10 +327,14 @@ void build_lineage_tree(
     }
 
     // Sort clones by mean pseudotime
-    Index* sorted = scl::memory::aligned_alloc<Index>(n_clones, SCL_ALIGNMENT);
+    auto sorted_ptr = scl::memory::aligned_alloc<Index>(n_clones, SCL_ALIGNMENT);
+    Index* sorted = sorted_ptr.get();
     for (Size c = 0; c < n_clones; ++c) {
         sorted[c] = static_cast<Index>(c);
     }
+    // PERFORMANCE: std::sort required for custom comparator (indirect sorting by mean_time)
+    // Highway VQSort doesn't support custom comparators, std::sort is optimal for this case
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     std::sort(sorted, sorted + n_clones, [&](Index a, Index b) {
         return mean_time[a] < mean_time[b];
     });
@@ -286,10 +361,6 @@ void build_lineage_tree(
 
         parent[clone] = best_parent;
     }
-
-    scl::memory::aligned_free(mean_time);
-    scl::memory::aligned_free(clone_sizes);
-    scl::memory::aligned_free(sorted);
 }
 
 // =============================================================================
@@ -309,10 +380,11 @@ void lineage_distance(
     }
 
     // Compute depth of each node
-    Index* depth = scl::memory::aligned_alloc<Index>(n_clones, SCL_ALIGNMENT);
+    auto depth_ptr = scl::memory::aligned_alloc<Index>(n_clones, SCL_ALIGNMENT);
+    Index* depth = depth_ptr.get();
     for (Size c = 0; c < n_clones; ++c) {
         depth[c] = 0;
-        Index current = static_cast<Index>(c);
+        auto current = static_cast<Index>(c);
         while (parent[current] != config::NO_PARENT) {
             ++depth[c];
             current = parent[current];
@@ -323,12 +395,14 @@ void lineage_distance(
     for (Size i = 0; i < n_clones; ++i) {
         for (Size j = i + 1; j < n_clones; ++j) {
             // Find LCA (Lowest Common Ancestor)
-            Index* path_i = scl::memory::aligned_alloc<Index>(depth[i] + 1, SCL_ALIGNMENT);
-            Index* path_j = scl::memory::aligned_alloc<Index>(depth[j] + 1, SCL_ALIGNMENT);
+            auto path_i_ptr = scl::memory::aligned_alloc<Index>(depth[i] + 1, SCL_ALIGNMENT);
+            auto path_j_ptr = scl::memory::aligned_alloc<Index>(depth[j] + 1, SCL_ALIGNMENT);
+            Index* path_i = path_i_ptr.get();
+            Index* path_j = path_j_ptr.get();
 
             // Build paths to root
             Size len_i = 0, len_j = 0;
-            Index curr = static_cast<Index>(i);
+            auto curr = static_cast<Index>(i);
             while (curr != config::NO_PARENT) {
                 path_i[len_i++] = curr;
                 curr = parent[curr];
@@ -354,13 +428,8 @@ void lineage_distance(
 
             distance_matrix[i * n_clones + j] = static_cast<Real>(dist);
             distance_matrix[j * n_clones + i] = static_cast<Real>(dist);
-
-            scl::memory::aligned_free(path_i);
-            scl::memory::aligned_free(path_j);
         }
     }
-
-    scl::memory::aligned_free(depth);
 }
 
 // =============================================================================
@@ -378,11 +447,15 @@ void barcode_clone_assignment(
     if (n_cells == 0) return;
 
     // Sort by hash to group identical barcodes
-    Index* sorted = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto sorted_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    Index* sorted = sorted_ptr.get();
     for (Size i = 0; i < n_cells; ++i) {
         sorted[i] = static_cast<Index>(i);
     }
 
+    // PERFORMANCE: std::sort required for custom comparator (indirect sorting by barcode_hashes)
+    // Highway VQSort doesn't support custom comparators, std::sort is optimal for this case
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     std::sort(sorted, sorted + n_cells, [&](Index a, Index b) {
         return barcode_hashes[a] < barcode_hashes[b];
     });
@@ -399,8 +472,6 @@ void barcode_clone_assignment(
     }
 
     n_unique_clones = static_cast<Size>(current_clone + 1);
-
-    scl::memory::aligned_free(sorted);
 }
 
 // =============================================================================
@@ -425,8 +496,10 @@ void clonal_fate_probability(
     }
 
     // Count
-    Size* counts = scl::memory::aligned_alloc<Size>(n_clones * n_types, SCL_ALIGNMENT);
-    Size* clone_sizes = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_clones * n_types, SCL_ALIGNMENT);
+    auto clone_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    Size* counts = counts_ptr.get();
+    Size* clone_sizes = clone_sizes_ptr.get();
 
     for (Size i = 0; i < n_clones * n_types; ++i) counts[i] = 0;
     for (Size c = 0; c < n_clones; ++c) clone_sizes[c] = 0;
@@ -452,9 +525,6 @@ void clonal_fate_probability(
             }
         }
     }
-
-    scl::memory::aligned_free(counts);
-    scl::memory::aligned_free(clone_sizes);
 }
 
 // =============================================================================
@@ -489,8 +559,10 @@ void fate_bias_per_type(
     Size n_clones = static_cast<Size>(max_clone + 1);
 
     // Count cells per type per clone
-    Size* counts = scl::memory::aligned_alloc<Size>(n_types * n_clones, SCL_ALIGNMENT);
-    Size* type_sizes = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_types * n_clones, SCL_ALIGNMENT);
+    auto type_sizes_ptr = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    Size* counts = counts_ptr.get();
+    Size* type_sizes = type_sizes_ptr.get();
 
     for (Size i = 0; i < n_types * n_clones; ++i) counts[i] = 0;
     for (Size t = 0; t < n_types; ++t) type_sizes[t] = 0;
@@ -528,9 +600,6 @@ void fate_bias_per_type(
             bias_per_type.ptr[t] = Real(0.0);
         }
     }
-
-    scl::memory::aligned_free(counts);
-    scl::memory::aligned_free(type_sizes);
 }
 
 // =============================================================================
@@ -564,7 +633,8 @@ void lineage_sharing(
     Size n_clones = static_cast<Size>(max_clone + 1);
 
     // Track which types each clone contributes to
-    bool* clone_has_type = scl::memory::aligned_alloc<bool>(n_clones * n_types, SCL_ALIGNMENT);
+    auto clone_has_type_ptr = scl::memory::aligned_alloc<bool>(n_clones * n_types, SCL_ALIGNMENT);
+    bool* clone_has_type = clone_has_type_ptr.get();
 
     for (Size i = 0; i < n_clones * n_types; ++i) {
         clone_has_type[i] = false;
@@ -581,8 +651,10 @@ void lineage_sharing(
     }
 
     // Count shared clones between type pairs
-    Size* n_shared = scl::memory::aligned_alloc<Size>(n_types * n_types, SCL_ALIGNMENT);
-    Size* n_type_clones = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    auto n_shared_ptr = scl::memory::aligned_alloc<Size>(n_types * n_types, SCL_ALIGNMENT);
+    auto n_type_clones_ptr = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    Size* n_shared = n_shared_ptr.get();
+    Size* n_type_clones = n_type_clones_ptr.get();
 
     for (Size i = 0; i < n_types * n_types; ++i) n_shared[i] = 0;
     for (Size t = 0; t < n_types; ++t) n_type_clones[t] = 0;
@@ -614,10 +686,6 @@ void lineage_sharing(
             }
         }
     }
-
-    scl::memory::aligned_free(clone_has_type);
-    scl::memory::aligned_free(n_shared);
-    scl::memory::aligned_free(n_type_clones);
 }
 
 // =============================================================================
@@ -652,7 +720,8 @@ void lineage_commitment(
     Size n_clones = static_cast<Size>(max_clone + 1);
 
     // Compute fate bias per clone
-    Real* clone_bias = scl::memory::aligned_alloc<Real>(n_clones, SCL_ALIGNMENT);
+    auto clone_bias_ptr = scl::memory::aligned_alloc<Real>(n_clones, SCL_ALIGNMENT);
+    Real* clone_bias = clone_bias_ptr.get();
     Array<Real> bias_arr = {clone_bias, n_clones};
     fate_bias({clone_ids.ptr, n}, {cell_types.ptr, n}, bias_arr, n_types);
 
@@ -665,8 +734,6 @@ void lineage_commitment(
             commitment_scores.ptr[i] = Real(0.0);
         }
     }
-
-    scl::memory::aligned_free(clone_bias);
 }
 
 // =============================================================================
@@ -677,8 +744,7 @@ void progenitor_score(
     Array<const Index> clone_ids,
     Array<const Index> cell_types,
     Array<const Real> pseudotime,
-    Array<Real> progenitor_scores,
-    Size n_types
+    Array<Real> progenitor_scores
 ) {
     const Size n = clone_ids.len;
     SCL_CHECK_DIM(n == cell_types.len, "Clone IDs and cell types must have same length");
@@ -703,8 +769,10 @@ void progenitor_score(
     Size n_clones = static_cast<Size>(max_clone + 1);
 
     // Compute min pseudotime per clone
-    Real* min_time = scl::memory::aligned_alloc<Real>(n_clones, SCL_ALIGNMENT);
-    Size* clone_sizes = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    auto min_time_ptr = scl::memory::aligned_alloc<Real>(n_clones, SCL_ALIGNMENT);
+    auto clone_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    Real* min_time = min_time_ptr.get();
+    Size* clone_sizes = clone_sizes_ptr.get();
 
     for (Size c = 0; c < n_clones; ++c) {
         min_time[c] = std::numeric_limits<Real>::max();
@@ -733,9 +801,6 @@ void progenitor_score(
             progenitor_scores.ptr[i] = Real(0.0);
         }
     }
-
-    scl::memory::aligned_free(min_time);
-    scl::memory::aligned_free(clone_sizes);
 }
 
 // =============================================================================
@@ -771,14 +836,17 @@ void lineage_transition_probability(
     Size n_clones = static_cast<Size>(max_clone + 1);
 
     // For each clone, find transitions from early to late cells
-    Size* transition_counts = scl::memory::aligned_alloc<Size>(n_types * n_types, SCL_ALIGNMENT);
-    Size* type_counts = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    auto transition_counts_ptr = scl::memory::aligned_alloc<Size>(n_types * n_types, SCL_ALIGNMENT);
+    auto type_counts_ptr = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    Size* transition_counts = transition_counts_ptr.get();
+    Size* type_counts = type_counts_ptr.get();
 
     for (Size i = 0; i < n_types * n_types; ++i) transition_counts[i] = 0;
     for (Size t = 0; t < n_types; ++t) type_counts[t] = 0;
 
     // Group cells by clone
-    Size* clone_sizes = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    auto clone_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
+    Size* clone_sizes = clone_sizes_ptr.get();
     for (Size c = 0; c < n_clones; ++c) clone_sizes[c] = 0;
 
     for (Size i = 0; i < n; ++i) {
@@ -789,7 +857,8 @@ void lineage_transition_probability(
     }
 
     // For each clone with at least 2 cells, count transitions
-    Index* clone_cells = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto clone_cells_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    Index* clone_cells = clone_cells_ptr.get();
 
     for (Size c = 0; c < n_clones; ++c) {
         if (clone_sizes[c] < 2) continue;
@@ -803,6 +872,9 @@ void lineage_transition_probability(
         }
 
         // Sort by pseudotime
+        // PERFORMANCE: std::sort required for custom comparator (indirect sorting by pseudotime)
+        // Highway VQSort doesn't support custom comparators, std::sort is optimal for this case
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
         std::sort(clone_cells, clone_cells + clone_sizes[c], [&](Index a, Index b) {
             return pseudotime.ptr[a] < pseudotime.ptr[b];
         });
@@ -833,11 +905,6 @@ void lineage_transition_probability(
             }
         }
     }
-
-    scl::memory::aligned_free(transition_counts);
-    scl::memory::aligned_free(type_counts);
-    scl::memory::aligned_free(clone_sizes);
-    scl::memory::aligned_free(clone_cells);
 }
 
 // =============================================================================
@@ -853,7 +920,7 @@ void clone_generation(
 
     for (Size c = 0; c < n_clones; ++c) {
         generation[c] = 0;
-        Index current = static_cast<Index>(c);
+        auto current = static_cast<Index>(c);
         while (parent[current] != config::NO_PARENT) {
             ++generation[c];
             current = parent[current];

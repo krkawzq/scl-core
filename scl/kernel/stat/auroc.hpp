@@ -44,7 +44,7 @@ void auroc(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
-    Size n1_total, n2_total;
+    Size n1_total{}, n2_total{};
     count_groups(group_ids, n1_total, n2_total);
 
     SCL_CHECK_ARG(n1_total > 0 && n2_total > 0,
@@ -60,12 +60,12 @@ void auroc(
     }
 
     // Pre-allocate dual buffer pool
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const size_t n_threads = scl::threading::get_num_threads_runtime();
     scl::threading::DualWorkspacePool<T> buf_pool;
     buf_pool.init(n_threads, max_len);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -84,8 +84,8 @@ void auroc(
         );
 
         if (SCL_UNLIKELY(n1 == 0 && n2 == 0)) {
-            out_auroc[p] = Real(0.5);
-            out_p_values[p] = Real(1);
+            out_auroc[static_cast<Index>(p)] = Real(0.5);
+            out_p_values[static_cast<Index>(p)] = Real(1);
             return;
         }
 
@@ -98,7 +98,7 @@ void auroc(
         }
 
         // Compute rank sum
-        double R1, tie_sum;
+        double R1{}, tie_sum{};
         rank::compute_rank_sum_sparse(
             buf1, n1, n1_total,
             buf2, n2, n2_total,
@@ -106,13 +106,13 @@ void auroc(
         );
 
         // Compute U and AUROC
-        Real u_stat, p_val;
+        Real u_stat{}, p_val{};
         rank::compute_u_and_pvalue(R1, tie_sum, c, u_stat, p_val);
 
-        out_auroc[p] = rank::compute_auroc(
+        out_auroc[static_cast<Index>(p)] = rank::compute_auroc(
             static_cast<double>(u_stat), c.n1d, c.n2d
         );
-        out_p_values[p] = p_val;
+        out_p_values[static_cast<Index>(p)] = p_val;
     });
 }
 
@@ -131,7 +131,7 @@ void auroc_with_fc(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
-    Size n1_total, n2_total;
+    Size n1_total{}, n2_total{};
     count_groups(group_ids, n1_total, n2_total);
 
     SCL_CHECK_ARG(n1_total > 0 && n2_total > 0,
@@ -145,12 +145,12 @@ void auroc_with_fc(
         if (len > max_len) max_len = len;
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const size_t n_threads = scl::threading::get_num_threads_runtime();
     scl::threading::DualWorkspacePool<T> buf_pool;
     buf_pool.init(n_threads, max_len);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -170,11 +170,11 @@ void auroc_with_fc(
         // Compute log2 fold change
         double mean1 = sum1 * c.inv_n1;
         double mean2 = sum2 * c.inv_n2;
-        out_log2_fc[p] = compute_log2_fc(mean1, mean2);
+        out_log2_fc[static_cast<Index>(p)] = compute_log2_fc(mean1, mean2);
 
         if (SCL_UNLIKELY(n1 == 0 && n2 == 0)) {
-            out_auroc[p] = Real(0.5);
-            out_p_values[p] = Real(1);
+            out_auroc[static_cast<Index>(p)] = Real(0.5);
+            out_p_values[static_cast<Index>(p)] = Real(1);
             return;
         }
 
@@ -185,20 +185,20 @@ void auroc_with_fc(
             scl::sort::sort(Array<T>(buf2, n2));
         }
 
-        double R1, tie_sum;
+        double R1{}, tie_sum{};
         rank::compute_rank_sum_sparse(
             buf1, n1, n1_total,
             buf2, n2, n2_total,
             R1, tie_sum
         );
 
-        Real u_stat, p_val;
+        Real u_stat{}, p_val{};
         rank::compute_u_and_pvalue(R1, tie_sum, c, u_stat, p_val);
 
-        out_auroc[p] = rank::compute_auroc(
+        out_auroc[static_cast<Index>(p)] = rank::compute_auroc(
             static_cast<double>(u_stat), c.n1d, c.n2d
         );
-        out_p_values[p] = p_val;
+        out_p_values[static_cast<Index>(p)] = p_val;
     });
 }
 

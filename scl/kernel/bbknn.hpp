@@ -9,11 +9,12 @@
 #include "scl/core/algo.hpp"
 #include "scl/core/memory.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
 
 #include <cmath>
 #include <limits>
+#include <concepts>
+#include <memory>
 
 // =============================================================================
 // Batch Balanced KNN (BBKNN) for Sparse Matrices
@@ -28,13 +29,20 @@
 namespace scl::kernel::bbknn {
 
 // =============================================================================
+// C++20 Concepts
+// =============================================================================
+
+template <typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
 namespace config {
-    constexpr Size CHUNK_SIZE = 64;
-    constexpr Size PREFETCH_DISTANCE = 8;
-    constexpr Size MIN_SAMPLES_PARALLEL = 128;
+    inline constexpr Size CHUNK_SIZE = 64;
+    inline constexpr Size PREFETCH_DISTANCE = 8;
+    inline constexpr Size MIN_SAMPLES_PARALLEL = 128;
 }
 
 // =============================================================================
@@ -232,14 +240,14 @@ SCL_FORCE_INLINE T sparse_dot(
 // Norm Precomputation
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void compute_norms(
     const Sparse<T, IsCSR>& matrix,
     Array<T> norms_sq
 ) {
     const Index primary_dim = matrix.primary_dim();
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
         auto vals = matrix.primary_values_unsafe(static_cast<Index>(p));
         norms_sq[p] = scl::vectorize::sum_squared(Array<const T>(vals.data(), vals.size()));
     });
@@ -256,11 +264,11 @@ struct BatchGroups {
     Size n_batches;
     Size total_size;
 
-    SCL_FORCE_INLINE Size batch_size(Size b) const {
+    [[nodiscard]] SCL_FORCE_INLINE Size batch_size(Size b) const {
         return offsets[b + 1] - offsets[b];
     }
 
-    SCL_FORCE_INLINE const Index* batch_data(Size b) const {
+    [[nodiscard]] SCL_FORCE_INLINE const Index* batch_data(Size b) const {
         return indices + offsets[b];
     }
 };
@@ -273,33 +281,40 @@ inline void build_batch_groups(
     const Size N = batch_labels.len;
 
     // Count elements per batch
-    out.offsets = scl::memory::aligned_alloc<Size>(n_batches + 1, SCL_ALIGNMENT);
+    auto offsets_ptr = scl::memory::aligned_alloc<Size>(n_batches + 1, SCL_ALIGNMENT);
+    out.offsets = offsets_ptr.release();
     scl::algo::zero(out.offsets, n_batches + 1);
 
     for (Size i = 0; i < N; ++i) {
-        int32_t b = batch_labels[i];
+        int32_t b = batch_labels[static_cast<Index>(i)];
         if (b >= 0 && static_cast<Size>(b) < n_batches) {
-            out.offsets[b + 1]++;
+            const auto batch_idx = static_cast<Size>(b);
+            out.offsets[batch_idx + 1]++;
         }
     }
 
     // Prefix sum to get offsets
     for (Size b = 1; b <= n_batches; ++b) {
-        out.offsets[b] += out.offsets[b - 1];
+        // PERFORMANCE: Safe array access, b is within bounds
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        out.offsets[b] += out.offsets[static_cast<Size>(static_cast<Index>(b) - 1)];
     }
 
     out.total_size = out.offsets[n_batches];
     out.n_batches = n_batches;
 
     // Fill indices
-    out.indices = scl::memory::aligned_alloc<Index>(out.total_size, SCL_ALIGNMENT);
-    Size* write_pos = scl::memory::aligned_alloc<Size>(n_batches, SCL_ALIGNMENT);
+    auto indices_ptr = scl::memory::aligned_alloc<Index>(out.total_size, SCL_ALIGNMENT);
+    out.indices = indices_ptr.release();
+    auto write_pos_ptr = scl::memory::aligned_alloc<Size>(n_batches, SCL_ALIGNMENT);
+    Size* write_pos = write_pos_ptr.release();
     scl::algo::copy(out.offsets, write_pos, n_batches);
 
     for (Size i = 0; i < N; ++i) {
-        int32_t b = batch_labels[i];
+        int32_t b = batch_labels[static_cast<Index>(i)];
         if (b >= 0 && static_cast<Size>(b) < n_batches) {
-            out.indices[write_pos[b]++] = static_cast<Index>(i);
+            const auto batch_idx = static_cast<Size>(b);
+            out.indices[write_pos[batch_idx]++] = static_cast<Index>(i);
         }
     }
 
@@ -313,7 +328,7 @@ inline void free_batch_groups(BatchGroups& groups) {
     groups.offsets = nullptr;
 }
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void bbknn(
     const Sparse<T, IsCSR>& matrix,
     Array<const int32_t> batch_labels,
@@ -331,20 +346,22 @@ void bbknn(
     build_batch_groups(batch_labels, n_batches, batch_groups);
 
     // Pre-allocate workspace for all threads
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const auto n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
     const Size heap_entry_size = n_batches * k;
 
     // Allocate heap storage for all threads
     using HeapEntry = typename detail::KHeap<T>::Entry;
-    HeapEntry* all_heap_storage = scl::memory::aligned_alloc<HeapEntry>(
+    auto heap_storage_ptr = scl::memory::aligned_alloc<HeapEntry>(
         n_threads * heap_entry_size, SCL_ALIGNMENT);
+    HeapEntry* all_heap_storage = heap_storage_ptr.release();
 
     // Allocate heaps array for all threads
-    detail::KHeap<T>* all_heaps = scl::memory::aligned_alloc<detail::KHeap<T>>(
+    auto heaps_ptr = scl::memory::aligned_alloc<detail::KHeap<T>>(
         n_threads * n_batches, SCL_ALIGNMENT);
+    detail::KHeap<T>* all_heaps = heaps_ptr.release();
 
     // Initialize heaps for each thread
-    for (size_t t = 0; t < n_threads; ++t) {
+    for (Size t = 0; t < n_threads; ++t) {
         HeapEntry* thread_storage = all_heap_storage + t * heap_entry_size;
         detail::KHeap<T>* thread_heaps = all_heaps + t * n_batches;
         for (Size b = 0; b < n_batches; ++b) {
@@ -352,10 +369,10 @@ void bbknn(
         }
     }
 
-    scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), N, [&](Size i, Size thread_rank) {
         detail::KHeap<T>* heaps = all_heaps + thread_rank * n_batches;
 
-        Index query_idx = static_cast<Index>(i);
+        const auto query_idx = static_cast<Index>(i);
 
         auto q_vals_arr = matrix.primary_values_unsafe(query_idx);
         auto q_inds_arr = matrix.primary_indices_unsafe(query_idx);
@@ -412,7 +429,7 @@ void bbknn(
     free_batch_groups(batch_groups);
 }
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void bbknn(
     const Sparse<T, IsCSR>& matrix,
     Array<const int32_t> batch_labels,
@@ -424,7 +441,8 @@ void bbknn(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
-    T* norms_sq = scl::memory::aligned_alloc<T>(N, SCL_ALIGNMENT);
+    auto norms_sq_ptr = scl::memory::aligned_alloc<T>(N, SCL_ALIGNMENT);
+    T* norms_sq = norms_sq_ptr.release();
     compute_norms(matrix, Array<T>(norms_sq, N));
 
     bbknn(matrix, batch_labels, n_batches, k, out_indices, out_distances,

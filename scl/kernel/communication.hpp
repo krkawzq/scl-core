@@ -3,17 +3,18 @@
 #include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/core/sparse.hpp"
-#include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
 
 #include <cmath>
 #include <cstring>
 #include <atomic>
+#include <concepts>
+#include <memory>
+#include <array>
 
 // =============================================================================
 // FILE: scl/kernel/communication.hpp
@@ -35,17 +36,24 @@
 namespace scl::kernel::communication {
 
 // =============================================================================
+// C++20 Concepts
+// =============================================================================
+
+template <typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
 namespace config {
-    constexpr Index DEFAULT_N_PERM = 1000;
-    constexpr Real DEFAULT_PVAL_THRESHOLD = Real(0.05);
-    constexpr Real EPSILON = Real(1e-15);
-    constexpr Real MIN_EXPRESSION = Real(0.1);
-    constexpr Real MIN_PERCENT_EXPRESSED = Real(0.1);
-    constexpr Size PARALLEL_THRESHOLD = 256;
-    constexpr Size EARLY_STOP_CHECK = 100;
+    inline constexpr Index DEFAULT_N_PERM = 1000;
+    inline constexpr Real DEFAULT_PVAL_THRESHOLD = Real(0.05);
+    inline constexpr Real EPSILON = Real(1e-15);
+    inline constexpr Real MIN_EXPRESSION = Real(0.1);
+    inline constexpr Real MIN_PERCENT_EXPRESSED = Real(0.1);
+    inline constexpr Size PARALLEL_THRESHOLD = 256;
+    inline constexpr Size EARLY_STOP_CHECK = 100;
 }
 
 // =============================================================================
@@ -64,20 +72,20 @@ namespace detail {
 
 // Xoshiro256++ PRNG
 class FastRNG {
-    alignas(32) uint64_t s[4];
+    alignas(32) std::array<uint64_t, 4> s{};
     
     static SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) noexcept {
         return (x << k) | (x >> (64 - k));
     }
 public:
-    explicit FastRNG(uint64_t seed) noexcept {
+    explicit constexpr FastRNG(uint64_t seed) noexcept {
         uint64_t z = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (auto& val : s) {
             z += 0x9e3779b97f4a7c15ULL;
             uint64_t t = z;
             t = (t ^ (t >> 30)) * 0xbf58476d1ce4e5b9ULL;
             t = (t ^ (t >> 27)) * 0x94d049bb133111ebULL;
-            s[i] = t ^ (t >> 31);
+            val = t ^ (t >> 31);
         }
     }
 
@@ -92,15 +100,18 @@ public:
     // Lemire's nearly divisionless method (compatible implementation)
     SCL_FORCE_INLINE Size bounded(Size n) noexcept {
         uint64_t x = next();
-        uint64_t m;
+        uint64_t m = 0;
         
         #if defined(__SIZEOF_INT128__) && defined(__GNUC__)
         m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
-        uint64_t threshold = static_cast<uint64_t>(-static_cast<int64_t>(n)) % n;
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
+        const uint64_t threshold = static_cast<uint64_t>(-static_cast<int64_t>(n)) % n;
         while (static_cast<__uint128_t>(m) * static_cast<__uint128_t>(n) < static_cast<__uint128_t>(x)) {
             x = next();
             m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
         }
+        // Use threshold to suppress unused warning
+        (void)threshold;
         #else
         // Fallback: use modulo (slightly slower but more compatible)
         m = x % static_cast<uint64_t>(n);
@@ -114,14 +125,14 @@ public:
     }
     
     void jump() noexcept {
-        static const uint64_t JUMP[] = {
+        static constexpr std::array<uint64_t, 4> JUMP = {
             0x180ec6d33cfd0abaULL, 0xd5a61266f0c9392cULL,
             0xa9582618e03fc9aaULL, 0x39abdc4529b1661cULL
         };
         uint64_t s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-        for (int i = 0; i < 4; ++i) {
+        for (const auto jump_val : JUMP) {
             for (int b = 0; b < 64; ++b) {
-                if (JUMP[i] & (1ULL << b)) {
+                if (jump_val & (1ULL << b)) {
                     s0 ^= s[0]; s1 ^= s[1]; s2 ^= s[2]; s3 ^= s[3];
                 }
                 next();
@@ -158,7 +169,7 @@ SCL_FORCE_INLINE Real simd_sum(const Real* SCL_RESTRICT v, Index n) noexcept {
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const auto lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -179,7 +190,7 @@ SCL_FORCE_INLINE Real simd_dot(const Real* SCL_RESTRICT a, const Real* SCL_RESTR
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const auto lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -198,7 +209,7 @@ SCL_FORCE_INLINE Real simd_dot(const Real* SCL_RESTRICT a, const Real* SCL_RESTR
 }
 
 // Extract dense gene expression vector from sparse matrix
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void extract_gene_expression(
     const Sparse<T, IsCSR>& X,
     Index gene,
@@ -272,7 +283,7 @@ void build_type_masks(
 }
 
 // Compute mean expression for a cell type using mask
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 Real compute_mean_expression(
     const Sparse<T, IsCSR>& X,
     Index gene,
@@ -304,7 +315,8 @@ Real compute_mean_expression(
         }
     } else {
         // Build lookup set
-        bool* valid = scl::memory::aligned_alloc<bool>(n_cells, SCL_ALIGNMENT);
+        auto valid_ptr = scl::memory::aligned_alloc<bool>(n_cells, SCL_ALIGNMENT);
+        bool* valid = valid_ptr.release();
         scl::algo::zero(valid, static_cast<Size>(n_cells));
         for (Index i = 0; i < n_subset; ++i) {
             if (cell_indices[i] < n_cells) valid[cell_indices[i]] = true;
@@ -383,12 +395,17 @@ struct TypeInfo {
         n_cells = _n_cells;
         n_types = _n_types;
         
-        cells = scl::memory::aligned_alloc<Index*>(n_types, SCL_ALIGNMENT);
-        sizes = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
-        masks = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_types) * n_cells, SCL_ALIGNMENT);
-        counts = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+        auto cells_ptr = scl::memory::aligned_alloc<Index*>(n_types, SCL_ALIGNMENT);
+        auto sizes_ptr = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+        auto masks_ptr = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_types) * n_cells, SCL_ALIGNMENT);
+        auto counts_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+        cells = cells_ptr.release();
+        sizes = sizes_ptr.release();
+        masks = masks_ptr.release();
+        counts = counts_ptr.release();
         
-        Index* buffer = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+        auto buffer_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+        Index* buffer = buffer_ptr.release();
         
         detail::build_type_masks(labels, n_cells, n_types, masks, counts);
         
@@ -397,7 +414,8 @@ struct TypeInfo {
             for (Index c = 0; c < n_cells; ++c) {
                 if (labels[c] == t) buffer[sizes[t]++] = c;
             }
-            cells[t] = scl::memory::aligned_alloc<Index>(sizes[t] + 1, SCL_ALIGNMENT);
+            auto cell_ptr = scl::memory::aligned_alloc<Index>(sizes[t] + 1, SCL_ALIGNMENT);
+            cells[t] = cell_ptr.release();
             scl::algo::copy(buffer, cells[t], static_cast<Size>(sizes[t]));
         }
         
@@ -419,7 +437,7 @@ struct TypeInfo {
 // L-R Score Matrix - Optimized with Precomputation
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void lr_score_matrix(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> cell_type_labels,
@@ -433,19 +451,23 @@ void lr_score_matrix(
     Size total = static_cast<Size>(n_types) * n_types;
     scl::algo::zero(score_matrix, total);
 
-    TypeInfo info;
+    TypeInfo info{};
     info.init(cell_type_labels.ptr, n_cells, n_types);
 
     // Extract gene expressions
-    Real* ligand_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* receptor_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto ligand_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto receptor_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* ligand_expr = ligand_expr_ptr.release();
+    Real* receptor_expr = receptor_expr_ptr.release();
     
     detail::extract_gene_expression(expression, ligand_gene, n_cells, ligand_expr);
     detail::extract_gene_expression(expression, receptor_gene, n_cells, receptor_expr);
 
     // Compute means per type using masks
-    Real* ligand_means = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
-    Real* receptor_means = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto ligand_means_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto receptor_means_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    Real* ligand_means = ligand_means_ptr.release();
+    Real* receptor_means = receptor_means_ptr.release();
     
     for (Index t = 0; t < n_types; ++t) {
         Real* mask = info.masks + static_cast<Size>(t) * n_cells;
@@ -472,7 +494,7 @@ void lr_score_matrix(
 // Batch L-R Scores - Parallel Across Pairs
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void lr_score_batch(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> cell_type_labels,
@@ -488,7 +510,7 @@ void lr_score_batch(
     Size total = static_cast<Size>(n_pairs) * pair_size;
     scl::algo::zero(scores, total);
 
-    TypeInfo info;
+    TypeInfo info{};
     info.init(cell_type_labels.ptr, n_cells, n_types);
 
     // Find unique genes
@@ -500,12 +522,14 @@ void lr_score_batch(
     ++max_gene;
 
     // Precompute all gene expressions (parallel)
-    Real* gene_exprs = scl::memory::aligned_alloc<Real>(
+    auto gene_exprs_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(max_gene) * n_cells, SCL_ALIGNMENT);
+    Real* gene_exprs = gene_exprs_ptr.release();
     scl::algo::zero(gene_exprs, static_cast<Size>(max_gene) * static_cast<Size>(n_cells));
 
     // Mark which genes we need
-    bool* need_gene = scl::memory::aligned_alloc<bool>(max_gene, SCL_ALIGNMENT);
+    auto need_gene_ptr = scl::memory::aligned_alloc<bool>(max_gene, SCL_ALIGNMENT);
+    bool* need_gene = need_gene_ptr.release();
     scl::algo::zero(need_gene, static_cast<Size>(max_gene));
     for (Index p = 0; p < n_pairs; ++p) {
         need_gene[ligand_genes[p]] = true;
@@ -513,7 +537,7 @@ void lr_score_batch(
     }
 
     // Extract needed genes in parallel
-    scl::threading::parallel_for(Size(0), static_cast<Size>(max_gene), [&](size_t g, size_t) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(max_gene), [&](Size g, Size) {
         if (need_gene[g]) {
             detail::extract_gene_expression(expression, static_cast<Index>(g), n_cells,
                                            gene_exprs + g * n_cells);
@@ -521,9 +545,10 @@ void lr_score_batch(
     });
 
     // Precompute mean expressions for all genes x types
-    Real* mean_exprs = scl::memory::aligned_alloc<Real>(
+    auto mean_exprs_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(max_gene) * n_types, SCL_ALIGNMENT);
-    scl::threading::parallel_for(Size(0), static_cast<Size>(max_gene), [&](size_t g, size_t) {
+    Real* mean_exprs = mean_exprs_ptr.release();
+    scl::threading::parallel_for(Size(0), static_cast<Size>(max_gene), [&](Size g, Size) {
         if (!need_gene[g]) return;
         
         Real* expr = gene_exprs + g * n_cells;
@@ -534,7 +559,7 @@ void lr_score_batch(
     });
 
     // Compute scores in parallel across pairs
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_pairs), [&](size_t p, size_t) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_pairs), [&](Size p, Size) {
         Index lg = ligand_genes[p];
         Index rg = receptor_genes[p];
         Real* pair_scores = scores + p * pair_size;
@@ -560,7 +585,7 @@ void lr_score_batch(
 // Permutation Test - Parallel
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void lr_permutation_test(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> cell_type_labels,
@@ -575,12 +600,14 @@ void lr_permutation_test(
     ScoreMethod method = ScoreMethod::MeanProduct,
     uint64_t seed = 42
 ) {
-    TypeInfo info;
+    TypeInfo info{};
     info.init(cell_type_labels.ptr, n_cells, count_cell_types(cell_type_labels, n_cells));
 
     // Extract expressions
-    Real* ligand_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* receptor_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto ligand_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto receptor_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* ligand_expr = ligand_expr_ptr.release();
+    Real* receptor_expr = receptor_expr_ptr.release();
     detail::extract_gene_expression(expression, ligand_gene, n_cells, ligand_expr);
     detail::extract_gene_expression(expression, receptor_gene, n_cells, receptor_expr);
 
@@ -592,17 +619,20 @@ void lr_permutation_test(
     observed_score = detail::compute_score(mean_l, mean_r, method);
 
     // Parallel permutation test
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const auto n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
     std::atomic<Index> global_count{0};
     
-    Index perms_per_thread = (n_permutations + n_threads - 1) / n_threads;
-    scl::threading::parallel_for(Size(0), n_threads, [&](size_t t, size_t) {
+    Index perms_per_thread = (n_permutations + static_cast<Index>(n_threads) - 1) / static_cast<Index>(n_threads);
+    scl::threading::parallel_for(Size(0), n_threads, [&](Size t, Size) {
         detail::FastRNG rng(seed);
-        for (size_t j = 0; j < t; ++j) rng.jump();
+        for (Size j = 0; j < t; ++j) rng.jump();
 
-        Index* perm_idx = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
-        Real* perm_mask_s = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-        Real* perm_mask_r = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+        auto perm_idx_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+        auto perm_mask_s_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+        auto perm_mask_r_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+        Index* perm_idx = perm_idx_ptr.release();
+        Real* perm_mask_s = perm_mask_s_ptr.release();
+        Real* perm_mask_r = perm_mask_r_ptr.release();
         
         for (Index c = 0; c < n_cells; ++c) perm_idx[c] = c;
 
@@ -654,7 +684,7 @@ void lr_permutation_test(
 // Communication Probability - Fully Parallel
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void communication_probability(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> cell_type_labels,
@@ -674,7 +704,7 @@ void communication_probability(
     scl::algo::zero(p_values, total);
     if (scores) scl::algo::zero(scores, total);
 
-    TypeInfo info;
+    TypeInfo info{};
     info.init(cell_type_labels.ptr, n_cells, n_types);
 
     // Precompute gene expressions
@@ -685,18 +715,20 @@ void communication_probability(
     }
     ++max_gene;
 
-    Real* gene_exprs = scl::memory::aligned_alloc<Real>(
+    auto gene_exprs_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(max_gene) * n_cells, SCL_ALIGNMENT);
+    Real* gene_exprs = gene_exprs_ptr.release();
     scl::algo::zero(gene_exprs, static_cast<Size>(max_gene) * static_cast<Size>(n_cells));
 
-    bool* need_gene = scl::memory::aligned_alloc<bool>(max_gene, SCL_ALIGNMENT);
+    auto need_gene_ptr = scl::memory::aligned_alloc<bool>(max_gene, SCL_ALIGNMENT);
+    bool* need_gene = need_gene_ptr.release();
     scl::algo::zero(need_gene, static_cast<Size>(max_gene));
     for (Index p = 0; p < n_pairs; ++p) {
         need_gene[ligand_genes[p]] = true;
         need_gene[receptor_genes[p]] = true;
     }
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(max_gene), [&](size_t g, size_t) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(max_gene), [&](Size g, Size) {
         if (need_gene[g]) {
             detail::extract_gene_expression(expression, static_cast<Index>(g), n_cells,
                                            gene_exprs + g * n_cells);
@@ -704,7 +736,7 @@ void communication_probability(
     });
 
     // Process pairs in parallel
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_pairs), [&](size_t p, size_t tid) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_pairs), [&](Size p, [[maybe_unused]] Size tid) {
         Index lg = ligand_genes[p];
         Index rg = receptor_genes[p];
         Real* pair_pvals = p_values + p * pair_size;
@@ -713,7 +745,8 @@ void communication_probability(
         const Real* r_expr = gene_exprs + static_cast<Size>(rg) * n_cells;
 
         // Compute observed scores
-        Real* observed = scl::memory::aligned_alloc<Real>(pair_size, SCL_ALIGNMENT);
+        auto observed_ptr = scl::memory::aligned_alloc<Real>(pair_size, SCL_ALIGNMENT);
+        Real* observed = observed_ptr.release();
         
         for (Index s = 0; s < n_types; ++s) {
             Real* mask_s = info.masks + static_cast<Size>(s) * n_cells;
@@ -729,12 +762,16 @@ void communication_probability(
         }
 
         // Permutation test
-        Index* count_extreme = scl::memory::aligned_alloc<Index>(pair_size, SCL_ALIGNMENT);
+        auto count_extreme_ptr = scl::memory::aligned_alloc<Index>(pair_size, SCL_ALIGNMENT);
+        Index* count_extreme = count_extreme_ptr.release();
         scl::algo::zero(count_extreme, pair_size);
         detail::FastRNG rng(seed + p);
-        Index* perm_idx = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
-        Real* perm_masks = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_types) * n_cells, SCL_ALIGNMENT);
-        Real* perm_counts = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+        auto perm_idx_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+        auto perm_masks_ptr = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_types) * n_cells, SCL_ALIGNMENT);
+        auto perm_counts_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+        Index* perm_idx = perm_idx_ptr.release();
+        Real* perm_masks = perm_masks_ptr.release();
+        Real* perm_counts = perm_counts_ptr.release();
 
         for (Index c = 0; c < n_cells; ++c) perm_idx[c] = c;
 
@@ -862,7 +899,7 @@ inline void aggregate_to_network(
 // Sender/Receiver Score (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void sender_score(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> cell_type_labels,
@@ -874,14 +911,16 @@ void sender_score(
 ) {
     scl::algo::zero(scores, static_cast<Size>(n_types));
 
-    TypeInfo info;
+    TypeInfo info{};
     info.init(cell_type_labels.ptr, n_cells, n_types);
 
     // Parallel across ligands with reduction
-    Real* partial = scl::memory::aligned_alloc<Real>(
+    auto partial_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(n_ligands) * n_types, SCL_ALIGNMENT);
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_ligands), [&](size_t l, size_t) {
-        Real* expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* partial = partial_ptr.release();
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_ligands), [&](Size l, Size) {
+        auto expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+        Real* expr = expr_ptr.release();
         detail::extract_gene_expression(expression, ligand_genes[l], n_cells, expr);
 
         for (Index t = 0; t < n_types; ++t) {
@@ -908,7 +947,7 @@ void sender_score(
     info.destroy();
 }
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void receiver_score(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> cell_type_labels,
@@ -921,13 +960,15 @@ void receiver_score(
     // Same implementation as sender_score with receptor genes
     scl::algo::zero(scores, static_cast<Size>(n_types));
 
-    TypeInfo info;
+    TypeInfo info{};
     info.init(cell_type_labels.ptr, n_cells, n_types);
 
-    Real* partial = scl::memory::aligned_alloc<Real>(
+    auto partial_ptr = scl::memory::aligned_alloc<Real>(
         static_cast<Size>(n_receptors) * n_types, SCL_ALIGNMENT);
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_receptors), [&](size_t r, size_t) {
-        Real* expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* partial = partial_ptr.release();
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_receptors), [&](Size r, Size) {
+        auto expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+        Real* expr = expr_ptr.release();
         detail::extract_gene_expression(expression, receptor_genes[r], n_cells, expr);
 
         for (Index t = 0; t < n_types; ++t) {
@@ -999,7 +1040,7 @@ inline void network_centrality(
 // Spatial Communication Score (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR, typename TG, bool IsCSR_G>
+template <Arithmetic T, bool IsCSR, Arithmetic TG, bool IsCSR_G>
 void spatial_communication_score(
     const Sparse<T, IsCSR>& expression,
     const Sparse<TG, IsCSR_G>& spatial_graph,
@@ -1010,13 +1051,15 @@ void spatial_communication_score(
 ) {
     scl::algo::zero(cell_scores, static_cast<Size>(n_cells));
 
-    Real* ligand_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* receptor_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto ligand_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto receptor_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* ligand_expr = ligand_expr_ptr.release();
+    Real* receptor_expr = receptor_expr_ptr.release();
     detail::extract_gene_expression(expression, ligand_gene, n_cells, ligand_expr);
     detail::extract_gene_expression(expression, receptor_gene, n_cells, receptor_expr);
 
     // Parallel cell scoring
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells), [&](size_t i, size_t) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells), [&](Size i, Size) {
         auto neighbors = spatial_graph.primary_indices_unsafe(static_cast<Index>(i));
         auto weights = spatial_graph.primary_values_unsafe(static_cast<Index>(i));
         Index n_neighbors = spatial_graph.primary_length_unsafe(static_cast<Index>(i));
@@ -1076,7 +1119,8 @@ inline void aggregate_to_pathways(
     Size total = static_cast<Size>(n_pathways) * type_size;
     scl::algo::zero(pathway_scores, total);
 
-    Index* pathway_counts = scl::memory::aligned_alloc<Index>(n_pathways, SCL_ALIGNMENT);
+    auto pathway_counts_ptr = scl::memory::aligned_alloc<Index>(n_pathways, SCL_ALIGNMENT);
+    Index* pathway_counts = pathway_counts_ptr.release();
     scl::algo::zero(pathway_counts, static_cast<Size>(n_pathways));
 
     for (Index p = 0; p < n_pairs; ++p) {
@@ -1091,7 +1135,7 @@ inline void aggregate_to_pathways(
     }
 
     // Average in parallel
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_pathways), [&](size_t pw, size_t) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_pathways), [&](Size pw, Size) {
         if (pathway_counts[pw] > 0) {
             Real* scores = pathway_scores + pw * type_size;
             Real inv = Real(1) / static_cast<Real>(pathway_counts[pw]);
@@ -1108,7 +1152,7 @@ inline void aggregate_to_pathways(
 // Differential Communication (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void differential_communication(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> cell_type_labels,
@@ -1128,14 +1172,20 @@ void differential_communication(
     if (log_fold_change) scl::algo::zero(log_fold_change, total);
 
     // Split cells by condition and type
-    Index** type_cells1 = scl::memory::aligned_alloc<Index*>(n_types, SCL_ALIGNMENT);
-    Index** type_cells2 = scl::memory::aligned_alloc<Index*>(n_types, SCL_ALIGNMENT);
-    Index* type_sizes1 = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
-    Index* type_sizes2 = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    auto type_cells1_ptr = scl::memory::aligned_alloc<Index*>(n_types, SCL_ALIGNMENT);
+    auto type_cells2_ptr = scl::memory::aligned_alloc<Index*>(n_types, SCL_ALIGNMENT);
+    auto type_sizes1_ptr = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    auto type_sizes2_ptr = scl::memory::aligned_alloc<Index>(n_types, SCL_ALIGNMENT);
+    Index** type_cells1 = type_cells1_ptr.release();
+    Index** type_cells2 = type_cells2_ptr.release();
+    Index* type_sizes1 = type_sizes1_ptr.release();
+    Index* type_sizes2 = type_sizes2_ptr.release();
 
     for (Index t = 0; t < n_types; ++t) {
-        type_cells1[t] = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
-        type_cells2[t] = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+        auto cell1_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+        auto cell2_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+        type_cells1[t] = cell1_ptr.release();
+        type_cells2[t] = cell2_ptr.release();
         type_sizes1[t] = 0;
         type_sizes2[t] = 0;
     }
@@ -1151,10 +1201,14 @@ void differential_communication(
     }
 
     // Build masks for each condition
-    Real* masks1 = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_types) * n_cells, SCL_ALIGNMENT);
-    Real* masks2 = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_types) * n_cells, SCL_ALIGNMENT);
-    Real* counts1 = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
-    Real* counts2 = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto masks1_ptr = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_types) * n_cells, SCL_ALIGNMENT);
+    auto masks2_ptr = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_types) * n_cells, SCL_ALIGNMENT);
+    auto counts1_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto counts2_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    Real* masks1 = masks1_ptr.release();
+    Real* masks2 = masks2_ptr.release();
+    Real* counts1 = counts1_ptr.release();
+    Real* counts2 = counts2_ptr.release();
     scl::algo::zero(masks1, static_cast<Size>(n_types) * static_cast<Size>(n_cells));
     scl::algo::zero(masks2, static_cast<Size>(n_types) * static_cast<Size>(n_cells));
 
@@ -1170,11 +1224,13 @@ void differential_communication(
     }
 
     // Parallel across pairs
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_pairs), [&](size_t p, size_t) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_pairs), [&](Size p, Size) {
         Index lg = ligand_genes[p];
         Index rg = receptor_genes[p];
-        Real* l_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-        Real* r_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+        auto l_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+        auto r_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+        Real* l_expr = l_expr_ptr.release();
+        Real* r_expr = r_expr_ptr.release();
         detail::extract_gene_expression(expression, lg, n_cells, l_expr);
         detail::extract_gene_expression(expression, rg, n_cells, r_expr);
 
@@ -1227,7 +1283,7 @@ void differential_communication(
 // Expression Specificity (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void expression_specificity(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> cell_type_labels,
@@ -1238,10 +1294,11 @@ void expression_specificity(
 ) {
     scl::algo::zero(specificity, static_cast<Size>(n_types));
 
-    TypeInfo info;
+    TypeInfo info{};
     info.init(cell_type_labels.ptr, n_cells, n_types);
 
-    Real* expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* expr = expr_ptr.release();
     detail::extract_gene_expression(expression, gene, n_cells, expr);
 
     Real sum_means = 0;
@@ -1267,7 +1324,7 @@ void expression_specificity(
 // NATMI Edge Weight
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void natmi_edge_weight(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> cell_type_labels,
@@ -1280,21 +1337,27 @@ void natmi_edge_weight(
     Size total = static_cast<Size>(n_types) * n_types;
     scl::algo::zero(edge_weights, total);
 
-    Real* ligand_spec = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
-    Real* receptor_spec = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto ligand_spec_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto receptor_spec_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    Real* ligand_spec = ligand_spec_ptr.release();
+    Real* receptor_spec = receptor_spec_ptr.release();
     expression_specificity(expression, cell_type_labels, ligand_gene, n_cells, n_types, ligand_spec);
     expression_specificity(expression, cell_type_labels, receptor_gene, n_cells, n_types, receptor_spec);
 
-    TypeInfo info;
+    TypeInfo info{};
     info.init(cell_type_labels.ptr, n_cells, n_types);
 
-    Real* l_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* r_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto l_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto r_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* l_expr = l_expr_ptr.release();
+    Real* r_expr = r_expr_ptr.release();
     detail::extract_gene_expression(expression, ligand_gene, n_cells, l_expr);
     detail::extract_gene_expression(expression, receptor_gene, n_cells, r_expr);
 
-    Real* l_means = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
-    Real* r_means = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto l_means_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    auto r_means_ptr = scl::memory::aligned_alloc<Real>(n_types, SCL_ALIGNMENT);
+    Real* l_means = l_means_ptr.release();
+    Real* r_means = r_means_ptr.release();
 
     for (Index t = 0; t < n_types; ++t) {
         Real* mask = info.masks + static_cast<Size>(t) * n_cells;

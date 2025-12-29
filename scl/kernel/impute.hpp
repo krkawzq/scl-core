@@ -3,7 +3,6 @@
 #include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/core/sparse.hpp"
-#include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
@@ -76,7 +75,7 @@ SCL_HOT SCL_FORCE_INLINE void axpy_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_alpha = s::Set(d, alpha);
 
@@ -103,7 +102,7 @@ SCL_HOT SCL_FORCE_INLINE void scale_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_alpha = s::Set(d, alpha);
 
@@ -126,7 +125,7 @@ SCL_HOT SCL_FORCE_INLINE Real dot_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -236,9 +235,7 @@ template <typename T, bool IsCSR>
 SCL_FORCE_INLINE Real get_expression(
     const Sparse<T, IsCSR>& X,
     Index cell,
-    Index gene,
-    Index n_cells,
-    Index n_genes
+    Index gene
 ) noexcept {
     T val;
     if constexpr (IsCSR) {
@@ -450,7 +447,7 @@ void knn_impute_dense(
     }
 
     // Step 2: Impute zeros (parallel over cells)
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Per-thread workspace
     scl::threading::WorkspacePool<Real> values_pool;
@@ -549,7 +546,7 @@ void knn_impute_weighted_dense(
         });
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::WorkspacePool<Real> values_pool;
     scl::threading::WorkspacePool<uint8_t> has_value_pool;
@@ -644,7 +641,9 @@ void diffusion_impute_sparse_transition(
     }
 
     // Diffusion with double buffering
-    Real* temp = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+
+    Real* temp = temp_ptr.release();
 
     Real* buf_in = X_imputed;
     Real* buf_out = temp;
@@ -699,7 +698,9 @@ void magic_impute(
     }
 
     // Precompute row sums (parallel)
-    Real* row_sums = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto row_sums_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* row_sums = row_sums_ptr.release();
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         auto values = affinity_matrix.primary_values_unsafe(static_cast<Index>(i));
@@ -713,7 +714,9 @@ void magic_impute(
     });
 
     // Diffusion with double buffering
-    Real* temp = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+
+    Real* temp = temp_ptr.release();
 
     Real* buf_in = X_imputed;
     Real* buf_out = temp;
@@ -748,12 +751,19 @@ inline void alra_impute(
     const Size total = N * G;
     const Index k = scl::algo::min2(rank, scl::algo::min2(n_cells, n_genes));
 
-    Real* U = scl::memory::aligned_alloc<Real>(N * k, SCL_ALIGNMENT);
-    Real* V = scl::memory::aligned_alloc<Real>(G * k, SCL_ALIGNMENT);
-    Real* S = scl::memory::aligned_alloc<Real>(k, SCL_ALIGNMENT);
+    auto U_ptr = scl::memory::aligned_alloc<Real>(N * k, SCL_ALIGNMENT);
+
+
+    Real* U = U_ptr.release();
+    auto V_ptr = scl::memory::aligned_alloc<Real>(G * k, SCL_ALIGNMENT);
+
+    Real* V = V_ptr.release();
+    auto S_ptr = scl::memory::aligned_alloc<Real>(k, SCL_ALIGNMENT);
+
+    Real* S = S_ptr.release();
 
     // Per-thread workspace for u computation
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     scl::threading::WorkspacePool<Real> u_workspace;
     u_workspace.init(n_threads, N);
 
@@ -796,10 +806,12 @@ inline void alra_impute(
             scl::algo::zero(v_col, G);
 
             // Thread-local partial sums
-            Real** partials = static_cast<Real**>(
-                scl::memory::aligned_alloc<Real*>(n_threads, SCL_ALIGNMENT));
-            for (size_t t = 0; t < n_threads; ++t) {
-                partials[t] = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+            // Allocate array of pointers for thread-local partials (unique_ptr ensures proper deallocation)
+            auto partials_ptr = scl::memory::aligned_alloc<Real*>(n_threads, SCL_ALIGNMENT);
+            Real** partials = partials_ptr.get();
+            for (Size t = 0; t < n_threads; ++t) {
+                auto row_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+                partials[t] = row_ptr.release();
                 scl::algo::zero(partials[t], G);
             }
 
@@ -810,7 +822,7 @@ inline void alra_impute(
             });
 
             // Reduce
-            for (size_t t = 0; t < n_threads; ++t) {
+            for (Size t = 0; t < n_threads; ++t) {
                 for (Size j = 0; j < G; ++j) {
                     v_col[j] += partials[t][j];
                 }
@@ -891,12 +903,12 @@ void impute_selected_genes(
 ) {
     const Size N = static_cast<Size>(n_cells);
     const Size K = static_cast<Size>(k_neighbors);
-    const Index n_impute_genes = static_cast<Index>(genes_to_impute.len);
+    const auto n_impute_genes = static_cast<Index>(genes_to_impute.len);
     const Size total = N * static_cast<Size>(n_impute_genes);
 
     scl::algo::zero(X_imputed, total);
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::WorkspacePool<Real> values_pool;
     scl::threading::WorkspacePool<Real> weights_pool;
@@ -971,18 +983,23 @@ void detect_dropouts(
     const Size G = static_cast<Size>(n_genes);
     const Size N = static_cast<Size>(n_cells);
 
-    Real* gene_means = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
-    Index* gene_nnz = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+    auto gene_means_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+
+
+    Real* gene_means = gene_means_ptr.release();
+    auto gene_nnz_ptr = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+
+    Index* gene_nnz = gene_nnz_ptr.release();
 
     scl::algo::zero(gene_means, G);
     scl::algo::zero(gene_nnz, G);
 
     if constexpr (IsCSR) {
         // Parallel over cells, atomic accumulation
-        std::atomic<int64_t>* atomic_sums = static_cast<std::atomic<int64_t>*>(
-            scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT));
-        std::atomic<Index>* atomic_nnz = static_cast<std::atomic<Index>*>(
-            scl::memory::aligned_alloc<std::atomic<Index>>(G, SCL_ALIGNMENT));
+        auto atomic_sums_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT);
+        std::atomic<int64_t>* atomic_sums = atomic_sums_ptr.get();
+        auto atomic_nnz_ptr = scl::memory::aligned_alloc<std::atomic<Index>>(G, SCL_ALIGNMENT);
+        std::atomic<Index>* atomic_nnz = atomic_nnz_ptr.get();
 
         for (Size g = 0; g < G; ++g) {
             atomic_sums[g].store(0, std::memory_order_relaxed);
@@ -999,7 +1016,7 @@ void detect_dropouts(
             for (Index k = 0; k < len; ++k) {
                 Index g = indices[k];
                 if (g < n_genes) {
-                    int64_t scaled = static_cast<int64_t>(static_cast<Real>(values[k]) * SCALE);
+                    auto scaled = static_cast<int64_t>(static_cast<Real>(values[k]) * SCALE);
                     atomic_sums[g].fetch_add(scaled, std::memory_order_relaxed);
                     atomic_nnz[g].fetch_add(1, std::memory_order_relaxed);
                 }
@@ -1059,15 +1076,27 @@ inline Real imputation_quality(
     Index n_genes
 ) {
     const Size total = static_cast<Size>(n_cells) * static_cast<Size>(n_genes);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Thread-local statistics
-    Real* t_sum_x = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
-    Real* t_sum_y = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
-    Real* t_sum_xx = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
-    Real* t_sum_yy = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
-    Real* t_sum_xy = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
-    Size* t_count = scl::memory::aligned_alloc<Size>(n_threads, SCL_ALIGNMENT);
+    auto t_sum_x_ptr = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
+
+    Real* t_sum_x = t_sum_x_ptr.release();
+    auto t_sum_y_ptr = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
+
+    Real* t_sum_y = t_sum_y_ptr.release();
+    auto t_sum_xx_ptr = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
+
+    Real* t_sum_xx = t_sum_xx_ptr.release();
+    auto t_sum_yy_ptr = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
+
+    Real* t_sum_yy = t_sum_yy_ptr.release();
+    auto t_sum_xy_ptr = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
+
+    Real* t_sum_xy = t_sum_xy_ptr.release();
+    auto t_count_ptr = scl::memory::aligned_alloc<Size>(n_threads, SCL_ALIGNMENT);
+
+    Size* t_count = t_count_ptr.release();
 
     scl::algo::zero(t_sum_x, n_threads);
     scl::algo::zero(t_sum_y, n_threads);
@@ -1094,7 +1123,7 @@ inline Real imputation_quality(
     Real sum_xx = Real(0), sum_yy = Real(0), sum_xy = Real(0);
     Size count = 0;
 
-    for (size_t t = 0; t < n_threads; ++t) {
+    for (Size t = 0; t < n_threads; ++t) {
         sum_x += t_sum_x[t];
         sum_y += t_sum_y[t];
         sum_xx += t_sum_xx[t];
@@ -1232,7 +1261,10 @@ void diffusion_impute_dense(
         }
     }
 
-    Real* temp = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+
+
+    Real* temp = temp_ptr.release();
 
     Real* buf_in = X_imputed;
     Real* buf_out = temp;

@@ -49,8 +49,8 @@ namespace detail {
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T simd_max(const T* SCL_RESTRICT vals, Size len) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const size_t lanes = s::Lanes(d);
 
     auto v_max0 = s::Set(d, -std::numeric_limits<T>::infinity());
     auto v_max1 = v_max0;
@@ -127,8 +127,8 @@ SCL_FORCE_INLINE SCL_HOT T exp_sum_short(T* SCL_RESTRICT vals, Size len, T max_v
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T exp_sum_medium(T* SCL_RESTRICT vals, Size len, T max_val) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const size_t lanes = s::Lanes(d);
 
     const auto v_max = s::Set(d, max_val);
     auto v_sum0 = s::Zero(d);
@@ -190,8 +190,8 @@ SCL_FORCE_INLINE SCL_HOT T exp_sum_medium(T* SCL_RESTRICT vals, Size len, T max_
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T exp_sum_long(T* SCL_RESTRICT vals, Size len, T max_val) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const size_t lanes = s::Lanes(d);
 
     const auto v_max = s::Set(d, max_val);
     // 8 accumulators for maximum ILP
@@ -323,8 +323,8 @@ SCL_FORCE_INLINE SCL_HOT T log_exp_sum_short(const T* SCL_RESTRICT vals, Size le
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T log_exp_sum_medium(const T* SCL_RESTRICT vals, Size len, T max_val) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const size_t lanes = s::Lanes(d);
 
     const auto v_max = s::Set(d, max_val);
     auto v_sum0 = s::Zero(d);
@@ -369,8 +369,8 @@ SCL_FORCE_INLINE SCL_HOT T log_exp_sum_medium(const T* SCL_RESTRICT vals, Size l
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T log_exp_sum_long(const T* SCL_RESTRICT vals, Size len, T max_val) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const size_t lanes = s::Lanes(d);
 
     const auto v_max = s::Set(d, max_val);
     // 8 accumulators for maximum ILP
@@ -458,8 +458,8 @@ SCL_FORCE_INLINE T log_exp_sum_adaptive(const T* SCL_RESTRICT vals, Size len, T 
 template <typename T>
 SCL_FORCE_INLINE void normalize_simd(T* SCL_RESTRICT vals, Size len, T inv_sum) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const size_t lanes = s::Lanes(d);
 
     const auto v_inv_sum = s::Set(d, inv_sum);
 
@@ -498,8 +498,8 @@ SCL_FORCE_INLINE void normalize_scalar(T* SCL_RESTRICT vals, Size len, T inv_sum
 template <typename T>
 SCL_FORCE_INLINE void subtract_offset_simd(T* SCL_RESTRICT vals, Size len, T offset) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const size_t lanes = s::Lanes(d);
 
     const auto v_offset = s::Set(d, offset);
 
@@ -577,8 +577,8 @@ SCL_FORCE_INLINE void softmax_with_temperature(T* SCL_RESTRICT vals, Size len, T
 
     // Scale by inverse temperature
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const size_t lanes = s::Lanes(d);
 
     if (len >= config::SHORT_THRESHOLD) {
         const auto v_inv_temp = s::Set(d, inv_temp);
@@ -639,8 +639,8 @@ SCL_FORCE_INLINE void log_softmax_with_temperature(T* SCL_RESTRICT vals, Size le
 
     // Scale by inverse temperature
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const size_t lanes = s::Lanes(d);
 
     if (len >= config::SHORT_THRESHOLD) {
         const auto v_inv_temp = s::Set(d, inv_temp);
@@ -714,7 +714,7 @@ void softmax_inplace(Sparse<T, IsCSR>& matrix) {
     const Index primary_dim = matrix.primary_dim();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
 
         if (SCL_UNLIKELY(len == 0)) return;
@@ -732,7 +732,7 @@ void softmax_inplace(Sparse<T, IsCSR>& matrix, T temperature) {
     const Index primary_dim = matrix.primary_dim();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
 
         if (SCL_UNLIKELY(len == 0)) return;
@@ -749,7 +749,7 @@ void log_softmax_inplace(Sparse<T, IsCSR>& matrix) {
     const Index primary_dim = matrix.primary_dim();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
 
         if (SCL_UNLIKELY(len == 0)) return;
@@ -767,7 +767,7 @@ void log_softmax_inplace(Sparse<T, IsCSR>& matrix, T temperature) {
     const Index primary_dim = matrix.primary_dim();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
 
         if (SCL_UNLIKELY(len == 0)) return;

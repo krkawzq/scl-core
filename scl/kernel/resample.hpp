@@ -5,6 +5,8 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/vectorize.hpp"
+#include "scl/core/algo.hpp"
+#include "scl/core/macros.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <cmath>
@@ -166,7 +168,7 @@ private:
         Real z = std::sqrt(Real(-2) * std::log(u1)) * std::cos(Real(2) * Real(M_PI) * u2);
         
         Real x = np + sigma * z + Real(0.5);
-        return static_cast<Index>(std::max(Real(0), std::min(static_cast<Real>(n), std::floor(x))));
+        return static_cast<Index>(scl::algo::max2(Real(0), scl::algo::min2(static_cast<Real>(n), std::floor(x))));
     }
 };
 
@@ -208,7 +210,7 @@ private:
         Real z = std::sqrt(Real(-2) * std::log(u1)) * std::cos(Real(2) * Real(M_PI) * u2);
         
         Real x = lambda + sigma * z + Real(0.5);
-        return static_cast<Index>(std::max(Real(0), std::floor(x)));
+        return static_cast<Index>(scl::algo::max2(Real(0), std::floor(x)));
     }
 };
 

@@ -153,13 +153,13 @@ void weight_sum(
         return;
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     scl::threading::WorkspacePool<T> partial_sums;
     partial_sums.init(n_threads, 1);
     partial_sums.zero_all();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = graph.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -172,7 +172,7 @@ void weight_sum(
 
     // Reduce partial sums
     out_sum = T(0);
-    for (size_t t = 0; t < n_threads; ++t) {
+    for (Size t = 0; t < n_threads; ++t) {
         out_sum += *partial_sums.get(t);
     }
 }
@@ -246,7 +246,7 @@ void morans_i(
     const Real N = static_cast<Real>(n_cells);
     const Real N_over_W = N / static_cast<Real>(W_sum);
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     const bool use_nested_parallel = (n_features == 1 && static_cast<Size>(n_cells) >= config::PARALLEL_CELL_THRESHOLD);
 
     // Pre-allocate z buffers for all threads
@@ -254,7 +254,7 @@ void morans_i(
     z_pool.init(n_threads, static_cast<Size>(n_cells));
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_features), [&](size_t f, size_t thread_rank) {
-        const Index f_idx = static_cast<Index>(f);
+        const auto f_idx = static_cast<Index>(f);
         const Index len = features.primary_length_unsafe(f_idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -286,7 +286,7 @@ void morans_i(
         Real denom = scl::vectorize::sum_squared(Array<const Real>(z, static_cast<Size>(n_cells)));
 
         if (SCL_UNLIKELY(denom <= Real(0))) {
-            output[f] = Real(0);
+            output[static_cast<Index>(f)] = Real(0);
             return;
         }
 
@@ -295,10 +295,12 @@ void morans_i(
         // Parallel reduction for single feature + large cell count
         if (use_nested_parallel) {
             const Size n_blocks = (static_cast<Size>(n_cells) + config::CELL_BLOCK_SIZE - 1) / config::CELL_BLOCK_SIZE;
-            Real* block_results = scl::memory::aligned_alloc<Real>(n_blocks, SCL_ALIGNMENT);
+            auto block_results_ptr = scl::memory::aligned_alloc<Real>(n_blocks, SCL_ALIGNMENT);
+
+            Real* block_results = block_results_ptr.release();
 
             scl::threading::parallel_for(Size(0), n_blocks, [&](size_t b) {
-                Index start = static_cast<Index>(b * config::CELL_BLOCK_SIZE);
+                auto start = static_cast<Index>(b * config::CELL_BLOCK_SIZE);
                 Index end = scl::algo::min2(start + static_cast<Index>(config::CELL_BLOCK_SIZE), n_cells);
                 block_results[b] = detail::compute_moran_numer_block(graph, z, start, end);
             });
@@ -310,7 +312,7 @@ void morans_i(
             numer = detail::compute_moran_numer_block(graph, z, Index(0), n_cells);
         }
 
-        output[f] = N_over_W * (numer / denom);
+        output[static_cast<Index>(f)] = N_over_W * (numer / denom);
     });
 }
 
@@ -437,14 +439,14 @@ void gearys_c(
     const Real N_minus_1 = N - Real(1);
     const Real scale = N_minus_1 / (static_cast<Real>(W_sum) * Real(2));
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     const bool use_nested_parallel = (n_features == 1 && static_cast<Size>(n_cells) >= config::PARALLEL_CELL_THRESHOLD);
 
     scl::threading::WorkspacePool<Real> z_pool;
     z_pool.init(n_threads, static_cast<Size>(n_cells));
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_features), [&](size_t f, size_t thread_rank) {
-        const Index f_idx = static_cast<Index>(f);
+        const auto f_idx = static_cast<Index>(f);
         const Index len = features.primary_length_unsafe(f_idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -476,7 +478,7 @@ void gearys_c(
         Real denom = scl::vectorize::sum_squared(Array<const Real>(z, static_cast<Size>(n_cells)));
 
         if (SCL_UNLIKELY(denom <= Real(0))) {
-            output[f] = Real(0);
+            output[static_cast<Index>(f)] = Real(0);
             return;
         }
 
@@ -484,10 +486,12 @@ void gearys_c(
 
         if (use_nested_parallel) {
             const Size n_blocks = (static_cast<Size>(n_cells) + config::CELL_BLOCK_SIZE - 1) / config::CELL_BLOCK_SIZE;
-            Real* block_results = scl::memory::aligned_alloc<Real>(n_blocks, SCL_ALIGNMENT);
+            auto block_results_ptr = scl::memory::aligned_alloc<Real>(n_blocks, SCL_ALIGNMENT);
+
+            Real* block_results = block_results_ptr.release();
 
             scl::threading::parallel_for(Size(0), n_blocks, [&](size_t b) {
-                Index start = static_cast<Index>(b * config::CELL_BLOCK_SIZE);
+                auto start = static_cast<Index>(b * config::CELL_BLOCK_SIZE);
                 Index end = scl::algo::min2(start + static_cast<Index>(config::CELL_BLOCK_SIZE), n_cells);
                 block_results[b] = detail::compute_geary_numer_block(graph, z, start, end);
             });
@@ -498,7 +502,7 @@ void gearys_c(
             numer = detail::compute_geary_numer_block(graph, z, Index(0), n_cells);
         }
 
-        output[f] = scale * (numer / denom);
+        output[static_cast<Index>(f)] = scale * (numer / denom);
     });
 }
 

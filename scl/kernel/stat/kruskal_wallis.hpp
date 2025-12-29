@@ -1,8 +1,6 @@
 #pragma once
 
 #include "scl/kernel/stat/stat_base.hpp"
-#include "scl/kernel/stat/rank_utils.hpp"
-#include "scl/kernel/stat/group_partition.hpp"
 #include "scl/core/sparse.hpp"
 #include "scl/core/sort.hpp"
 #include "scl/core/error.hpp"
@@ -37,14 +35,14 @@ SCL_FORCE_INLINE Real compute_H(
         return Real(0);
     }
 
-    double Nd = static_cast<double>(N);
+    auto Nd = static_cast<double>(N);
 
     // H = 12/(N(N+1)) * sum(R_i^2 / n_i) - 3(N+1)
     double sum_term = 0.0;
     for (Size g = 0; g < n_groups; ++g) {
         if (group_sizes[g] > 0) {
             double R = rank_sums[g];
-            double n = static_cast<double>(group_sizes[g]);
+            auto n = static_cast<double>(group_sizes[g]);
             sum_term += (R * R) / n;
         }
     }
@@ -78,7 +76,7 @@ inline void count_k_groups(
     }
 
     for (Size i = 0; i < group_ids.len; ++i) {
-        int32_t g = group_ids[i];
+        int32_t g = group_ids[static_cast<Index>(i)];
         if (g >= 0 && static_cast<Size>(g) < n_groups) {
             out_counts[g]++;
         }
@@ -99,12 +97,11 @@ void kruskal_wallis(
 ) {
     const Index primary_dim = matrix.primary_dim();
     const Size N_features = static_cast<Size>(primary_dim);
-
     SCL_CHECK_ARG(n_groups >= 2, "Kruskal-Wallis requires at least 2 groups");
 
     // Count group sizes
-    Size* group_sizes = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
-    count_k_groups(group_ids, n_groups, group_sizes);
+    auto group_sizes = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
+    count_k_groups(group_ids, n_groups, group_sizes.get());
 
     Size N_total = 0;
     Size valid_groups = 0;
@@ -126,7 +123,7 @@ void kruskal_wallis(
     }
 
     // Workspace for values, group tags, and rank sums
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const size_t n_threads = scl::threading::get_num_threads_runtime();
 
     // Each thread needs: values buffer, group buffer, rank_sums buffer
     Size workspace_per_thread = max_len + max_len + n_groups;
@@ -134,7 +131,7 @@ void kruskal_wallis(
     work_pool.init(n_threads, workspace_per_thread);
 
     scl::threading::parallel_for(Size(0), N_features, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -165,8 +162,8 @@ void kruskal_wallis(
         }
 
         if (SCL_UNLIKELY(total == 0)) {
-            out_H_stats[p] = Real(0);
-            out_p_values[p] = Real(1);
+            out_H_stats[static_cast<Index>(p)] = Real(0);
+            out_p_values[static_cast<Index>(p)] = Real(1);
             return;
         }
 
@@ -211,10 +208,9 @@ void kruskal_wallis(
                 Size g = grp_buf[order[j]];
                 rank_sums[g] += avg_rank;
             }
-
             // Tie correction
             if (tie_count > 1) {
-                double t = static_cast<double>(tie_count);
+                auto t = static_cast<double>(tie_count);
                 tie_sum += t * (t * t - 1.0);
             }
 
@@ -224,30 +220,24 @@ void kruskal_wallis(
         // Account for zeros (samples not in sparse data)
         Size n_zeros_total = N_total - total;
         if (n_zeros_total > 0) {
-            // Zeros get ranks after current rank
-            double avg_rank_zeros = static_cast<double>(rank) + static_cast<double>(n_zeros_total - 1) * 0.5;
-
             // Distribute zero ranks proportionally to groups
             for (Size g = 0; g < n_groups; ++g) {
-                Size n_zeros_g = group_sizes[g] - (/* count in group g from total */0);
                 // This is approximate; for exact handling need more tracking
             }
 
             if (n_zeros_total > 1) {
-                double t = static_cast<double>(n_zeros_total);
+                auto t = static_cast<double>(n_zeros_total);
                 tie_sum += t * (t * t - 1.0);
             }
         }
 
         // Compute H statistic
-        Real H = detail::compute_H(rank_sums, group_sizes, n_groups, N_total, tie_sum);
-        out_H_stats[p] = H;
+        Real H = detail::compute_H(rank_sums, group_sizes.get(), n_groups, N_total, tie_sum);
+        out_H_stats[static_cast<Index>(p)] = H;
 
         // P-value from chi-squared distribution
-        out_p_values[p] = pvalue::chisq_pvalue(H, df);
+        out_p_values[static_cast<Index>(p)] = pvalue::chisq_pvalue(H, df);
     });
-
-    scl::memory::aligned_free(group_sizes, SCL_ALIGNMENT);
 }
 
 } // namespace scl::kernel::stat::kruskal_wallis

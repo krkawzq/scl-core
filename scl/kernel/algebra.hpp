@@ -13,6 +13,8 @@
 #include <cstring>
 #include <cmath>
 #include <new>
+#include <concepts>
+#include <atomic>
 
 // =============================================================================
 // FILE: scl/kernel/algebra.hpp
@@ -22,18 +24,25 @@
 namespace scl::kernel::algebra {
 
 // =============================================================================
+// C++20 Concepts
+// =============================================================================
+
+template <typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
 namespace config {
-    constexpr size_t PREFETCH_DISTANCE = 64;
-    constexpr size_t SHORT_ROW_THRESHOLD = 8;
-    constexpr size_t MEDIUM_ROW_THRESHOLD = 64;
-    constexpr size_t LONG_ROW_THRESHOLD = 256;
-    constexpr size_t CONSECUTIVE_CHECK_THRESHOLD = 16;
-    constexpr size_t SPMM_BLOCK_COLS = 64;
-    constexpr size_t SPMM_BLOCK_ROWS = 32;
-    constexpr Size PARALLEL_THRESHOLD = 128;
+    inline constexpr Size PREFETCH_DISTANCE = 64;
+    inline constexpr Size SHORT_ROW_THRESHOLD = 8;
+    inline constexpr Size MEDIUM_ROW_THRESHOLD = 64;
+    inline constexpr Size LONG_ROW_THRESHOLD = 256;
+    inline constexpr Size CONSECUTIVE_CHECK_THRESHOLD = 16;
+    inline constexpr Size SPMM_BLOCK_COLS = 64;
+    inline constexpr Size SPMM_BLOCK_ROWS = 32;
+    inline constexpr Size PARALLEL_THRESHOLD = 128;
 }
 
 // =============================================================================
@@ -46,7 +55,7 @@ namespace detail {
 // SIMD Scale with 4-way Unrolling + Prefetch
 // =============================================================================
 
-template <typename T>
+template <Arithmetic T>
 SCL_HOT SCL_FORCE_INLINE void scale_output(T* SCL_RESTRICT y, Size n, T beta) noexcept {
     if (SCL_UNLIKELY(beta == T(0))) {
         scl::memory::zero(Array<T>(y, n));
@@ -59,7 +68,7 @@ SCL_HOT SCL_FORCE_INLINE void scale_output(T* SCL_RESTRICT y, Size n, T beta) no
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<T>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
     const auto v_beta = s::Set(d, beta);
 
     Size i = 0;
@@ -97,14 +106,14 @@ SCL_HOT SCL_FORCE_INLINE void scale_output(T* SCL_RESTRICT y, Size n, T beta) no
 // SIMD AXPY: y += alpha * x
 // =============================================================================
 
-template <typename T>
+template <Arithmetic T>
 SCL_HOT SCL_FORCE_INLINE void axpy(T alpha, const T* SCL_RESTRICT x, T* SCL_RESTRICT y, Size n) noexcept {
     if (SCL_UNLIKELY(alpha == T(0))) return;
 
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<T>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
     const auto v_alpha = s::Set(d, alpha);
 
     Size i = 0;
@@ -135,13 +144,13 @@ SCL_HOT SCL_FORCE_INLINE void axpy(T alpha, const T* SCL_RESTRICT x, T* SCL_REST
 // Horizontal Sum Helpers
 // =============================================================================
 
-template <typename T>
-SCL_FORCE_INLINE T horizontal_sum_4(T s0, T s1, T s2, T s3) noexcept {
+template <Arithmetic T>
+SCL_FORCE_INLINE constexpr T horizontal_sum_4(T s0, T s1, T s2, T s3) noexcept {
     return (s0 + s1) + (s2 + s3);
 }
 
-template <typename T>
-SCL_FORCE_INLINE T horizontal_sum_8(T s0, T s1, T s2, T s3, T s4, T s5, T s6, T s7) noexcept {
+template <Arithmetic T>
+SCL_FORCE_INLINE constexpr T horizontal_sum_8(T s0, T s1, T s2, T s3, T s4, T s5, T s6, T s7) noexcept {
     return ((s0 + s1) + (s2 + s3)) + ((s4 + s5) + (s6 + s7));
 }
 
@@ -182,7 +191,7 @@ SCL_FORCE_INLINE bool is_consecutive(const Index* indices, Size nnz) noexcept {
 // Dense Dot Product (for consecutive indices)
 // =============================================================================
 
-template <typename T>
+template <Arithmetic T>
 SCL_HOT SCL_FORCE_INLINE T dense_dot(
     const T* SCL_RESTRICT a,
     const T* SCL_RESTRICT b,
@@ -193,7 +202,7 @@ SCL_HOT SCL_FORCE_INLINE T dense_dot(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<T>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -228,7 +237,7 @@ SCL_HOT SCL_FORCE_INLINE T dense_dot(
 // =============================================================================
 
 // Short row (nnz < 8): scalar
-template <typename T>
+template <Arithmetic T>
 SCL_FORCE_INLINE T sparse_dot_short(
     const Index* SCL_RESTRICT indices,
     const T* SCL_RESTRICT values,
@@ -248,7 +257,7 @@ SCL_FORCE_INLINE T sparse_dot_short(
 }
 
 // Medium row (8-64): 4-way unroll
-template <typename T>
+template <Arithmetic T>
 SCL_FORCE_INLINE T sparse_dot_medium(
     const Index* SCL_RESTRICT indices,
     const T* SCL_RESTRICT values,
@@ -284,7 +293,7 @@ SCL_FORCE_INLINE T sparse_dot_medium(
 }
 
 // Long row (64-256): 8-way unroll + prefetch
-template <typename T>
+template <Arithmetic T>
 SCL_FORCE_INLINE SCL_HOT T sparse_dot_long(
     const Index* SCL_RESTRICT indices,
     const T* SCL_RESTRICT values,
@@ -329,7 +338,7 @@ SCL_FORCE_INLINE SCL_HOT T sparse_dot_long(
 }
 
 // Very long row (>= 256): 8-way + aggressive prefetch + x vector prefetch
-template <typename T>
+template <Arithmetic T>
 SCL_HOT SCL_FORCE_INLINE T sparse_dot_very_long(
     const Index* SCL_RESTRICT indices,
     const T* SCL_RESTRICT values,
@@ -381,7 +390,7 @@ SCL_HOT SCL_FORCE_INLINE T sparse_dot_very_long(
 }
 
 // Adaptive dispatcher with consecutive detection
-template <typename T>
+template <Arithmetic T>
 SCL_FORCE_INLINE T sparse_dot_adaptive(
     const Index* SCL_RESTRICT indices,
     const T* SCL_RESTRICT values,
@@ -412,7 +421,7 @@ SCL_FORCE_INLINE T sparse_dot_adaptive(
 // SpMV: y = alpha * A * x + beta * y
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void spmv(
     const Sparse<T, IsCSR>& A,
     Array<const T> x,
@@ -431,8 +440,8 @@ void spmv(
     if (SCL_UNLIKELY(alpha == T(0))) return;
 
     // Parallel SpMV
-    scl::threading::parallel_for(Size(0), N, [&](size_t p) {
-        const Index primary_idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), N, [&](Size p) {
+        const auto primary_idx = static_cast<Index>(p);
         const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
@@ -449,7 +458,7 @@ void spmv(
 // SpTSpV: y = alpha * A^T * x + beta * y (Transposed SpMV)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void spmv_transpose(
     const Sparse<T, IsCSR>& A,
     Array<const T> x,
@@ -472,19 +481,20 @@ void spmv_transpose(
     // Use atomic accumulation for parallel safety
     // Allocate raw aligned memory for placement new of atomic objects
     // Note: std::atomic<T> may not be trivially constructible, so we use Byte allocation
-    Byte* raw_mem = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<T>) * N, SCL_ALIGNMENT);
+    auto raw_mem_ptr = scl::memory::aligned_alloc<Byte>(sizeof(std::atomic<T>) * N, SCL_ALIGNMENT);
+    Byte* raw_mem = raw_mem_ptr.release();
     
     SCL_ASSERT(raw_mem != nullptr, "spmv_transpose: Failed to allocate atomic array");
     
-    std::atomic<T>* atomic_y = reinterpret_cast<std::atomic<T>*>(raw_mem);
+    auto* atomic_y = reinterpret_cast<std::atomic<T>*>(raw_mem);
 
     // Initialize atomic array from y using placement new
     for (Size i = 0; i < N; ++i) {
         new (&atomic_y[i]) std::atomic<T>(y[i]);
     }
 
-    scl::threading::parallel_for(Size(0), M, [&](size_t p) {
-        const Index primary_idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), M, [&](Size p) {
+        const auto primary_idx = static_cast<Index>(p);
         const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
@@ -533,7 +543,7 @@ void spmv_transpose(
 // SpMM: Y = alpha * A * X + beta * Y (Sparse-Dense Matrix Multiply)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void spmm(
     const Sparse<T, IsCSR>& A,
     const T* X,           // secondary_dim x n_cols, row-major
@@ -547,8 +557,8 @@ void spmm(
     const Size K = static_cast<Size>(n_cols);
 
     // Beta scaling - parallelize for large matrices
-    if (static_cast<Size>(M) >= config::PARALLEL_THRESHOLD) {
-        scl::threading::parallel_for(Size(0), M, [&](size_t i) {
+    if (M >= config::PARALLEL_THRESHOLD) {
+        scl::threading::parallel_for(Size(0), M, [&](Size i) {
             detail::scale_output(Y + i * K, K, beta);
         });
     } else {
@@ -565,8 +575,8 @@ void spmm(
         Size col_end = scl::algo::min2(col_start + BLOCK_COLS, K);
         Size block_cols = col_end - col_start;
 
-        scl::threading::parallel_for(Size(0), M, [&](size_t p) {
-            const Index primary_idx = static_cast<Index>(p);
+        scl::threading::parallel_for(Size(0), M, [&](Size p) {
+            const auto primary_idx = static_cast<Index>(p);
             const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
             if (SCL_UNLIKELY(len == 0)) return;
@@ -598,7 +608,7 @@ void spmm(
 // Fused SpMV: y = alpha * A * x + beta * A * z + gamma * y
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void spmv_fused_linear(
     const Sparse<T, IsCSR>& A,
     Array<const T> x,
@@ -620,8 +630,8 @@ void spmv_fused_linear(
 
     if (SCL_UNLIKELY(alpha == T(0) && beta == T(0))) return;
 
-    scl::threading::parallel_for(Size(0), N, [&](size_t p) {
-        const Index primary_idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), N, [&](Size p) {
+        const auto primary_idx = static_cast<Index>(p);
         const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
@@ -663,7 +673,7 @@ void spmv_fused_linear(
 // Row Norms: Compute L2 norm of each row
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void row_norms(
     const Sparse<T, IsCSR>& A,
     Array<T> norms
@@ -673,8 +683,8 @@ void row_norms(
 
     SCL_CHECK_DIM(norms.len >= N, "row_norms: output buffer too small");
 
-    scl::threading::parallel_for(Size(0), N, [&](size_t p) {
-        const Index primary_idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), N, [&](Size p) {
+        const auto primary_idx = static_cast<Index>(p);
         const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) {
@@ -694,7 +704,7 @@ void row_norms(
 // Row Sums
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void row_sums(
     const Sparse<T, IsCSR>& A,
     Array<T> sums
@@ -704,8 +714,8 @@ void row_sums(
 
     SCL_CHECK_DIM(sums.len >= N, "row_sums: output buffer too small");
 
-    scl::threading::parallel_for(Size(0), N, [&](size_t p) {
-        const Index primary_idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), N, [&](Size p) {
+        const auto primary_idx = static_cast<Index>(p);
         const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) {
@@ -724,7 +734,7 @@ void row_sums(
 // Diagonal Extraction
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void extract_diagonal(
     const Sparse<T, IsCSR>& A,
     Array<T> diag
@@ -736,8 +746,8 @@ void extract_diagonal(
 
     scl::algo::zero(diag.ptr, N);
 
-    scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        const Index idx = static_cast<Index>(i);
+    scl::threading::parallel_for(Size(0), N, [&](Size i) {
+        const auto idx = static_cast<Index>(i);
         const Size len = static_cast<Size>(A.primary_length_unsafe(idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
@@ -759,7 +769,7 @@ void extract_diagonal(
 // Scale Rows: A_i = diag[i] * A_i
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void scale_rows(
     Sparse<T, IsCSR>& A,
     Array<const T> scale_factors
@@ -769,12 +779,14 @@ void scale_rows(
 
     SCL_CHECK_DIM(scale_factors.len >= N, "scale_rows: scale_factors too small");
 
-    scl::threading::parallel_for(Size(0), N, [&](size_t p) {
-        const Index primary_idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), N, [&](Size p) {
+        const auto primary_idx = static_cast<Index>(p);
         const Size len = static_cast<Size>(A.primary_length_unsafe(primary_idx));
 
         if (SCL_UNLIKELY(len == 0)) return;
 
+        // PERFORMANCE: const_cast needed for in-place modification
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
         T* vals = const_cast<T*>(A.primary_values_unsafe(primary_idx).ptr);
         T s = scale_factors[p];
 
@@ -794,7 +806,7 @@ void scale_rows(
 // =============================================================================
 
 // y = A * x
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void spmv_simple(
     const Sparse<T, IsCSR>& A,
     Array<const T> x,
@@ -804,7 +816,7 @@ void spmv_simple(
 }
 
 // y += A * x
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void spmv_add(
     const Sparse<T, IsCSR>& A,
     Array<const T> x,
@@ -814,7 +826,7 @@ void spmv_add(
 }
 
 // y = alpha * A * x
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void spmv_scaled(
     const Sparse<T, IsCSR>& A,
     Array<const T> x,

@@ -539,6 +539,9 @@ void message_passing(
 
             if (len == 0) {
                 const Real* self_feat = node_features.ptr + static_cast<Size>(i) * F;
+                // PERFORMANCE: memcpy is faster than loop for copying feature vectors
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+                // Intentional: efficient feature copying
                 std::memcpy(out_feat, self_feat, F * sizeof(Real));
             }
         }
@@ -735,7 +738,8 @@ void graph_convolution(
     if (n == 0 || in_dim == 0 || out_dim == 0) return;
 
     // Precompute D^(-1/2)
-    Real* degree_inv_sqrt = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto degree_inv_sqrt_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* degree_inv_sqrt = degree_inv_sqrt_ptr.release();
     detail::precompute_gcn_norm(adjacency, degree_inv_sqrt, N, add_self_loops);
 
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
@@ -806,8 +810,6 @@ void sage_aggregate(
 
     if (n == 0 || feat_dim == 0) return;
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
         Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
@@ -870,10 +872,9 @@ void feature_smoothing(
 
     if (n_nodes == 0 || feat_dim == 0 || n_iterations == 0) return;
 
-    Real* temp = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    Real* temp = temp_ptr.release();
     Real one_minus_alpha = Real(1) - alpha;
-
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
 
     for (Index iter = 0; iter < n_iterations; ++iter) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
@@ -911,6 +912,9 @@ void feature_smoothing(
             }
         });
 
+        // PERFORMANCE: memcpy is faster than loop for copying feature arrays
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+        // Intentional: efficient array copying
         std::memcpy(features.ptr, temp, total * sizeof(Real));
     }
 
@@ -944,7 +948,8 @@ void global_pool(
 
     if (agg_type == AggregationType::Sum || agg_type == AggregationType::Mean) {
         // Parallel reduction for sum/mean
-        Real* partial = scl::memory::aligned_alloc<Real>(n_threads * F, SCL_ALIGNMENT);
+        auto partial_ptr = scl::memory::aligned_alloc<Real>(n_threads * F, SCL_ALIGNMENT);
+        Real* partial = partial_ptr.release();
         scl::algo::zero(partial, n_threads * F);
 
         scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
@@ -966,7 +971,8 @@ void global_pool(
         scl::memory::aligned_free(partial, SCL_ALIGNMENT);
     } else if (agg_type == AggregationType::Max) {
         // Parallel max reduction
-        Real* partial = scl::memory::aligned_alloc<Real>(n_threads * F, SCL_ALIGNMENT);
+        auto partial_ptr = scl::memory::aligned_alloc<Real>(n_threads * F, SCL_ALIGNMENT);
+        Real* partial = partial_ptr.release();
         for (size_t t = 0; t < n_threads; ++t) {
             detail::feature_fill_simd(partial + t * F, -Real(1e30), feat_dim);
         }
@@ -984,7 +990,8 @@ void global_pool(
 
         scl::memory::aligned_free(partial, SCL_ALIGNMENT);
     } else if (agg_type == AggregationType::Min) {
-        Real* partial = scl::memory::aligned_alloc<Real>(n_threads * F, SCL_ALIGNMENT);
+        auto partial_ptr = scl::memory::aligned_alloc<Real>(n_threads * F, SCL_ALIGNMENT);
+        Real* partial = partial_ptr.release();
         for (size_t t = 0; t < n_threads; ++t) {
             detail::feature_fill_simd(partial + t * F, Real(1e30), feat_dim);
         }
@@ -1018,7 +1025,6 @@ void hierarchical_pool(
     Array<Real> pooled_features,
     AggregationType agg_type = AggregationType::Mean
 ) {
-    const Size N = static_cast<Size>(n_nodes);
     const Size F = static_cast<Size>(feat_dim);
     const Size C = static_cast<Size>(n_clusters);
 
@@ -1027,18 +1033,19 @@ void hierarchical_pool(
     // Initialize
     if (agg_type == AggregationType::Max) {
         for (Size i = 0; i < C * F; ++i) {
-            pooled_features[i] = -Real(1e30);
+            pooled_features[static_cast<Index>(i)] = -Real(1e30);
         }
     } else if (agg_type == AggregationType::Min) {
         for (Size i = 0; i < C * F; ++i) {
-            pooled_features[i] = Real(1e30);
+            pooled_features[static_cast<Index>(i)] = Real(1e30);
         }
     } else {
         scl::algo::zero(pooled_features.ptr, C * F);
     }
 
     // Count cluster sizes
-    Index* cluster_sizes = scl::memory::aligned_alloc<Index>(C, SCL_ALIGNMENT);
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Index>(C, SCL_ALIGNMENT);
+    Index* cluster_sizes = cluster_sizes_ptr.release();
     scl::algo::zero(cluster_sizes, C);
 
     // Sequential aggregation (cluster access pattern is irregular)
@@ -1096,13 +1103,12 @@ void compute_edge_features(
     const Size edge_feat_dim = concat ? 2 * F : F;
 
     // Compute offsets for parallel access
-    Size* offsets = scl::memory::aligned_alloc<Size>(static_cast<Size>(n) + 1, SCL_ALIGNMENT);
+    auto offsets_ptr = scl::memory::aligned_alloc<Size>(static_cast<Size>(n) + 1, SCL_ALIGNMENT);
+    Size* offsets = offsets_ptr.release();
     offsets[0] = 0;
     for (Index i = 0; i < n; ++i) {
         offsets[i + 1] = offsets[i] + static_cast<Size>(adjacency.primary_length_unsafe(i));
     }
-
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i) {
         auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
@@ -1117,6 +1123,9 @@ void compute_edge_features(
             Real* edge_feat = edge_features + (base_edge_idx + k) * edge_feat_dim;
 
             if (concat) {
+                // PERFORMANCE: memcpy is faster than loop for copying feature vectors
+                // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+                // Intentional: efficient feature concatenation
                 std::memcpy(edge_feat, feat_i, F * sizeof(Real));
                 std::memcpy(edge_feat + F, feat_j, F * sizeof(Real));
             } else {
@@ -1158,7 +1167,7 @@ inline void skip_connection(
     }
 
     for (; k < input.len; ++k) {
-        output[k] = input[k] + alpha * residual[k];
+        output[static_cast<Index>(k)] = input[static_cast<Index>(k)] + alpha * residual[static_cast<Index>(k)];
     }
 }
 
@@ -1174,8 +1183,6 @@ inline void layer_norm(
 ) {
     const Size N = static_cast<Size>(n_nodes);
     const Size F = static_cast<Size>(feat_dim);
-
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
         Real* feat = features.ptr + i * F;
@@ -1219,8 +1226,10 @@ inline void batch_norm(
     const Size F = static_cast<Size>(feat_dim);
 
     // Compute mean and variance per feature
-    Real* mean = scl::memory::aligned_alloc<Real>(F, SCL_ALIGNMENT);
-    Real* var = scl::memory::aligned_alloc<Real>(F, SCL_ALIGNMENT);
+    auto mean_ptr = scl::memory::aligned_alloc<Real>(F, SCL_ALIGNMENT);
+    auto var_ptr = scl::memory::aligned_alloc<Real>(F, SCL_ALIGNMENT);
+    Real* mean = mean_ptr.release();
+    Real* var = var_ptr.release();
     scl::algo::zero(mean, F);
     scl::algo::zero(var, F);
 
@@ -1245,7 +1254,8 @@ inline void batch_norm(
     detail::feature_scale_simd(var, inv_n, feat_dim);
 
     // Normalize
-    Real* inv_std = scl::memory::aligned_alloc<Real>(F, SCL_ALIGNMENT);
+    auto inv_std_ptr = scl::memory::aligned_alloc<Real>(F, SCL_ALIGNMENT);
+    Real* inv_std = inv_std_ptr.release();
     for (Index d = 0; d < feat_dim; ++d) {
         inv_std[d] = Real(1) / std::sqrt(var[d] + epsilon);
     }
@@ -1288,9 +1298,9 @@ inline void dropout(
 
     for (Size i = 0; i < features.len; ++i) {
         if (next_rand() >= keep_prob) {
-            features[i] = Real(0);
+            features[static_cast<Index>(i)] = Real(0);
         } else {
-            features[i] *= scale;
+            features[static_cast<Index>(i)] *= scale;
         }
     }
 }
@@ -1302,6 +1312,9 @@ inline void dropout_inference(
     Real dropout_rate
 ) {
     (void)dropout_rate;
+    // PERFORMANCE: memcpy is faster than loop for copying arrays
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+    // Intentional: efficient array copying
     std::memcpy(output.ptr, input.ptr, input.len * sizeof(Real));
 }
 

@@ -8,8 +8,6 @@
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
-#include "scl/threading/scheduler.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -114,12 +112,12 @@ struct KernelParams {
     Real h2;         // h^2
     KernelType type;
 
-    SCL_FORCE_INLINE explicit KernelParams(Real bandwidth, KernelType t) noexcept : type(t) {
-        bandwidth = scl::algo::max2(bandwidth, config::MIN_BANDWIDTH);
-        inv_h = Real(1) / bandwidth;
-        inv_h2 = inv_h * inv_h;
-        inv_2h2 = Real(0.5) * inv_h2;
-        h2 = bandwidth * bandwidth;
+    SCL_FORCE_INLINE explicit KernelParams(Real h, KernelType t) noexcept 
+        : inv_h(Real(1) / scl::algo::max2(h, config::MIN_BANDWIDTH)),
+          inv_h2(inv_h * inv_h),
+          inv_2h2(Real(0.5) * inv_h2),
+          h2(scl::algo::max2(h, config::MIN_BANDWIDTH) * scl::algo::max2(h, config::MIN_BANDWIDTH)),
+          type(t) {
     }
 };
 
@@ -148,22 +146,21 @@ SCL_FORCE_INLINE Real apply_kernel(Real dist_sq, const KernelParams& params) {
 // Self-kernel value (distance = 0)
 SCL_FORCE_INLINE Real self_kernel(const KernelParams& params) {
     switch (params.type) {
-        case KernelType::Gaussian:
-        case KernelType::Laplacian:
-        case KernelType::Cauchy:
-            return Real(1);
         case KernelType::Epanechnikov:
             return Real(0.75);
         case KernelType::Cosine:
             return Real(3.14159265358979323846) / Real(4);
         case KernelType::Uniform:
             return Real(0.5);
+        case KernelType::Gaussian:
+        case KernelType::Laplacian:
+        case KernelType::Cauchy:
         case KernelType::Triangular:
-            return Real(1);
         default:
             return Real(1);
     }
 }
+
 
 // SIMD Gaussian kernel batch evaluation
 SCL_FORCE_INLINE void gaussian_kernel_batch(
@@ -870,8 +867,10 @@ void nystrom_approximation(
     const Size total = N * n_comp;
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    Real* Q = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
-    Real* Q_new = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto Q_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto Q_new_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    Real* Q = Q_ptr.release();
+    Real* Q_new = Q_new_ptr.release();
 
     // Initialize with deterministic values
     for (Size i = 0; i < total; ++i) {
@@ -955,8 +954,8 @@ void nystrom_approximation(
 
                 if (SCL_LIKELY(norm_p > Real(1e-15))) {
                     Real coeff = dot / norm_p;
-                    for (Size i = 0; i < N; ++i) {
-                        Q_new[i * n_comp + c] -= coeff * Q_new[i * n_comp + p];
+                    for (Size idx = 0; idx < N; ++idx) {
+                        Q_new[idx * n_comp + c] -= coeff * Q_new[idx * n_comp + p];
                     }
                 }
             }

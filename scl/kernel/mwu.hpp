@@ -110,7 +110,7 @@ SCL_FORCE_INLINE void merge_with_ties(
         R1 += static_cast<double>(count1) * avg_rank;
 
         if (SCL_UNLIKELY(t > 1)) {
-            double td = static_cast<double>(t);
+            auto td = static_cast<double>(t);
             // Optimized: t^3 - t = t * (t^2 - 1)
             tie_sum += td * (td * td - 1.0);
         }
@@ -153,7 +153,7 @@ SCL_FORCE_INLINE SCL_HOT void compute_rank_sum_sparse(
         R1 += static_cast<double>(a_zeros) * avg_rank;
 
         if (SCL_UNLIKELY(total_zeros > 1)) {
-            double tz = static_cast<double>(total_zeros);
+            auto tz = static_cast<double>(total_zeros);
             // Optimized: t^3 - t = t * (t^2 - 1)
             tie_sum += tz * (tz * tz - 1.0);
         }
@@ -256,7 +256,7 @@ void mwu_test(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
-    Size n1_total, n2_total;
+    Size n1_total{}, n2_total{};
     count_groups(group_ids, n1_total, n2_total);
 
     SCL_CHECK_ARG(n1_total > 0 && n2_total > 0,
@@ -272,12 +272,12 @@ void mwu_test(
     }
 
     // Pre-allocate dual buffer pool for all threads
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::get_num_threads_runtime();
     scl::threading::DualWorkspacePool<T> buf_pool;
     buf_pool.init(n_threads, max_len);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -332,11 +332,11 @@ void mwu_test(
 
         double mean1 = sum1 / c.n1d;
         double mean2 = sum2 / c.n2d;
-        out_log2_fc[p] = static_cast<Real>(std::log2((mean2 + config::EPS) / (mean1 + config::EPS)));
+        out_log2_fc[static_cast<Index>(p)] = static_cast<Real>(std::log2((mean2 + config::EPS) / (mean1 + config::EPS)));
 
         if (SCL_UNLIKELY(n1 == 0 && n2 == 0)) {
-            out_u_stats[p] = Real(0);
-            out_p_values[p] = Real(1);
+            out_u_stats[static_cast<Index>(p)] = Real(0);
+            out_p_values[static_cast<Index>(p)] = Real(1);
             return;
         }
 
@@ -348,20 +348,20 @@ void mwu_test(
             scl::sort::sort(Array<T>(buf2, n2));
         }
 
-        double R1, tie_sum;
+        double R1{}, tie_sum{};
         detail::compute_rank_sum_sparse(
             buf1, n1, n1_total,
             buf2, n2, n2_total,
             R1, tie_sum
         );
 
-        detail::compute_u_and_pvalue(R1, tie_sum, c, out_u_stats[p], out_p_values[p]);
+        detail::compute_u_and_pvalue(R1, tie_sum, c, out_u_stats[static_cast<Index>(p)], out_p_values[static_cast<Index>(p)]);
 
         // Optionally compute AUROC
         if (out_auroc.ptr != nullptr) {
-            double U = static_cast<double>(out_u_stats[p]);
+            auto U = static_cast<double>(out_u_stats[static_cast<Index>(p)]);
             double auroc_val = (c.n1d * c.n2d > 0.0) ? (U / (c.n1d * c.n2d)) : 0.5;
-            out_auroc[p] = static_cast<Real>(auroc_val);
+            out_auroc[static_cast<Index>(p)] = static_cast<Real>(auroc_val);
         }
     });
 }

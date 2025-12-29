@@ -45,8 +45,8 @@ SCL_FORCE_INLINE void simd_sum_sumsq_fused(
     T& out_sumsq
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const Size lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -122,8 +122,8 @@ void primary_sums(
 
     SCL_CHECK_DIM(output.len == static_cast<Size>(primary_dim), "Output size mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -147,8 +147,8 @@ void primary_means(
 
     SCL_CHECK_DIM(output.len == static_cast<Size>(primary_dim), "Output size mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -174,8 +174,8 @@ void primary_variances(
 
     SCL_CHECK_DIM(output.len == static_cast<Size>(primary_dim), "Output size mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -203,7 +203,7 @@ void primary_nnz(
     // Sequential for small matrices (parallel overhead > computation)
     if (SCL_UNLIKELY(n < config::PARALLEL_THRESHOLD)) {
         for (Size p = 0; p < n; ++p) {
-            output[p] = matrix.primary_length_unsafe(static_cast<Index>(p));
+            output[static_cast<Index>(p)] = matrix.primary_length_unsafe(static_cast<Index>(p));
         }
         return;
     }
@@ -211,12 +211,12 @@ void primary_nnz(
     // Parallel with batching for better cache utilization
     const Size num_batches = (n + config::BATCH_SIZE - 1) / config::BATCH_SIZE;
 
-    scl::threading::parallel_for(Size(0), num_batches, [&](size_t batch_idx) {
+    scl::threading::parallel_for(Size(0), num_batches, [&](Size batch_idx) {
         const Size start = batch_idx * config::BATCH_SIZE;
         const Size end = scl::algo::min2(start + config::BATCH_SIZE, n);
 
         for (Size p = start; p < end; ++p) {
-            output[p] = matrix.primary_length_unsafe(static_cast<Index>(p));
+            output[static_cast<Index>(p)] = matrix.primary_length_unsafe(static_cast<Index>(p));
         }
     });
 }
@@ -267,7 +267,7 @@ ContiguousArraysT<T> to_contiguous_arrays(const Sparse<T, IsCSR>& matrix) {
     // Allocate arrays via registry (handle zero nnz case)
     T* data = (nnz > 0) ? reg.new_array<T>(static_cast<size_t>(nnz)) : nullptr;
     Index* indices = (nnz > 0) ? reg.new_array<Index>(static_cast<size_t>(nnz)) : nullptr;
-    Index* indptr = reg.new_array<Index>(static_cast<size_t>(primary_dim + 1));
+    auto* indptr = reg.new_array<Index>(static_cast<size_t>(primary_dim + 1));
     
     if (!indptr || (nnz > 0 && (!data || !indices))) {
         // Cleanup on failure
@@ -327,8 +327,8 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
     
     auto& reg = get_registry();
     
-    Index* row_indices = reg.new_array<Index>(static_cast<size_t>(nnz));
-    Index* col_indices = reg.new_array<Index>(static_cast<size_t>(nnz));
+    auto* row_indices = reg.new_array<Index>(static_cast<size_t>(nnz));
+    auto* col_indices = reg.new_array<Index>(static_cast<size_t>(nnz));
     T* values = reg.new_array<T>(static_cast<size_t>(nnz));
     
     if (!row_indices || !col_indices || !values) {
@@ -348,8 +348,8 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
     }
     
     // Parallel conversion to COO format
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index i = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto i = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(i);
         if (len > 0) {
             auto vals = matrix.primary_values_unsafe(i);
@@ -465,8 +465,8 @@ Sparse<T, IsCSR> eliminate_zeros(
     std::vector<Index> new_nnzs(primary_dim, 0);
     
     // Parallel count non-zero elements per row/column
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index i = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto i = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(i);
         if (len > 0) {
             auto vals = matrix.primary_values_unsafe(i);
@@ -488,15 +488,15 @@ Sparse<T, IsCSR> eliminate_zeros(
     if (!result.valid()) return Sparse<T, IsCSR>{};
     
     // Parallel copy non-zero elements
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index i = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto i = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(i);
         if (len > 0 && new_nnzs[i] > 0) {
             auto vals = matrix.primary_values_unsafe(i);
             auto idxs = matrix.primary_indices_unsafe(i);
             
             T* out_vals = static_cast<T*>(result.data_ptrs[i]);
-            Index* out_idxs = static_cast<Index*>(result.indices_ptrs[i]);
+            auto* out_idxs = static_cast<Index*>(result.indices_ptrs[i]);
             
             Index pos = 0;
             for (Index k = 0; k < len; ++k) {
@@ -671,8 +671,6 @@ void resize_secondary(Sparse<T, IsCSR>& matrix, Index new_secondary_dim) {
     // This operation only updates the dimension metadata
     // It does not modify the actual data or indices
     // WARNING: Caller must ensure all indices are valid for new dimension
-    
-    const Index old_secondary_dim = matrix.secondary_dim();
     
     // If shrinking, verify no indices are out of bounds (debug mode only)
 #ifdef SCL_DEBUG

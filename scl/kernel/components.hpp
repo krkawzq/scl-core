@@ -64,9 +64,12 @@ public:
     Size n_words;
     Size n_bits;
 
-    explicit BitVector(Size n) : n_bits(n) {
-        n_words = (n + 63) / 64;
-        data = scl::memory::aligned_alloc<uint64_t>(n_words, SCL_ALIGNMENT);
+    explicit BitVector(Size n)
+        : n_words((n + 63) / 64),
+          n_bits(n)
+    {
+        auto data_ptr = scl::memory::aligned_alloc<uint64_t>(n_words, SCL_ALIGNMENT);
+        data = data_ptr.release();
         clear();
     }
 
@@ -77,11 +80,35 @@ public:
     BitVector(const BitVector&) = delete;
     BitVector& operator=(const BitVector&) = delete;
 
+    // Move constructor
+    BitVector(BitVector&& other) noexcept
+        : data(other.data), n_words(other.n_words), n_bits(other.n_bits)
+    {
+        other.data = nullptr;
+        other.n_words = 0;
+        other.n_bits = 0;
+    }
+
+    // Move assignment operator
+    BitVector& operator=(BitVector&& other) noexcept {
+        if (this != &other) {
+            scl::memory::aligned_free(data, SCL_ALIGNMENT);
+            data = other.data;
+            n_words = other.n_words;
+            n_bits = other.n_bits;
+
+            other.data = nullptr;
+            other.n_words = 0;
+            other.n_bits = 0;
+        }
+        return *this;
+    }
+
     SCL_FORCE_INLINE void clear() noexcept {
         std::memset(data, 0, n_words * sizeof(uint64_t));
     }
 
-    SCL_FORCE_INLINE bool test(Size i) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE bool test(Size i) const noexcept {
         return (data[i >> 6] >> (i & 63)) & 1;
     }
 
@@ -106,7 +133,7 @@ public:
     }
 
     // Count set bits (population count)
-    Size popcount() const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE Size popcount() const noexcept {
         Size count = 0;
         for (Size i = 0; i < n_words; ++i) {
             count += static_cast<Size>(__builtin_popcountll(data[i]));
@@ -126,10 +153,10 @@ public:
     Size n;
 
     explicit ParallelUnionFind(Size size) : n(size) {
-        parent = reinterpret_cast<std::atomic<Index>*>(
-            scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT));
-        rank = reinterpret_cast<std::atomic<Index>*>(
-            scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT));
+        auto parent_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        auto rank_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        parent = reinterpret_cast<std::atomic<Index>*>(parent_ptr.release());
+        rank = reinterpret_cast<std::atomic<Index>*>(rank_ptr.release());
 
         for (Size i = 0; i < n; ++i) {
             new (&parent[i]) std::atomic<Index>(static_cast<Index>(i));
@@ -148,6 +175,38 @@ public:
 
     ParallelUnionFind(const ParallelUnionFind&) = delete;
     ParallelUnionFind& operator=(const ParallelUnionFind&) = delete;
+
+    // Move constructor
+    ParallelUnionFind(ParallelUnionFind&& other) noexcept
+        : parent(other.parent), rank(other.rank), n(other.n)
+    {
+        other.parent = nullptr;
+        other.rank = nullptr;
+        other.n = 0;
+    }
+
+    // Move assignment
+    ParallelUnionFind& operator=(ParallelUnionFind&& other) noexcept {
+        if (this != &other) {
+            // Free existing resources
+            for (Size i = 0; i < n; ++i) {
+                parent[i].~atomic();
+                rank[i].~atomic();
+            }
+            scl::memory::aligned_free(reinterpret_cast<Index*>(parent), SCL_ALIGNMENT);
+            scl::memory::aligned_free(reinterpret_cast<Index*>(rank), SCL_ALIGNMENT);
+
+            // Steal other's resources
+            parent = other.parent;
+            rank = other.rank;
+            n = other.n;
+
+            other.parent = nullptr;
+            other.rank = nullptr;
+            other.n = 0;
+        }
+        return *this;
+    }
 
     // Find with path splitting (better for parallel access than full compression)
     SCL_FORCE_INLINE Index find(Index x) noexcept {
@@ -185,13 +244,15 @@ public:
 // Sequential Union-Find (faster when single-threaded)
 class UnionFind {
 public:
-    Index* parent;
-    uint8_t* rank;  // uint8_t sufficient for rank
-    Size n;
+    Index* parent = nullptr;
+    uint8_t* rank = nullptr;  // uint8_t sufficient for rank
+    Size n = 0;
 
     explicit UnionFind(Size size) : n(size) {
-        parent = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-        rank = scl::memory::aligned_alloc<uint8_t>(n, SCL_ALIGNMENT);
+        auto parent_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        auto rank_ptr = scl::memory::aligned_alloc<uint8_t>(n, SCL_ALIGNMENT);
+        parent = parent_ptr.release();
+        rank = rank_ptr.release();
 
         for (Size i = 0; i < n; ++i) {
             parent[i] = static_cast<Index>(i);
@@ -206,6 +267,31 @@ public:
 
     UnionFind(const UnionFind&) = delete;
     UnionFind& operator=(const UnionFind&) = delete;
+
+    // Move constructor
+    UnionFind(UnionFind&& other) noexcept
+        : parent(other.parent), rank(other.rank), n(other.n) {
+        other.parent = nullptr;
+        other.rank = nullptr;
+        other.n = 0;
+    }
+
+    // Move assignment operator
+    UnionFind& operator=(UnionFind&& other) noexcept {
+        if (this != &other) {
+            scl::memory::aligned_free(parent, SCL_ALIGNMENT);
+            scl::memory::aligned_free(rank, SCL_ALIGNMENT);
+
+            parent = other.parent;
+            rank = other.rank;
+            n = other.n;
+
+            other.parent = nullptr;
+            other.rank = nullptr;
+            other.n = 0;
+        }
+        return *this;
+    }
 
     // Find with full path compression
     SCL_FORCE_INLINE Index find(Index x) noexcept {
@@ -247,13 +333,15 @@ public:
 
 class alignas(64) FastQueue {
 public:
-    Index* data;
-    Size capacity;
-    Size head;
-    Size tail;
+    Index* data{nullptr};
+    Size capacity{0};
+    Size head{0};
+    Size tail{0};
 
-    explicit FastQueue(Size cap) : capacity(cap), head(0), tail(0) {
-        data = scl::memory::aligned_alloc<Index>(cap, SCL_ALIGNMENT);
+    explicit FastQueue(Size cap)
+        : capacity(cap) {
+        auto data_ptr = scl::memory::aligned_alloc<Index>(cap, SCL_ALIGNMENT);
+        data = data_ptr.release();
     }
 
     ~FastQueue() {
@@ -263,8 +351,33 @@ public:
     FastQueue(const FastQueue&) = delete;
     FastQueue& operator=(const FastQueue&) = delete;
 
-    SCL_FORCE_INLINE bool empty() const noexcept { return head == tail; }
-    SCL_FORCE_INLINE Size size() const noexcept { return tail - head; }
+    // Move constructor
+    FastQueue(FastQueue&& other) noexcept
+        : data(other.data), capacity(other.capacity), head(other.head), tail(other.tail) {
+        other.data = nullptr;
+        other.capacity = 0;
+        other.head = 0;
+        other.tail = 0;
+    }
+
+    // Move assignment operator
+    FastQueue& operator=(FastQueue&& other) noexcept {
+        if (this != &other) {
+            scl::memory::aligned_free(data, SCL_ALIGNMENT);
+            data = other.data;
+            capacity = other.capacity;
+            head = other.head;
+            tail = other.tail;
+            other.data = nullptr;
+            other.capacity = 0;
+            other.head = 0;
+            other.tail = 0;
+        }
+        return *this;
+    }
+
+    [[nodiscard]] SCL_FORCE_INLINE bool empty() const noexcept { return head == tail; }
+    [[nodiscard]] SCL_FORCE_INLINE Size size() const noexcept { return tail - head; }
 
     SCL_FORCE_INLINE void push(Index v) noexcept {
         data[tail++] = v;
@@ -453,7 +566,7 @@ void connected_components(
         return;
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     const bool use_parallel = (N >= config::PARALLEL_NODES_THRESHOLD && n_threads > 1);
 
     if (use_parallel) {
@@ -461,7 +574,7 @@ void connected_components(
         detail::ParallelUnionFind uf(N);
 
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            const Index u = static_cast<Index>(i);
+            const auto u = static_cast<Index>(i);
             const Index len = adjacency.primary_length_unsafe(u);
             if (len == 0) return;
 
@@ -475,13 +588,15 @@ void connected_components(
         });
 
         // Parallel label assignment
-        Index* roots = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
-        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+        auto roots_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+        Index* roots = roots_ptr.release();
+        scl::threading::parallel_for(Size(0), N, [&](Size i) {
             roots[i] = uf.find(static_cast<Index>(i));
         });
 
         // Sequential: assign contiguous labels
-        Index* root_to_label = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+        auto root_to_label_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+        Index* root_to_label = root_to_label_ptr.release();
         scl::algo::fill(root_to_label, N, config::INVALID_COMPONENT);
 
         Index label_counter = 0;
@@ -490,7 +605,7 @@ void connected_components(
             if (root_to_label[root] == config::INVALID_COMPONENT) {
                 root_to_label[root] = label_counter++;
             }
-            component_labels[i] = root_to_label[root];
+            component_labels[static_cast<Index>(i)] = root_to_label[root];
         }
 
         n_components = label_counter;
@@ -521,7 +636,9 @@ void connected_components(
         }
 
         // Assign contiguous labels
-        Index* root_to_label = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+        auto root_to_label_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+        Index* root_to_label = root_to_label_ptr.release();
         scl::algo::fill(root_to_label, N, config::INVALID_COMPONENT);
 
         Index label_counter = 0;
@@ -530,7 +647,7 @@ void connected_components(
             if (root_to_label[root] == config::INVALID_COMPONENT) {
                 root_to_label[root] = label_counter++;
             }
-            component_labels[i] = root_to_label[root];
+            component_labels[static_cast<Index>(i)] = root_to_label[root];
         }
 
         n_components = label_counter;
@@ -612,8 +729,9 @@ void largest_component(
     }
 
     // Get component labels
-    Index* labels = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
-    Index n_comp;
+    auto labels_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    Index* labels = labels_ptr.release();
+    Index n_comp{0};
     connected_components(adjacency, Array<Index>(labels, N), n_comp);
 
     if (n_comp == 1) {
@@ -625,7 +743,8 @@ void largest_component(
     }
 
     // Count component sizes
-    Index* sizes = scl::memory::aligned_alloc<Index>(static_cast<Size>(n_comp), SCL_ALIGNMENT);
+    auto sizes_ptr = scl::memory::aligned_alloc<Index>(static_cast<Size>(n_comp), SCL_ALIGNMENT);
+    Index* sizes = sizes_ptr.release();
     scl::algo::zero(sizes, static_cast<Size>(n_comp));
 
     for (Size i = 0; i < N; ++i) {
@@ -643,14 +762,14 @@ void largest_component(
     }
 
     // Build mask (parallelized for large graphs)
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     if (N >= config::PARALLEL_NODES_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            node_mask[i] = (labels[i] == largest_label) ? 1 : 0;
+            node_mask[static_cast<Index>(i)] = (labels[i] == largest_label) ? 1 : 0;
         });
     } else {
         for (Size i = 0; i < N; ++i) {
-            node_mask[i] = (labels[i] == largest_label) ? 1 : 0;
+            node_mask[static_cast<Index>(i)] = (labels[i] == largest_label) ? 1 : 0;
         }
     }
 
@@ -674,7 +793,9 @@ void component_sizes(
     const Size N = static_cast<Size>(n);
 
     // First get labels
-    Index* labels = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    auto labels_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* labels = labels_ptr.release();
     connected_components(adjacency, Array<Index>(labels, N), n_components);
 
     SCL_CHECK_DIM(sizes.len >= static_cast<Size>(n_components),
@@ -790,7 +911,7 @@ void multi_source_bfs(
 
     // Initialize all sources
     for (Size s = 0; s < sources.len; ++s) {
-        Index src = sources[s];
+        const auto src = sources[static_cast<Index>(s)];
         if (src >= 0 && src < n && distances[src] == config::UNVISITED) {
             distances[src] = 0;
             queue.push(src);
@@ -830,7 +951,7 @@ void parallel_bfs(
     SCL_CHECK_ARG(source >= 0 && source < n, "BFS: source out of bounds");
     SCL_CHECK_DIM(distances.len >= N, "BFS: distances buffer too small");
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Fall back to sequential for small graphs
     if (N < config::PARALLEL_NODES_THRESHOLD || n_threads <= 1) {
@@ -858,7 +979,7 @@ void parallel_bfs(
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
             if (!current_frontier.test(i)) return;
 
-            const Index u = static_cast<Index>(i);
+            const auto u = static_cast<Index>(i);
             const Index len = adjacency.primary_length_unsafe(u);
             auto indices = adjacency.primary_indices_unsafe(u);
 
@@ -907,8 +1028,12 @@ void dfs(
     scl::algo::fill(finish_time.ptr, N, config::UNVISITED);
 
     // Stack frames: (node, neighbor_index)
-    Index* stack_node = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
-    Index* stack_idx = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    auto stack_node_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* stack_node = stack_node_ptr.release();
+    auto stack_idx_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* stack_idx = stack_idx_ptr.release();
     Size stack_top = 0;
 
     Index time_counter = 0;
@@ -965,7 +1090,9 @@ bool topological_sort(
     SCL_CHECK_DIM(order.len >= N, "TopoSort: output buffer too small");
 
     // Compute in-degrees
-    Index* in_degree = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    auto in_degree_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* in_degree = in_degree_ptr.release();
     scl::algo::zero(in_degree, N);
 
     for (Index u = 0; u < n; ++u) {
@@ -987,7 +1114,7 @@ bool topological_sort(
     Size order_idx = 0;
     while (!queue.empty()) {
         Index u = queue.pop();
-        order[order_idx++] = u;
+        order[static_cast<Index>(order_idx++)] = u;
 
         const Index len = adjacency.primary_length_unsafe(u);
         auto indices = adjacency.primary_indices_unsafe(u);
@@ -1015,9 +1142,12 @@ Index graph_diameter(const Sparse<T, IsCSR>& adjacency) {
     if (n <= 1) return 0;
 
     const Size N = static_cast<Size>(n);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
-    Index* global_max = scl::memory::aligned_alloc<Index>(n_threads, SCL_ALIGNMENT);
+    auto global_max_ptr = scl::memory::aligned_alloc<Index>(n_threads, SCL_ALIGNMENT);
+
+
+    Index* global_max = global_max_ptr.release();
     scl::algo::zero(global_max, n_threads);
 
     scl::threading::WorkspacePool<Index> workspace;
@@ -1056,7 +1186,7 @@ Index graph_diameter(const Sparse<T, IsCSR>& adjacency) {
     });
 
     Index diameter = 0;
-    for (size_t t = 0; t < n_threads; ++t) {
+    for (Size t = 0; t < n_threads; ++t) {
         diameter = scl::algo::max2(diameter, global_max[t]);
     }
 
@@ -1077,13 +1207,17 @@ Real average_path_length(
     if (n <= 1) return Real(0);
 
     const Size N = static_cast<Size>(n);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     Size num_sources = (max_samples == 0 || max_samples >= N) ? N : max_samples;
 
     // Partial sums per thread
-    int64_t* partial_sum = scl::memory::aligned_alloc<int64_t>(n_threads, SCL_ALIGNMENT);
-    int64_t* partial_count = scl::memory::aligned_alloc<int64_t>(n_threads, SCL_ALIGNMENT);
+    auto partial_sum_ptr = scl::memory::aligned_alloc<int64_t>(n_threads, SCL_ALIGNMENT);
+
+    int64_t* partial_sum = partial_sum_ptr.release();
+    auto partial_count_ptr = scl::memory::aligned_alloc<int64_t>(n_threads, SCL_ALIGNMENT);
+
+    int64_t* partial_count = partial_count_ptr.release();
     scl::algo::zero(partial_sum, n_threads);
     scl::algo::zero(partial_count, n_threads);
 
@@ -1091,7 +1225,7 @@ Real average_path_length(
     workspace.init(n_threads, N);
 
     scl::threading::parallel_for(Size(0), num_sources, [&](size_t i, size_t thread_rank) {
-        Index source = static_cast<Index>((i * N) / num_sources);  // Distributed sampling
+        auto source = static_cast<Index>((i * N) / num_sources);  // Distributed sampling
 
         Index* distances = workspace.get(thread_rank);
         scl::algo::fill(distances, N, config::UNVISITED);
@@ -1130,7 +1264,7 @@ Real average_path_length(
 
     int64_t total_sum = 0;
     int64_t total_count = 0;
-    for (size_t t = 0; t < n_threads; ++t) {
+    for (Size t = 0; t < n_threads; ++t) {
         total_sum += partial_sum[t];
         total_count += partial_count[t];
     }
@@ -1156,11 +1290,11 @@ void clustering_coefficient(
     SCL_CHECK_DIM(coefficients.len >= N, "Clustering: output buffer too small");
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        const Index u = static_cast<Index>(i);
+        const auto u = static_cast<Index>(i);
         const Index deg = adjacency.primary_length_unsafe(u);
 
         if (deg < 2) {
-            coefficients[i] = Real(0);
+            coefficients[static_cast<Index>(i)] = Real(0);
             return;
         }
 
@@ -1187,7 +1321,7 @@ void clustering_coefficient(
         }
 
         Real max_edges = static_cast<Real>(deg) * static_cast<Real>(deg - 1) / Real(2);
-        coefficients[i] = static_cast<Real>(edge_count) / max_edges;
+        coefficients[static_cast<Index>(i)] = static_cast<Real>(edge_count) / max_edges;
     });
 }
 
@@ -1201,16 +1335,20 @@ Real global_clustering_coefficient(const Sparse<T, IsCSR>& adjacency) {
     if (n < 3) return Real(0);
 
     const Size N = static_cast<Size>(n);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Count triangles and connected triples per thread
-    Size* partial_triangles = scl::memory::aligned_alloc<Size>(n_threads, SCL_ALIGNMENT);
-    Size* partial_triples = scl::memory::aligned_alloc<Size>(n_threads, SCL_ALIGNMENT);
+    auto partial_triangles_ptr = scl::memory::aligned_alloc<Size>(n_threads, SCL_ALIGNMENT);
+
+    Size* partial_triangles = partial_triangles_ptr.release();
+    auto partial_triples_ptr = scl::memory::aligned_alloc<Size>(n_threads, SCL_ALIGNMENT);
+
+    Size* partial_triples = partial_triples_ptr.release();
     scl::algo::zero(partial_triangles, n_threads);
     scl::algo::zero(partial_triples, n_threads);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
-        const Index u = static_cast<Index>(i);
+        const auto u = static_cast<Index>(i);
         const Index deg = adjacency.primary_length_unsafe(u);
         if (deg < 2) return;
 
@@ -1229,7 +1367,7 @@ Real global_clustering_coefficient(const Sparse<T, IsCSR>& adjacency) {
             Size v_deg = static_cast<Size>(adjacency.primary_length_unsafe(v));
 
             // Count common neighbors > v
-            Size common = detail::sorted_intersect_count(
+            auto common = detail::sorted_intersect_count(
                 u_neighbors.ptr + j + 1, static_cast<Size>(deg - j - 1),
                 v_neighbors.ptr, v_deg
             );
@@ -1246,7 +1384,7 @@ Real global_clustering_coefficient(const Sparse<T, IsCSR>& adjacency) {
 
     Size total_triangles = 0;
     Size total_triples = 0;
-    for (size_t t = 0; t < n_threads; ++t) {
+    for (Size t = 0; t < n_threads; ++t) {
         total_triangles += partial_triangles[t];
         total_triples += partial_triples[t];
     }
@@ -1269,13 +1407,16 @@ Size count_triangles(const Sparse<T, IsCSR>& adjacency) {
     if (n < 3) return 0;
 
     const Size N = static_cast<Size>(n);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
-    Size* partial_counts = scl::memory::aligned_alloc<Size>(n_threads, SCL_ALIGNMENT);
+    auto partial_counts_ptr = scl::memory::aligned_alloc<Size>(n_threads, SCL_ALIGNMENT);
+
+
+    Size* partial_counts = partial_counts_ptr.release();
     scl::algo::zero(partial_counts, n_threads);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
-        const Index u = static_cast<Index>(i);
+        const auto u = static_cast<Index>(i);
         const Index u_deg = adjacency.primary_length_unsafe(u);
         if (u_deg < 2) return;
 
@@ -1310,7 +1451,7 @@ Size count_triangles(const Sparse<T, IsCSR>& adjacency) {
     });
 
     Size total = 0;
-    for (size_t t = 0; t < n_threads; ++t) {
+    for (Size t = 0; t < n_threads; ++t) {
         total += partial_counts[t];
     }
 
@@ -1335,7 +1476,7 @@ void degree_sequence(
     // Parallel for large graphs
     if (N >= config::PARALLEL_NODES_THRESHOLD) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            degrees[i] = adjacency.primary_length_unsafe(static_cast<Index>(i));
+            degrees[static_cast<Index>(i)] = adjacency.primary_length_unsafe(static_cast<Index>(i));
         });
     } else {
         for (Index i = 0; i < n; ++i) {
@@ -1359,7 +1500,7 @@ void degree_statistics(
     }
 
     const Size N = static_cast<Size>(n);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Per-thread accumulators
     struct alignas(64) ThreadStats {
@@ -1369,8 +1510,11 @@ void degree_statistics(
         Index min_d;
     };
 
-    ThreadStats* stats = scl::memory::aligned_alloc<ThreadStats>(n_threads, SCL_ALIGNMENT);
-    for (size_t t = 0; t < n_threads; ++t) {
+    auto stats_ptr = scl::memory::aligned_alloc<ThreadStats>(n_threads, SCL_ALIGNMENT);
+
+
+    ThreadStats* stats = stats_ptr.release();
+    for (Size t = 0; t < n_threads; ++t) {
         stats[t].sum = 0;
         stats[t].sum_sq = 0;
         stats[t].max_d = 0;
@@ -1390,7 +1534,7 @@ void degree_statistics(
     Index global_max = 0;
     Index global_min = std::numeric_limits<Index>::max();
 
-    for (size_t t = 0; t < n_threads; ++t) {
+    for (Size t = 0; t < n_threads; ++t) {
         total_sum += stats[t].sum;
         total_sum_sq += stats[t].sum_sq;
         global_max = scl::algo::max2(global_max, stats[t].max_d);
@@ -1424,11 +1568,13 @@ void degree_distribution(
 
     scl::algo::zero(histogram.ptr, hist_size);
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     if (static_cast<Size>(n) >= config::PARALLEL_NODES_THRESHOLD && n_threads > 1) {
         // Per-thread histograms
-        Size* thread_hists = scl::memory::aligned_alloc<Size>(n_threads * hist_size, SCL_ALIGNMENT);
+        auto thread_hists_ptr = scl::memory::aligned_alloc<Size>(n_threads * hist_size, SCL_ALIGNMENT);
+
+        Size* thread_hists = thread_hists_ptr.release();
         scl::algo::zero(thread_hists, n_threads * hist_size);
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t thread_rank) {
@@ -1439,9 +1585,9 @@ void degree_distribution(
         });
 
         // Merge histograms
-        for (size_t t = 0; t < n_threads; ++t) {
+        for (Size t = 0; t < n_threads; ++t) {
             for (Size d = 0; d < hist_size; ++d) {
-                histogram[d] += thread_hists[t * hist_size + d];
+                histogram[static_cast<Index>(d)] += thread_hists[t * hist_size + d];
             }
         }
 
@@ -1492,7 +1638,9 @@ void kcore_decomposition(
     SCL_CHECK_DIM(core_numbers.len >= N, "KCore: output buffer too small");
 
     // Initialize degrees
-    Index* degrees = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    auto degrees_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* degrees = degrees_ptr.release();
     Index max_degree = 0;
 
     for (Index i = 0; i < n; ++i) {
@@ -1501,9 +1649,14 @@ void kcore_decomposition(
     }
 
     // Bucket sort setup
-    Size* bucket_starts = scl::memory::aligned_alloc<Size>(static_cast<Size>(max_degree + 2), SCL_ALIGNMENT);
-    Index* sorted_nodes = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
-    Index* node_positions = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    auto bucket_starts_ptr = scl::memory::aligned_alloc<Size>(static_cast<Size>(max_degree + 2), SCL_ALIGNMENT);
+    Size* bucket_starts = bucket_starts_ptr.release();
+    auto sorted_nodes_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* sorted_nodes = sorted_nodes_ptr.release();
+    auto node_positions_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* node_positions = node_positions_ptr.release();
 
     scl::algo::zero(bucket_starts, static_cast<Size>(max_degree + 2));
 
@@ -1518,7 +1671,8 @@ void kcore_decomposition(
     }
 
     // Place nodes in buckets
-    Size* bucket_pos = scl::memory::aligned_alloc<Size>(static_cast<Size>(max_degree + 1), SCL_ALIGNMENT);
+    auto bucket_pos_ptr = scl::memory::aligned_alloc<Size>(static_cast<Size>(max_degree + 1), SCL_ALIGNMENT);
+    Size* bucket_pos = bucket_pos_ptr.release();
     scl::algo::copy(bucket_starts, bucket_pos, static_cast<Size>(max_degree + 1));
 
     for (Index i = 0; i < n; ++i) {

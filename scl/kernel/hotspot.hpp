@@ -77,6 +77,8 @@ namespace detail {
 
 // Xoshiro256++ PRNG
 class FastRNG {
+    // necessary for SIMD operations
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     alignas(32) uint64_t s[4];
     
     static SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) noexcept {
@@ -84,14 +86,16 @@ class FastRNG {
     }
 
 public:
-    explicit FastRNG(uint64_t seed) noexcept {
+    explicit FastRNG(uint64_t seed) noexcept
+        : s{0, 0, 0, 0}
+    {
         uint64_t z = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (auto& si : s) {
             z += 0x9e3779b97f4a7c15ULL;
             uint64_t t = z;
             t = (t ^ (t >> 30)) * 0xbf58476d1ce4e5b9ULL;
             t = (t ^ (t >> 27)) * 0x94d049bb133111ebULL;
-            s[i] = t ^ (t >> 31);
+            si = t ^ (t >> 31);
         }
     }
 
@@ -107,7 +111,7 @@ public:
     SCL_FORCE_INLINE Size bounded(Size n) noexcept {
         uint64_t x = next();
         __uint128_t m = static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n);
-        uint64_t l = static_cast<uint64_t>(m);
+        auto l = static_cast<uint64_t>(m);
         if (l < n) {
             uint64_t t = -n % n;
             while (l < t) {
@@ -124,15 +128,17 @@ public:
     }
     
     void jump() noexcept {
+        // necessary for SIMD operations
+        // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
         static const uint64_t JUMP[] = {
             0x180ec6d33cfd0abaULL, 0xd5a61266f0c9392cULL,
             0xa9582618e03fc9aaULL, 0x39abdc4529b1661cULL
         };
 
         uint64_t s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-        for (int i = 0; i < 4; ++i) {
+        for (const auto& jump_val : JUMP) {
             for (int b = 0; b < 64; ++b) {
-                if (JUMP[i] & (1ULL << b)) {
+                if (jump_val & (1ULL << b)) {
                     s0 ^= s[0]; s1 ^= s[1]; s2 ^= s[2]; s3 ^= s[3];
                 }
                 next();
@@ -169,19 +175,19 @@ SCL_FORCE_INLINE void shuffle_indices(Index* indices, Index n, FastRNG& rng) noe
 
 SCL_FORCE_INLINE Real compute_sum(const Real* v, Index n) noexcept {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::Lanes(d);
+    auto d = s::SimdTagFor<Real>();
+    const auto lanes = s::Lanes(d);
     
     auto vec_sum = s::Zero(d);
     size_t i = 0;
     
-    for (; i + lanes <= static_cast<size_t>(n); i += lanes) {
+    for (; i + lanes <= static_cast<Size>(n); i += lanes) {
         vec_sum = s::Add(vec_sum, s::LoadU(d, v + i));
     }
     
     Real result = s::ReduceSum(d, vec_sum);
     
-    for (; i < static_cast<size_t>(n); ++i) {
+    for (; i < static_cast<Size>(n); ++i) {
         result += v[i];
     }
     
@@ -195,14 +201,14 @@ SCL_FORCE_INLINE Real compute_mean(const Real* values, Index n) noexcept {
 
 SCL_FORCE_INLINE Real compute_sum_sq_diff(const Real* values, Index n, Real mean) noexcept {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::Lanes(d);
+    auto d = s::SimdTagFor<Real>();
+    const Size lanes = s::Lanes(d);
     
     auto vec_mean = s::Set(d, mean);
     auto vec_sum_sq = s::Zero(d);
     size_t i = 0;
     
-    for (; i + lanes <= static_cast<size_t>(n); i += lanes) {
+    for (; i + lanes <= static_cast<Size>(n); i += lanes) {
         auto v = s::LoadU(d, values + i);
         auto diff = s::Sub(v, vec_mean);
         vec_sum_sq = s::MulAdd(diff, diff, vec_sum_sq);
@@ -210,9 +216,9 @@ SCL_FORCE_INLINE Real compute_sum_sq_diff(const Real* values, Index n, Real mean
     
     Real result = s::ReduceSum(d, vec_sum_sq);
     
-    for (; i < static_cast<size_t>(n); ++i) {
-        Real d = values[i] - mean;
-        result += d * d;
+    for (; i < static_cast<Size>(n); ++i) {
+        auto diff = values[i] - mean;
+        result += diff * diff;
     }
     
     return result;
@@ -230,8 +236,8 @@ SCL_FORCE_INLINE Real compute_m2(const Real* values, Index n, Real mean) noexcep
 
 void standardize(const Real* values, Index n, Real* z_values) noexcept {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::Lanes(d);
+    auto d = s::SimdTagFor<Real>();
+    const auto lanes = s::Lanes(d);
     
     Real mean = compute_mean(values, n);
     Real var = compute_variance(values, n, mean);
@@ -241,13 +247,13 @@ void standardize(const Real* values, Index n, Real* z_values) noexcept {
     auto vec_inv_std = s::Set(d, inv_std);
     size_t i = 0;
     
-    for (; i + lanes <= static_cast<size_t>(n); i += lanes) {
+    for (; i + lanes <= static_cast<Size>(n); i += lanes) {
         auto v = s::LoadU(d, values + i);
         auto z = s::Mul(s::Sub(v, vec_mean), vec_inv_std);
         s::StoreU(z, d, z_values + i);
     }
     
-    for (; i < static_cast<size_t>(n); ++i) {
+    for (; i < static_cast<Size>(n); ++i) {
         z_values[i] = (values[i] - mean) * inv_std;
     }
 }
@@ -412,13 +418,14 @@ SCL_FORCE_INLINE Real compute_local_geary_c(
 
 // Branchless quadrant classification
 SCL_FORCE_INLINE SpatialPattern classify_quadrant(
-    Real z_value, Real spatial_lag, Real local_i, Real p_value, Real sig_level
+    Real z_value, Real spatial_lag, Real p_value, Real sig_level
 ) noexcept {
     if (p_value >= sig_level) return SpatialPattern::NOT_SIGNIFICANT;
     
     // Branchless: encode quadrant as 2-bit value
     int q = ((z_value >= 0) << 1) | (spatial_lag >= 0);
     // q: 0=LL, 1=LH, 2=HL, 3=HH
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
     static const SpatialPattern patterns[4] = {
         SpatialPattern::LOW_LOW, SpatialPattern::LOW_HIGH,
         SpatialPattern::HIGH_LOW, SpatialPattern::HIGH_HIGH
@@ -456,7 +463,7 @@ void row_standardize_weights(
         }
         Real inv_sum = (row_sum > config::EPSILON) ? Real(1) / row_sum : Real(0);
         for (Index k = 0; k < len; ++k) {
-            row_standardized[offset + k] = static_cast<Real>(values[k]) * inv_sum;
+            row_standardized[static_cast<Index>(offset + k)] = static_cast<Real>(values[k]) * inv_sum;
         }
     });
 }
@@ -482,18 +489,10 @@ void local_morans_i(
     SCL_CHECK_DIM(p_values.len >= static_cast<Size>(n), "p_values buffer too small");
 
     // Standardize values
-    Real* z_values = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    detail::standardize(values.ptr, n, z_values);
+    auto z_values_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
 
-    // Compute S0 (sum of all weights)
-    Real S0 = 0;
-    for (Index i = 0; i < n; ++i) {
-        auto w_values = spatial_weights.primary_values_unsafe(i);
-        Index len = spatial_weights.primary_length_unsafe(i);
-        for (Index k = 0; k < len; ++k) {
-            S0 += static_cast<Real>(w_values[k]);
-        }
-    }
+    Real* z_values = z_values_ptr.release();
+    detail::standardize(values.ptr, n, z_values);
 
     // Parallel local Moran's I computation
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
@@ -501,8 +500,8 @@ void local_morans_i(
         auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
         Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
-        local_i[i] = detail::compute_local_moran_i(
-            static_cast<Index>(i), const_cast<const Real*>(z_values), indices.ptr, w_values.ptr, len
+        local_i[static_cast<Index>(i)] = detail::compute_local_moran_i(
+            static_cast<Index>(i), z_values, indices.ptr, w_values.ptr, len
         );
 
         // Analytical z-score
@@ -519,13 +518,13 @@ void local_morans_i(
                      ((static_cast<Real>(n) - Real(1)) * (static_cast<Real>(n) - Real(1)));
         Real std_I = (Var_I > config::EPSILON) ? std::sqrt(Var_I) : Real(1);
         
-        z_scores[i] = (local_i[i] - E_I) / std_I;
-        p_values[i] = detail::z_to_pvalue(z_scores[i]);
+        z_scores[static_cast<Index>(i)] = (local_i[static_cast<Index>(i)] - E_I) / std_I;
+        p_values[static_cast<Index>(i)] = detail::z_to_pvalue(z_scores[static_cast<Index>(i)]);
     });
 
     // Parallel permutation test
     if (n_permutations > 0) {
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+        const Size n_threads = scl::threading::Scheduler::get_num_threads();
         
         // Thread-local storage
         scl::threading::WorkspacePool<Index> perm_pool;
@@ -537,11 +536,13 @@ void local_morans_i(
         count_pool.init(n_threads, n);
 
         // Initialize counts to zero
-        Index* global_counts = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        auto global_counts_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+        Index* global_counts = global_counts_ptr.release();
         std::memset(global_counts, 0, sizeof(Index) * n);
 
         // Distribute permutations across threads
-        Index perms_per_thread = (n_permutations + n_threads - 1) / n_threads;
+        auto perms_per_thread = static_cast<Index>((n_permutations + n_threads - 1) / n_threads);
 
         scl::threading::parallel_for(Size(0), n_threads, [&](size_t t, size_t) {
             Index* perm_idx = perm_pool.get(t);
@@ -554,11 +555,11 @@ void local_morans_i(
             }
 
             detail::FastRNG rng(seed);
-            for (size_t j = 0; j < t; ++j) {
+            for (Size j = 0; j < t; ++j) {
                 rng.jump();
             }
 
-            Index start_perm = t * perms_per_thread;
+            auto start_perm = static_cast<Index>(t * perms_per_thread);
             Index end_perm = scl::algo::min2(start_perm + perms_per_thread, n_permutations);
 
             for (Index p = start_perm; p < end_perm; ++p) {
@@ -572,7 +573,7 @@ void local_morans_i(
                     auto w_vals = spatial_weights.primary_values_unsafe(i);
                     Index len = spatial_weights.primary_length_unsafe(i);
                     Real perm_local_i = detail::compute_local_moran_i(
-                        i, const_cast<const Real*>(perm_values), indices.ptr, w_vals.ptr, len
+                        static_cast<Index>(i), perm_values, indices.ptr, w_vals.ptr, len
                     );
                     local_counts[i] += (std::abs(perm_local_i) >= std::abs(local_i[i]));
                 }
@@ -604,7 +605,6 @@ template <typename T, bool IsCSR>
 void classify_lisa_patterns(
     const Sparse<T, IsCSR>& spatial_weights,
     Array<const Real> values,
-    Array<const Real> local_i,
     Array<const Real> p_values,
     Index n,
     Real significance_level,
@@ -612,7 +612,8 @@ void classify_lisa_patterns(
 ) {
     SCL_CHECK_DIM(patterns.len >= static_cast<Size>(n), "patterns buffer too small");
 
-    Real* z_values = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto z_values_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* z_values = z_values_ptr.release();
     detail::standardize(values.ptr, n, z_values);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
@@ -621,8 +622,11 @@ void classify_lisa_patterns(
         Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
         Real spatial_lag = detail::compute_spatial_lag(indices.ptr, w_values.ptr, len, z_values);
-        patterns[i] = detail::classify_quadrant(
-            z_values[i], spatial_lag, local_i[i], p_values[i], significance_level
+        patterns[static_cast<Index>(i)] = detail::classify_quadrant(
+            z_values[static_cast<Index>(i)],
+            spatial_lag,
+            p_values[static_cast<Index>(i)],
+            significance_level
         );
     });
 
@@ -668,10 +672,10 @@ void getis_ord_g_star(
 
         detail::compute_g_star(
             static_cast<Index>(i), values.ptr, indices.ptr, w_values.ptr, len,
-            global_mean, global_s, n, include_self, g_star[i], z_scores[i]
+            global_mean, global_s, n, include_self, g_star[static_cast<Index>(i)], z_scores[static_cast<Index>(i)]
         );
 
-        p_values[i] = detail::z_to_pvalue(z_scores[i]);
+        p_values[static_cast<Index>(i)] = detail::z_to_pvalue(z_scores[static_cast<Index>(i)]);
     });
 }
 
@@ -692,11 +696,11 @@ inline void identify_hotspots(
                       config::Z_CRITICAL_95;
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        Real z = z_scores[i];
+        Real z = z_scores[static_cast<Index>(i)];
         // Branchless classification
         int hot = (z >= z_critical);
         int cold = (z <= -z_critical);
-        classification[i] = static_cast<HotspotType>(hot - cold);
+        classification[static_cast<Index>(i)] = static_cast<HotspotType>(hot - cold);
     });
 }
 
@@ -712,7 +716,7 @@ inline void classify_confidence_levels(
     SCL_CHECK_DIM(confidence_bins.len >= static_cast<Size>(n), "buffer too small");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
-        Real z = z_scores[i];
+        Real z = z_scores[static_cast<Index>(i)];
         Real az = std::abs(z);
         int sign = (z >= 0) ? 1 : -1;
         
@@ -720,7 +724,7 @@ inline void classify_confidence_levels(
                     (az >= config::Z_CRITICAL_99) ? 2 :
                     (az >= config::Z_CRITICAL_95) ? 1 : 0;
         
-        confidence_bins[i] = static_cast<int8_t>(sign * level);
+        confidence_bins[static_cast<Index>(i)] = static_cast<int8_t>(sign * level);
     });
 }
 
@@ -761,8 +765,8 @@ void local_gearys_c(
         auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
         Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
 
-        local_c[i] = detail::compute_local_geary_c(
-            static_cast<Index>(i), const_cast<const Real*>(values.ptr), indices.ptr, w_values.ptr, len
+        local_c[static_cast<Index>(i)] = detail::compute_local_geary_c(
+            static_cast<Index>(i), values.ptr, indices.ptr, w_values.ptr, len
         ) * inv_m2;
 
         Real wi2 = 0;
@@ -774,23 +778,26 @@ void local_gearys_c(
         Real E_C = Real(1);
         Real Var_C = wi2 * Real(2);
         Real std_C = (Var_C > config::EPSILON) ? std::sqrt(Var_C) : Real(1);
-        z_scores[i] = (local_c[i] - E_C) / std_C;
-        p_values[i] = detail::z_to_pvalue(z_scores[i]);
+        z_scores[static_cast<Index>(i)] = (local_c[static_cast<Index>(i)] - E_C) / std_C;
+        p_values[static_cast<Index>(i)] = detail::z_to_pvalue(z_scores[static_cast<Index>(i)]);
     });
 
     // Parallel permutation test (same pattern as local_morans_i)
     if (n_permutations > 0) {
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+        const Size n_threads = scl::threading::Scheduler::get_num_threads();
         
         scl::threading::WorkspacePool<Index> perm_pool;
         scl::threading::WorkspacePool<Real> perm_vals_pool;
         perm_pool.init(n_threads, n);
         perm_vals_pool.init(n_threads, n);
 
-        Index* global_counts = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        auto global_counts_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+
+        Index* global_counts = global_counts_ptr.release();
         std::memset(global_counts, 0, sizeof(Index) * n);
 
-        Index perms_per_thread = (n_permutations + n_threads - 1) / n_threads;
+        auto perms_per_thread = static_cast<Index>((n_permutations + n_threads - 1) / n_threads);
 
         scl::threading::parallel_for(Size(0), n_threads, [&](size_t t, size_t) {
             Index* perm_idx = perm_pool.get(t);
@@ -801,11 +808,11 @@ void local_gearys_c(
             }
 
             detail::FastRNG rng(seed);
-            for (size_t j = 0; j < t; ++j) {
+            for (Size j = 0; j < t; ++j) {
                 rng.jump();
             }
 
-            Index start_perm = t * perms_per_thread;
+            auto start_perm = static_cast<Index>(t * perms_per_thread);
             Index end_perm = scl::algo::min2(start_perm + perms_per_thread, n_permutations);
 
             for (Index p = start_perm; p < end_perm; ++p) {
@@ -819,7 +826,7 @@ void local_gearys_c(
                     auto w_vals = spatial_weights.primary_values_unsafe(i);
                     Index len = spatial_weights.primary_length_unsafe(i);
                     Real perm_c = detail::compute_local_geary_c(
-                        i, const_cast<const Real*>(perm_values), indices.ptr, w_vals.ptr, len
+                        static_cast<Index>(i), perm_values, indices.ptr, w_vals.ptr, len
                     ) * inv_m2;
 
                     if (std::abs(perm_c - Real(1)) >= std::abs(local_c[i] - Real(1))) {
@@ -912,8 +919,12 @@ void global_morans_i(
     // Permutation test
     if (n_permutations > 0) {
         detail::FastRNG rng(seed);
-        Index* perm_idx = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-        Real* perm_values = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+        auto perm_idx_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+        Index* perm_idx = perm_idx_ptr.release();
+        auto perm_values_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+
+        Real* perm_values = perm_values_ptr.release();
 
         for (Index i = 0; i < n; ++i) {
             perm_idx[i] = i;
@@ -1016,7 +1027,7 @@ void compute_spatial_lag(
         auto indices = spatial_weights.primary_indices_unsafe(static_cast<Index>(i));
         auto w_values = spatial_weights.primary_values_unsafe(static_cast<Index>(i));
         Index len = spatial_weights.primary_length_unsafe(static_cast<Index>(i));
-        spatial_lag[i] = detail::compute_spatial_lag(indices.ptr, w_values.ptr, len, values.ptr);
+        spatial_lag[static_cast<Index>(i)] = detail::compute_spatial_lag(indices.ptr, w_values.ptr, len, values.ptr);
     });
 }
 
@@ -1085,7 +1096,9 @@ void multivariate_local_morans_i(
     Index n_permutations = 0,
     uint64_t seed = 42
 ) {
-    Real* z_scores = scl::memory::aligned_alloc<Real>(n_locations, SCL_ALIGNMENT);
+    auto z_scores_ptr = scl::memory::aligned_alloc<Real>(n_locations, SCL_ALIGNMENT);
+
+    Real* z_scores = z_scores_ptr.release();
 
     // Parallelize across features
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_features), [&](size_t f, size_t) {
@@ -1128,7 +1141,9 @@ Index detect_spatial_clusters(
 
     HotspotType target = cluster_hotspots ? HotspotType::HOTSPOT : HotspotType::COLDSPOT;
     Index current_cluster = 0;
-    Index* queue = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto queue_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+    Index* queue = queue_ptr.release();
 
     for (Index i = 0; i < n; ++i) {
         if (classification[i] != target || cluster_labels[i] >= 0) continue;
@@ -1170,8 +1185,13 @@ inline void benjamini_hochberg_correction(
 ) {
     SCL_CHECK_DIM(q_values.len >= static_cast<Size>(n), "buffer too small");
 
-    Index* sorted_idx = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* sorted_p = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+
+    Index* sorted_idx = sorted_idx_ptr.release();
+    auto sorted_p_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+
+    Real* sorted_p = sorted_p_ptr.release();
 
     for (Index i = 0; i < n; ++i) {
         sorted_idx[i] = i;
@@ -1213,7 +1233,9 @@ inline void distance_band_weights(
     Index& nnz
 ) {
     Real thresh_sq = threshold_distance * threshold_distance;
-    Index* counts = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+    Index* counts = counts_ptr.release();
 
     // Parallel first pass: count neighbors
     scl::threading::parallel_for(Size(0), static_cast<Size>(n), [&](size_t i, size_t) {
@@ -1281,8 +1303,8 @@ inline void knn_weights(
 
         // Use partial sort to find k smallest distances
         struct DistIdx { Real dist; Index idx; };
-        DistIdx* heap = reinterpret_cast<DistIdx*>(
-            scl::memory::aligned_alloc<char>(sizeof(DistIdx) * (k + 1), SCL_ALIGNMENT));
+        auto heap_ptr = scl::memory::aligned_alloc<char>(sizeof(DistIdx) * (k + 1), SCL_ALIGNMENT);
+        auto heap = reinterpret_cast<DistIdx*>(heap_ptr.get());
         Index heap_size = 0;
 
         for (Index j = 0; j < n; ++j) {
@@ -1352,8 +1374,13 @@ void bivariate_local_morans_i(
     SCL_CHECK_DIM(bivariate_i.len >= static_cast<Size>(n), "buffer too small");
     SCL_CHECK_DIM(p_values.len >= static_cast<Size>(n), "buffer too small");
 
-    Real* zx = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* zy = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto zx_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+
+
+    Real* zx = zx_ptr.release();
+    auto zy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+
+    Real* zy = zy_ptr.release();
     detail::standardize(x_values.ptr, n, zx);
     detail::standardize(y_values.ptr, n, zy);
 
@@ -1367,14 +1394,16 @@ void bivariate_local_morans_i(
         for (Index k = 0; k < len; ++k) {
             sum_wy += static_cast<Real>(w_values[k]) * zy[indices[k]];
         }
-        bivariate_i[i] = zx[i] * sum_wy;
-        p_values[i] = Real(0.5);
+        bivariate_i[static_cast<Index>(i)] = zx[static_cast<Index>(i)] * sum_wy;
+        p_values[static_cast<Index>(i)] = Real(0.5);
     });
 
     // Permutation test (similar to local_morans_i)
     if (n_permutations > 0) {
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-        Index* global_counts = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        const Size n_threads = scl::threading::Scheduler::get_num_threads();
+        auto global_counts_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+        Index* global_counts = global_counts_ptr.release();
         std::memset(global_counts, 0, sizeof(Index) * n);
 
         scl::threading::WorkspacePool<Index> perm_pool;
@@ -1382,7 +1411,7 @@ void bivariate_local_morans_i(
         perm_pool.init(n_threads, n);
         perm_zy_pool.init(n_threads, n);
 
-        Index perms_per_thread = (n_permutations + n_threads - 1) / n_threads;
+        auto perms_per_thread = static_cast<Index>((n_permutations + n_threads - 1) / n_threads);
 
         scl::threading::parallel_for(Size(0), n_threads, [&](size_t t, size_t) {
             Index* perm_idx = perm_pool.get(t);
@@ -1393,11 +1422,11 @@ void bivariate_local_morans_i(
             }
 
             detail::FastRNG rng(seed);
-            for (size_t j = 0; j < t; ++j) {
+            for (Size j = 0; j < t; ++j) {
                 rng.jump();
             }
 
-            Index start = t * perms_per_thread;
+            auto start = static_cast<Index>(t * perms_per_thread);
             Index end = scl::algo::min2(start + perms_per_thread, n_permutations);
 
             for (Index p = start; p < end; ++p) {
@@ -1450,9 +1479,9 @@ void spatial_autocorrelation_summary(
     Real& moran_p,
     Real& geary_p
 ) {
-    Real moran_z, geary_z;
-    global_morans_i(spatial_weights, values, n, moran_i, moran_z, moran_p);
-    global_gearys_c(spatial_weights, values, n, geary_c, geary_z, geary_p);
+    Real moran_z{}, geary_z{};
+    global_morans_i<T, IsCSR>(spatial_weights, values, n, moran_i, moran_z, moran_p);
+    global_gearys_c<T, IsCSR>(spatial_weights, values, n, geary_c, geary_z, geary_p);
 }
 
 } // namespace scl::kernel::hotspot

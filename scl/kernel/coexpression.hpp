@@ -14,6 +14,9 @@
 #include <cmath>
 #include <cstring>
 #include <atomic>
+#include <concepts>
+#include <memory>
+#include <array>
 
 // =============================================================================
 // FILE: scl/kernel/coexpression.hpp
@@ -32,18 +35,25 @@
 namespace scl::kernel::coexpression {
 
 // =============================================================================
+// C++20 Concepts
+// =============================================================================
+
+template <typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
 namespace config {
-    constexpr Real DEFAULT_SOFT_POWER = Real(6);
-    constexpr Real EPSILON = Real(1e-15);
-    constexpr Index DEFAULT_MIN_MODULE_SIZE = 30;
-    constexpr Index DEFAULT_DEEP_SPLIT = 2;
-    constexpr Real DEFAULT_MERGE_CUT_HEIGHT = Real(0.25);
-    constexpr Index MAX_ITERATIONS = 100;
-    constexpr Size PARALLEL_THRESHOLD = 64;
-    constexpr Size SIMD_THRESHOLD = 16;
+    inline constexpr Real DEFAULT_SOFT_POWER = Real(6);
+    inline constexpr Real EPSILON = Real(1e-15);
+    inline constexpr Index DEFAULT_MIN_MODULE_SIZE = 30;
+    inline constexpr Index DEFAULT_DEEP_SPLIT = 2;
+    inline constexpr Real DEFAULT_MERGE_CUT_HEIGHT = Real(0.25);
+    inline constexpr Index MAX_ITERATIONS = 100;
+    inline constexpr Size PARALLEL_THRESHOLD = 64;
+    inline constexpr Size SIMD_THRESHOLD = 16;
 }
 
 // =============================================================================
@@ -80,7 +90,7 @@ SCL_HOT SCL_FORCE_INLINE Real dot_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const auto lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -114,7 +124,7 @@ SCL_HOT SCL_FORCE_INLINE Real sum_simd(const Real* SCL_RESTRICT x, Size n) noexc
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const auto lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -147,7 +157,7 @@ SCL_HOT SCL_FORCE_INLINE void axpy_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const auto lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_alpha = s::Set(d, alpha);
 
@@ -167,7 +177,7 @@ SCL_HOT SCL_FORCE_INLINE void scale_simd(Real* SCL_RESTRICT x, Real alpha, Size 
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const auto lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_alpha = s::Set(d, alpha);
 
@@ -260,7 +270,8 @@ SCL_HOT Real compute_median(const Real* values, Index n) {
     if (n == 0) return Real(0);
     if (n == 1) return values[0];
 
-    Real* temp = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* temp = temp_ptr.release();
     std::memcpy(temp, values, static_cast<Size>(n) * sizeof(Real));
 
     Real median = quickselect_median(temp, n);
@@ -272,7 +283,8 @@ SCL_HOT Real compute_median(const Real* values, Index n) {
 SCL_HOT Real compute_mad(const Real* values, Index n, Real median) {
     if (n == 0) return Real(0);
 
-    Real* abs_dev = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto abs_dev_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* abs_dev = abs_dev_ptr.release();
     for (Index i = 0; i < n; ++i) {
         abs_dev[i] = std::abs(values[i] - median);
     }
@@ -299,7 +311,7 @@ SCL_HOT Real pearson_correlation_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const auto lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_mean_x = s::Set(d, mean_x);
     auto v_mean_y = s::Set(d, mean_y);
@@ -356,7 +368,7 @@ SCL_HOT void compute_ranks_shell(
     }
 
     // Shell sort
-    Index gaps[] = {701, 301, 132, 57, 23, 10, 4, 1};
+    constexpr std::array<Index, 8> gaps = {701, 301, 132, 57, 23, 10, 4, 1};
     for (Index gap : gaps) {
         if (gap >= n) continue;
 
@@ -452,7 +464,7 @@ SCL_HOT Real bicor(const Real* x, const Real* y, Index n) {
 // Extract All Gene Expressions (Optimized)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 SCL_HOT void extract_all_gene_expressions(
     const Sparse<T, IsCSR>& X,
     Index n_cells,
@@ -466,7 +478,7 @@ SCL_HOT void extract_all_gene_expressions(
 
     if constexpr (IsCSR) {
         // Parallel over cells
-        scl::threading::parallel_for(Size(0), N, [&](size_t c) {
+        scl::threading::parallel_for(Size(0), N, [&](Size c) {
             auto indices = X.row_indices_unsafe(static_cast<Index>(c));
             auto values = X.row_values_unsafe(static_cast<Index>(c));
             const Index len = X.row_length_unsafe(static_cast<Index>(c));
@@ -480,7 +492,7 @@ SCL_HOT void extract_all_gene_expressions(
         });
     } else {
         // Parallel over genes
-        scl::threading::parallel_for(Size(0), G, [&](size_t g) {
+        scl::threading::parallel_for(Size(0), G, [&](Size g) {
             auto indices = X.col_indices_unsafe(static_cast<Index>(g));
             auto values = X.col_values_unsafe(static_cast<Index>(g));
             const Index len = X.col_length_unsafe(static_cast<Index>(g));
@@ -563,14 +575,16 @@ void compute_first_pc_parallel(
         eigenvector[g] = init_val;
     }
 
-    Real* scores = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Real* temp = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto scores_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    Real* scores = scores_ptr.release();
+    Real* temp = temp_ptr.release();
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const auto n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
 
     for (Index iter = 0; iter < max_iter; ++iter) {
         // scores = data * eigenvector (parallel)
-        scl::threading::parallel_for(Size(0), N, [&](size_t s) {
+        scl::threading::parallel_for(Size(0), N, [&](Size s) {
             const Real* row = data + s * G;
             scores[s] = dot_simd(row, eigenvector, G);
         });
@@ -578,19 +592,20 @@ void compute_first_pc_parallel(
         // temp = data^T * scores (parallel reduction)
         scl::algo::zero(temp, G);
 
-        Real** partials = static_cast<Real**>(
-            scl::memory::aligned_alloc<Real*>(n_threads, SCL_ALIGNMENT));
-        for (size_t t = 0; t < n_threads; ++t) {
-            partials[t] = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+        auto partials_ptr = scl::memory::aligned_alloc<Real*>(n_threads, SCL_ALIGNMENT);
+        Real** partials = partials_ptr.release();
+        for (Size t = 0; t < n_threads; ++t) {
+            auto partial_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+            partials[t] = partial_ptr.release();
             scl::algo::zero(partials[t], G);
         }
 
-        scl::threading::parallel_for(Size(0), N, [&](size_t s, size_t thread_rank) {
+        scl::threading::parallel_for(Size(0), N, [&](Size s, Size thread_rank) {
             const Real* row = data + s * G;
             axpy_simd(scores[s], row, partials[thread_rank], G);
         });
 
-        for (size_t t = 0; t < n_threads; ++t) {
+        for (Size t = 0; t < n_threads; ++t) {
             for (Size g = 0; g < G; ++g) {
                 temp[g] += partials[t][g];
             }
@@ -623,7 +638,7 @@ void compute_first_pc_parallel(
 // Correlation Matrix (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void correlation_matrix(
     const Sparse<T, IsCSR>& expression,
     Index n_cells,
@@ -638,14 +653,18 @@ void correlation_matrix(
     scl::algo::zero(corr_matrix, total);
 
     // Pre-extract all gene expressions
-    Real* gene_expr = scl::memory::aligned_alloc<Real>(G * N, SCL_ALIGNMENT);
+    auto gene_expr_ptr = scl::memory::aligned_alloc<Real>(G * N, SCL_ALIGNMENT);
+    Real* gene_expr = gene_expr_ptr.release();
     detail::extract_all_gene_expressions(expression, n_cells, n_genes, gene_expr);
 
     // Precompute means for Pearson
     Real* means = nullptr;
+    // NOLINTNEXTLINE
+    std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>> means_ptr;
     if (corr_type == CorrelationType::Pearson) {
-        means = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
-        scl::threading::parallel_for(Size(0), G, [&](size_t g) {
+        means_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+        means = means_ptr.release();
+        scl::threading::parallel_for(Size(0), G, [&](Size g) {
             means[g] = detail::compute_mean(gene_expr + g * N, n_cells);
         });
     }
@@ -655,7 +674,7 @@ void correlation_matrix(
         corr_matrix[static_cast<Size>(i) * n_genes + i] = Real(1);
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const auto n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
 
     // For Spearman, need per-thread workspace
     scl::threading::WorkspacePool<Real> rank_x_pool;
@@ -671,7 +690,7 @@ void correlation_matrix(
     // Parallel over upper triangular pairs - convert linear index to (i, j)
     Size n_pairs = static_cast<Size>(n_genes) * (n_genes - 1) / 2;
 
-    scl::threading::parallel_for(Size(0), n_pairs, [&](size_t pair_idx, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n_pairs, [&](Size pair_idx, Size thread_rank) {
         // Convert pair index to (i, j) for upper triangular matrix
         // For pair_idx from 0 to n_pairs-1, we want i < j
         // Formula: pair_idx = i * (2*n - i - 1) / 2 + (j - i - 1)
@@ -692,7 +711,7 @@ void correlation_matrix(
         const Real* x = gene_expr + static_cast<Size>(i) * N;
         const Real* y = gene_expr + static_cast<Size>(j) * N;
 
-        Real corr;
+        Real corr = Real(0);
         if (corr_type == CorrelationType::Pearson) {
             corr = detail::pearson_correlation_simd(x, y, n_cells, means[i], means[j]);
         } else if (corr_type == CorrelationType::Spearman) {
@@ -718,7 +737,7 @@ void correlation_matrix(
 // WGCNA Adjacency Matrix (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void wgcna_adjacency(
     const Sparse<T, IsCSR>& expression,
     Index n_cells,
@@ -731,11 +750,12 @@ void wgcna_adjacency(
     const Size G = static_cast<Size>(n_genes);
     const Size total = G * G;
 
-    Real* corr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto corr_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    Real* corr = corr_ptr.release();
     correlation_matrix(expression, n_cells, n_genes, corr, corr_type);
 
     // Parallel conversion to adjacency
-    scl::threading::parallel_for(Size(0), G, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), G, [&](Size i) {
         adjacency[i * G + i] = Real(1);
 
         for (Size j = i + 1; j < G; ++j) {
@@ -765,9 +785,10 @@ inline void topological_overlap_matrix(
     scl::algo::zero(tom, total);
 
     // Precompute connectivity
-    Real* connectivity = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto connectivity_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    Real* connectivity = connectivity_ptr.release();
 
-    scl::threading::parallel_for(Size(0), G, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), G, [&](Size i) {
         Real ki = Real(0);
         for (Index j = 0; j < n_genes; ++j) {
             if (static_cast<Size>(j) != i) {
@@ -785,7 +806,7 @@ inline void topological_overlap_matrix(
     // Parallel TOM computation (upper triangular)
     Size n_pairs = G * (G - 1) / 2;
 
-    scl::threading::parallel_for(Size(0), n_pairs, [&](size_t pair_idx) {
+    scl::threading::parallel_for(Size(0), n_pairs, [&](Size pair_idx) {
         // Convert pair index to (i, j) for upper triangular
         Index i = 0, j = 0;
         Size remaining = pair_idx;
@@ -833,7 +854,7 @@ inline void tom_dissimilarity(
 ) {
     const Size total = static_cast<Size>(n_genes) * n_genes;
 
-    scl::threading::parallel_for(Size(0), total, [&](size_t idx) {
+    scl::threading::parallel_for(Size(0), total, [&](Size idx) {
         dissim[idx] = Real(1) - tom[idx];
     });
 }
@@ -847,13 +868,16 @@ inline void hierarchical_clustering(
     Index n_genes,
     Index* merge_order,
     Real* merge_heights,
-    Index* cluster_labels
+    [[maybe_unused]] Index* cluster_labels
 ) {
     const Size G = static_cast<Size>(n_genes);
 
-    Index* cluster_id = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
-    Index* cluster_size = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
-    Real* cluster_dist = scl::memory::aligned_alloc<Real>(G * G, SCL_ALIGNMENT);
+    auto cluster_id_ptr = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+    auto cluster_size_ptr = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+    auto cluster_dist_ptr = scl::memory::aligned_alloc<Real>(G * G, SCL_ALIGNMENT);
+    Index* cluster_id = cluster_id_ptr.release();
+    Index* cluster_size = cluster_size_ptr.release();
+    Real* cluster_dist = cluster_dist_ptr.release();
 
     for (Index i = 0; i < n_genes; ++i) {
         cluster_id[i] = i;
@@ -866,7 +890,8 @@ inline void hierarchical_clustering(
     Index merge_idx = 0;
 
     // Active cluster mask
-    bool* active = reinterpret_cast<bool*>(scl::memory::aligned_alloc<char>(G, SCL_ALIGNMENT));
+    auto active_char_ptr = scl::memory::aligned_alloc<char>(G, SCL_ALIGNMENT);
+    bool* active = reinterpret_cast<bool*>(active_char_ptr.release());
     for (Size i = 0; i < G; ++i) {
         active[i] = true;
     }
@@ -877,18 +902,21 @@ inline void hierarchical_clustering(
         Index min_i = 0, min_j = 1;
 
         if (n_genes >= static_cast<Index>(config::PARALLEL_THRESHOLD)) {
-            const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-            Real* thread_min_dist = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
-            Index* thread_min_i = scl::memory::aligned_alloc<Index>(n_threads, SCL_ALIGNMENT);
-            Index* thread_min_j = scl::memory::aligned_alloc<Index>(n_threads, SCL_ALIGNMENT);
+            const auto n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
+            auto thread_min_dist_ptr = scl::memory::aligned_alloc<Real>(n_threads, SCL_ALIGNMENT);
+            auto thread_min_i_ptr = scl::memory::aligned_alloc<Index>(n_threads, SCL_ALIGNMENT);
+            auto thread_min_j_ptr = scl::memory::aligned_alloc<Index>(n_threads, SCL_ALIGNMENT);
+            Real* thread_min_dist = thread_min_dist_ptr.release();
+            Index* thread_min_i = thread_min_i_ptr.release();
+            Index* thread_min_j = thread_min_j_ptr.release();
 
-            for (size_t t = 0; t < n_threads; ++t) {
+            for (Size t = 0; t < n_threads; ++t) {
                 thread_min_dist[t] = Real(1e30);
                 thread_min_i[t] = 0;
                 thread_min_j[t] = 1;
             }
 
-            scl::threading::parallel_for(Size(0), G, [&](size_t i, size_t thread_rank) {
+            scl::threading::parallel_for(Size(0), G, [&](Size i, Size thread_rank) {
                 if (!active[i]) return;
 
                 for (Size j = i + 1; j < G; ++j) {
@@ -903,7 +931,7 @@ inline void hierarchical_clustering(
                 }
             });
 
-            for (size_t t = 0; t < n_threads; ++t) {
+            for (Size t = 0; t < n_threads; ++t) {
                 if (thread_min_dist[t] < min_dist) {
                     min_dist = thread_min_dist[t];
                     min_i = thread_min_i[t];
@@ -943,7 +971,9 @@ inline void hierarchical_clustering(
             Real d_ik = cluster_dist[static_cast<Size>(min_i) * n_genes + k];
             Real d_jk = cluster_dist[static_cast<Size>(min_j) * n_genes + k];
 
-            Real new_dist = (d_ik * cluster_size[min_i] + d_jk * cluster_size[min_j]) /
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            Real new_dist = (d_ik * static_cast<Real>(cluster_size[min_i]) + 
+                           d_jk * static_cast<Real>(cluster_size[min_j])) /
                            static_cast<Real>(new_size);
 
             cluster_dist[static_cast<Size>(min_i) * n_genes + k] = new_dist;
@@ -977,7 +1007,8 @@ inline Index cut_tree(
     }
 
     Index n_merges = n_genes - 1;
-    Index* parent = scl::memory::aligned_alloc<Index>(n_genes * 2, SCL_ALIGNMENT);
+    auto parent_ptr = scl::memory::aligned_alloc<Index>(n_genes * 2, SCL_ALIGNMENT);
+    Index* parent = parent_ptr.release();
 
     for (Index i = 0; i < n_genes * 2; ++i) {
         parent[i] = i;
@@ -1005,7 +1036,8 @@ inline Index cut_tree(
         }
     }
 
-    Index* label_map = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    auto label_map_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    Index* label_map = label_map_ptr.release();
     for (Index i = 0; i < n_genes; ++i) {
         label_map[i] = -1;
     }
@@ -1036,22 +1068,26 @@ inline Index detect_modules(
     Index min_module_size = config::DEFAULT_MIN_MODULE_SIZE,
     Real merge_cut_height = config::DEFAULT_MERGE_CUT_HEIGHT
 ) {
-    Index* merge_order = scl::memory::aligned_alloc<Index>((n_genes - 1) * 2, SCL_ALIGNMENT);
-    Real* merge_heights = scl::memory::aligned_alloc<Real>(n_genes - 1, SCL_ALIGNMENT);
+    auto merge_order_ptr = scl::memory::aligned_alloc<Index>((n_genes - 1) * 2, SCL_ALIGNMENT);
+    auto merge_heights_ptr = scl::memory::aligned_alloc<Real>(n_genes - 1, SCL_ALIGNMENT);
+    Index* merge_order = merge_order_ptr.release();
+    Real* merge_heights = merge_heights_ptr.release();
 
     hierarchical_clustering(dissim, n_genes, merge_order, merge_heights, nullptr);
 
     Index n_modules = cut_tree(merge_order, merge_heights, n_genes, merge_cut_height, module_labels);
 
     // Relabel small modules
-    Index* module_sizes = scl::memory::aligned_alloc<Index>(n_modules, SCL_ALIGNMENT);
+    auto module_sizes_ptr = scl::memory::aligned_alloc<Index>(n_modules, SCL_ALIGNMENT);
+    Index* module_sizes = module_sizes_ptr.release();
     scl::algo::zero(module_sizes, static_cast<Size>(n_modules));
 
     for (Index i = 0; i < n_genes; ++i) {
         ++module_sizes[module_labels[i]];
     }
 
-    Index* label_remap = scl::memory::aligned_alloc<Index>(n_modules, SCL_ALIGNMENT);
+    auto label_remap_ptr = scl::memory::aligned_alloc<Index>(n_modules, SCL_ALIGNMENT);
+    Index* label_remap = label_remap_ptr.release();
     Index new_label = 1;
 
     for (Index m = 0; m < n_modules; ++m) {
@@ -1078,7 +1114,7 @@ inline Index detect_modules(
 // Module Eigengene (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void module_eigengene(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> module_labels,
@@ -1104,7 +1140,8 @@ void module_eigengene(
         return;
     }
 
-    Index* module_gene_idx = scl::memory::aligned_alloc<Index>(n_module_genes, SCL_ALIGNMENT);
+    auto module_gene_idx_ptr = scl::memory::aligned_alloc<Index>(n_module_genes, SCL_ALIGNMENT);
+    Index* module_gene_idx = module_gene_idx_ptr.release();
     Index idx = 0;
     for (Index g = 0; g < n_genes; ++g) {
         if (module_labels[g] == module_id) {
@@ -1115,11 +1152,12 @@ void module_eigengene(
     const Size M = static_cast<Size>(n_module_genes);
 
     // Extract and center module expression
-    Real* module_expr = scl::memory::aligned_alloc<Real>(N * M, SCL_ALIGNMENT);
+    auto module_expr_ptr = scl::memory::aligned_alloc<Real>(N * M, SCL_ALIGNMENT);
+    Real* module_expr = module_expr_ptr.release();
     scl::algo::zero(module_expr, N * M);
 
     // Extract (parallel over genes)
-    scl::threading::parallel_for(Size(0), M, [&](size_t m) {
+    scl::threading::parallel_for(Size(0), M, [&](Size m) {
         Index gene = module_gene_idx[m];
 
         if constexpr (IsCSR) {
@@ -1150,7 +1188,7 @@ void module_eigengene(
     });
 
     // Center each gene (parallel)
-    scl::threading::parallel_for(Size(0), M, [&](size_t m) {
+    scl::threading::parallel_for(Size(0), M, [&](Size m) {
         Real sum = Real(0);
         for (Index c = 0; c < n_cells; ++c) {
             sum += module_expr[static_cast<Size>(c) * M + m];
@@ -1162,13 +1200,14 @@ void module_eigengene(
     });
 
     // Compute first PC
-    Real* gene_loadings = scl::memory::aligned_alloc<Real>(M, SCL_ALIGNMENT);
+    auto gene_loadings_ptr = scl::memory::aligned_alloc<Real>(M, SCL_ALIGNMENT);
+    Real* gene_loadings = gene_loadings_ptr.release();
     detail::compute_first_pc_parallel(module_expr, n_cells, n_module_genes, gene_loadings);
 
     // Project (parallel)
-    scl::threading::parallel_for(Size(0), N, [&](size_t c) {
+    scl::threading::parallel_for(Size(0), N, [&](Size c) {
         const Real* row = module_expr + c * M;
-        eigengene[c] = detail::dot_simd(row, gene_loadings, M);
+        eigengene[static_cast<Index>(c)] = detail::dot_simd(row, gene_loadings, M);
     });
 
     scl::memory::aligned_free(gene_loadings, SCL_ALIGNMENT);
@@ -1180,7 +1219,7 @@ void module_eigengene(
 // All Module Eigengenes (Parallel over modules)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void all_module_eigengenes(
     const Sparse<T, IsCSR>& expression,
     Array<const Index> module_labels,
@@ -1196,8 +1235,9 @@ void all_module_eigengenes(
     scl::algo::zero(eigengenes, total);
 
     // Parallel over modules
-    scl::threading::parallel_for(Size(0), M, [&](size_t m) {
-        Real* temp = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    scl::threading::parallel_for(Size(0), M, [&](Size m) {
+        auto temp_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        Real* temp = temp_ptr.release();
 
         module_eigengene(
             expression, module_labels, static_cast<Index>(m), n_cells, n_genes,
@@ -1229,12 +1269,14 @@ inline void module_trait_correlation(
     const Size M = static_cast<Size>(n_modules);
     const Size T = static_cast<Size>(n_traits);
 
-    scl::threading::parallel_for(Size(0), M * T, [&](size_t idx) {
+    scl::threading::parallel_for(Size(0), M * T, [&](Size idx) {
         Size m = idx / T;
         Size t = idx % T;
 
-        Real* me = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-        Real* trait = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        auto me_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        auto trait_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        Real* me = me_ptr.release();
+        Real* trait = trait_ptr.release();
 
         for (Size s = 0; s < N; ++s) {
             me[s] = eigengenes[s * M + m];
@@ -1276,13 +1318,14 @@ inline void identify_hub_genes(
     const Size G = static_cast<Size>(n_genes);
 
     // Parallel kME computation
-    Real* kme = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto kme_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    Real* kme = kme_ptr.release();
     scl::algo::zero(kme, G);
 
     std::atomic<Index> module_size_atomic{0};
 
-    scl::threading::parallel_for(Size(0), G, [&](size_t i) {
-        if (module_labels[i] != module_id) return;
+    scl::threading::parallel_for(Size(0), G, [&](Size i) {
+        if (module_labels[static_cast<Index>(i)] != module_id) return;
 
         module_size_atomic.fetch_add(1, std::memory_order_relaxed);
 
@@ -1300,15 +1343,17 @@ inline void identify_hub_genes(
     if (module_size > 1) {
         Real inv_size = Real(1) / static_cast<Real>(module_size - 1);
         for (Size i = 0; i < G; ++i) {
-            if (module_labels[i] == module_id) {
+            if (module_labels[static_cast<Index>(i)] == module_id) {
                 kme[i] *= inv_size;
             }
         }
     }
 
     // Collect and sort
-    Index* sorted_idx = scl::memory::aligned_alloc<Index>(module_size, SCL_ALIGNMENT);
-    Real* sorted_kme = scl::memory::aligned_alloc<Real>(module_size, SCL_ALIGNMENT);
+    auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(module_size, SCL_ALIGNMENT);
+    auto sorted_kme_ptr = scl::memory::aligned_alloc<Real>(module_size, SCL_ALIGNMENT);
+    Index* sorted_idx = sorted_idx_ptr.release();
+    Real* sorted_kme = sorted_kme_ptr.release();
 
     Index n_module_genes = 0;
     for (Index i = 0; i < n_genes; ++i) {
@@ -1348,7 +1393,7 @@ inline void identify_hub_genes(
 // Gene Module Membership (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void gene_module_membership(
     const Sparse<T, IsCSR>& expression,
     const Real* eigengenes,
@@ -1364,15 +1409,17 @@ void gene_module_membership(
     scl::algo::zero(kme_matrix, G * M);
 
     // Pre-extract gene expressions
-    Real* gene_expr = scl::memory::aligned_alloc<Real>(G * N, SCL_ALIGNMENT);
+    auto gene_expr_ptr = scl::memory::aligned_alloc<Real>(G * N, SCL_ALIGNMENT);
+    Real* gene_expr = gene_expr_ptr.release();
     detail::extract_all_gene_expressions(expression, n_cells, n_genes, gene_expr);
 
     // Parallel over genes
-    scl::threading::parallel_for(Size(0), G, [&](size_t g) {
+    scl::threading::parallel_for(Size(0), G, [&](Size g) {
         const Real* gexpr = gene_expr + g * N;
 
         for (Index m = 0; m < n_modules; ++m) {
-            Real* me = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+            auto me_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+            Real* me = me_ptr.release();
             for (Size c = 0; c < N; ++c) {
                 me[c] = eigengenes[c * M + m];
             }
@@ -1399,9 +1446,7 @@ inline void module_preservation(
     Index n_modules,
     Real* zsummary
 ) {
-    const Size G = static_cast<Size>(n_genes);
-
-    scl::threading::parallel_for(Size(0), static_cast<Size>(n_modules), [&](size_t m) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(n_modules), [&](Size m) {
         Index module_size = 0;
         for (Index i = 0; i < n_genes; ++i) {
             if (module_labels[i] == static_cast<Index>(m)) ++module_size;
@@ -1460,7 +1505,7 @@ inline void module_preservation(
 // Pick Soft Threshold (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 Real pick_soft_threshold(
     const Sparse<T, IsCSR>& expression,
     Index n_cells,
@@ -1476,7 +1521,8 @@ Real pick_soft_threshold(
     const Size G = static_cast<Size>(n_genes);
     const Size total = G * G;
 
-    Real* corr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto corr_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    Real* corr = corr_ptr.release();
     correlation_matrix(expression, n_cells, n_genes, corr, corr_type);
 
     Real best_power = powers_to_test[0];
@@ -1487,9 +1533,10 @@ Real pick_soft_threshold(
         Real power = powers_to_test[p];
 
         // Compute connectivity
-        Real* connectivity = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+        auto connectivity_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+        Real* connectivity = connectivity_ptr.release();
 
-        scl::threading::parallel_for(Size(0), G, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), G, [&](Size i) {
             Real k = Real(0);
             for (Index j = 0; j < n_genes; ++j) {
                 if (static_cast<Size>(j) != i) {
@@ -1517,17 +1564,20 @@ Real pick_soft_threshold(
         }
 
         Index n_bins = 20;
-        Real* bin_counts = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
+        auto bin_counts_ptr = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
+        Real* bin_counts = bin_counts_ptr.release();
         scl::algo::zero(bin_counts, static_cast<Size>(n_bins));
 
         for (Size i = 0; i < G; ++i) {
-            Index bin = static_cast<Index>(connectivity[i] / max_k * (n_bins - 1));
+            auto bin = static_cast<Index>(connectivity[i] / (max_k * static_cast<double>(n_bins - 1)));
             bin = scl::algo::min2(bin, n_bins - 1);
             bin_counts[bin] += Real(1);
         }
 
-        Real* log_k = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
-        Real* log_pk = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
+        auto log_k_ptr = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
+        auto log_pk_ptr = scl::memory::aligned_alloc<Real>(n_bins, SCL_ALIGNMENT);
+        Real* log_k = log_k_ptr.release();
+        Real* log_pk = log_pk_ptr.release();
 
         Index n_valid = 0;
         for (Index b = 0; b < n_bins; ++b) {
@@ -1586,7 +1636,7 @@ Real pick_soft_threshold(
 // Blockwise Modules (Parallel)
 // =============================================================================
 
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void blockwise_modules(
     const Sparse<T, IsCSR>& expression,
     Index n_cells,
@@ -1602,9 +1652,12 @@ void blockwise_modules(
 
     if (n_blocks <= 1 || n_genes <= block_size) {
         const Size adj_size = static_cast<Size>(n_genes) * n_genes;
-        Real* adjacency = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
-        Real* tom = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
-        Real* dissim = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
+        auto adjacency_ptr = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
+        auto tom_ptr = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
+        auto dissim_ptr = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
+        Real* adjacency = adjacency_ptr.release();
+        Real* tom = tom_ptr.release();
+        Real* dissim = dissim_ptr.release();
 
         wgcna_adjacency(expression, n_cells, n_genes, power, adjacency,
                        corr_type, AdjacencyType::Unsigned);
@@ -1618,13 +1671,15 @@ void blockwise_modules(
         scl::memory::aligned_free(adjacency, SCL_ALIGNMENT);
     } else {
         // Block-wise processing
-        Index* block_labels = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+        auto block_labels_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+        Index* block_labels = block_labels_ptr.release();
         std::atomic<Index> total_modules{0};
 
         // Pre-extract all gene expressions for efficiency
         const Size N = static_cast<Size>(n_cells);
         const Size G = static_cast<Size>(n_genes);
-        Real* all_gene_expr = scl::memory::aligned_alloc<Real>(G * N, SCL_ALIGNMENT);
+        auto all_gene_expr_ptr = scl::memory::aligned_alloc<Real>(G * N, SCL_ALIGNMENT);
+        Real* all_gene_expr = all_gene_expr_ptr.release();
         detail::extract_all_gene_expressions(expression, n_cells, n_genes, all_gene_expr);
 
         // Process blocks (could parallelize over blocks if memory permits)
@@ -1634,9 +1689,12 @@ void blockwise_modules(
             Index block_n = end - start;
 
             const Size adj_size = static_cast<Size>(block_n) * block_n;
-            Real* adjacency = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
-            Real* tom = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
-            Real* dissim = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
+            auto adjacency_ptr = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
+            auto tom_ptr = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
+            auto dissim_ptr = scl::memory::aligned_alloc<Real>(adj_size, SCL_ALIGNMENT);
+            Real* adjacency = adjacency_ptr.release();
+            Real* tom = tom_ptr.release();
+            Real* dissim = dissim_ptr.release();
 
             // Compute adjacency for block
             for (Index i = 0; i < block_n; ++i) {
@@ -1657,7 +1715,8 @@ void blockwise_modules(
             topological_overlap_matrix(adjacency, block_n, tom);
             tom_dissimilarity(tom, block_n, dissim);
 
-            Index* block_module_labels = scl::memory::aligned_alloc<Index>(block_n, SCL_ALIGNMENT);
+            auto block_module_labels_ptr = scl::memory::aligned_alloc<Index>(block_n, SCL_ALIGNMENT);
+            Index* block_module_labels = block_module_labels_ptr.release();
             Index block_mods = detect_modules(dissim, block_n, block_module_labels, min_module_size);
 
             Index offset = total_modules.fetch_add(block_mods);

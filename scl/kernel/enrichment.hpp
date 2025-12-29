@@ -8,11 +8,10 @@
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
 #include "scl/core/sort.hpp"
-#include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -74,20 +73,20 @@ namespace detail {
 // -----------------------------------------------------------------------------
 
 struct Xoshiro256pp {
-    alignas(32) uint64_t s[4];
+    alignas(32) std::array<uint64_t, 4> s{};
 
     SCL_FORCE_INLINE explicit Xoshiro256pp(uint64_t seed) noexcept {
         // SplitMix64 initialization
         uint64_t z = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (uint64_t& si : s) {
             z += 0x9e3779b97f4a7c15ULL;
             z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
             z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-            s[i] = z ^ (z >> 31);
+            si = z ^ (z >> 31);
         }
     }
 
-    SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) const noexcept {
         return (x << k) | (x >> (64 - k));
     }
 
@@ -108,8 +107,7 @@ struct Xoshiro256pp {
         uint64_t x = next();
         
         #if defined(__SIZEOF_INT128__) && defined(__GNUC__)
-        uint64_t m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
-        uint64_t threshold = static_cast<uint64_t>(-static_cast<int64_t>(n)) % static_cast<uint64_t>(n);
+        auto m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
         while (static_cast<__uint128_t>(m) * static_cast<__uint128_t>(n) < static_cast<__uint128_t>(x)) {
             x = next();
             m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
@@ -252,9 +250,10 @@ SCL_FORCE_INLINE SCL_HOT Real compute_gsea_es(
 
     // Main loop with prefetch
     Index i = 0;
-    for (; i + config::PREFETCH_DISTANCE < n_genes; ++i) {
+    const auto prefetch_dist = static_cast<Index>(config::PREFETCH_DISTANCE);
+    for (; i + prefetch_dist < n_genes; ++i) {
         // Prefetch ahead
-        SCL_PREFETCH_READ(&in_gene_set[ranked_genes[i + config::PREFETCH_DISTANCE]], 0);
+        SCL_PREFETCH_READ(&in_gene_set[ranked_genes[i + prefetch_dist]], 0);
         
         Index gene = ranked_genes[i];
 
@@ -313,10 +312,11 @@ SCL_FORCE_INLINE SCL_HOT Real compute_weighted_gsea_es(
     if (SCL_LIKELY(weight_exponent == Real(1))) {
         // Fast path: no power needed, 4-way unrolled with prefetch
         Index i = 0;
+        const auto prefetch_dist = static_cast<Index>(config::PREFETCH_DISTANCE);
         for (; i + 4 <= n_genes; i += 4) {
-            if (SCL_LIKELY(i + config::PREFETCH_DISTANCE < n_genes)) {
-                SCL_PREFETCH_READ(&in_gene_set[ranked_genes[i + config::PREFETCH_DISTANCE]], 0);
-                SCL_PREFETCH_READ(&scores[ranked_genes[i + config::PREFETCH_DISTANCE]], 0);
+            if (SCL_LIKELY(i + prefetch_dist < n_genes)) {
+                SCL_PREFETCH_READ(&in_gene_set[ranked_genes[i + prefetch_dist]], 0);
+                SCL_PREFETCH_READ(&scores[ranked_genes[i + prefetch_dist]], 0);
             }
             
             Index g0 = ranked_genes[i];
@@ -425,15 +425,17 @@ SCL_FORCE_INLINE SCL_HOT Index count_set_size(const bool* SCL_RESTRICT in_set, I
 // -----------------------------------------------------------------------------
 
 struct GseaWorkspace {
-    Index* perm_genes;
-    Real* null_es;
-    Size n_genes;
-    Size n_permutations;
+    Index* perm_genes = nullptr;
+    Real* null_es = nullptr;
+    Size n_genes{};
+    Size n_permutations{};
     
     GseaWorkspace(Size ng, Size np) 
         : n_genes(ng), n_permutations(np) {
-        perm_genes = scl::memory::aligned_alloc<Index>(ng, SCL_ALIGNMENT);
-        null_es = scl::memory::aligned_alloc<Real>(np, SCL_ALIGNMENT);
+        auto perm_genes_ptr = scl::memory::aligned_alloc<Index>(ng, SCL_ALIGNMENT);
+        auto null_es_ptr = scl::memory::aligned_alloc<Real>(np, SCL_ALIGNMENT);
+        perm_genes = perm_genes_ptr.release();
+        null_es = null_es_ptr.release();
     }
     
     ~GseaWorkspace() {
@@ -441,9 +443,11 @@ struct GseaWorkspace {
         scl::memory::aligned_free(perm_genes, SCL_ALIGNMENT);
     }
     
-    // Non-copyable
+    // Non-copyable, non-movable
     GseaWorkspace(const GseaWorkspace&) = delete;
     GseaWorkspace& operator=(const GseaWorkspace&) = delete;
+    GseaWorkspace(GseaWorkspace&&) = delete;
+    GseaWorkspace& operator=(GseaWorkspace&&) = delete;
 };
 
 // -----------------------------------------------------------------------------
@@ -451,19 +455,23 @@ struct GseaWorkspace {
 // -----------------------------------------------------------------------------
 
 struct CellEnrichmentWorkspace {
-    Real* cell_expr;
-    Index* gene_indices;
-    Real* orig_expr;        // For ssGSEA
-    Real* scores_by_gene;   // For ssGSEA
+    Real* cell_expr{};
+    Index* gene_indices{};
+    Real* orig_expr = nullptr;        // For ssGSEA
+    Real* scores_by_gene = nullptr;   // For ssGSEA
     Size n_genes;
     
     CellEnrichmentWorkspace(Size ng, bool need_ssgsea_buffers = false) 
-        : n_genes(ng), orig_expr(nullptr), scores_by_gene(nullptr) {
-        cell_expr = scl::memory::aligned_alloc<Real>(ng, SCL_ALIGNMENT);
-        gene_indices = scl::memory::aligned_alloc<Index>(ng, SCL_ALIGNMENT);
+        : n_genes(ng) {
+        auto cell_expr_ptr = scl::memory::aligned_alloc<Real>(ng, SCL_ALIGNMENT);
+        auto gene_indices_ptr = scl::memory::aligned_alloc<Index>(ng, SCL_ALIGNMENT);
+        cell_expr = cell_expr_ptr.release();
+        gene_indices = gene_indices_ptr.release();
         if (need_ssgsea_buffers) {
-            orig_expr = scl::memory::aligned_alloc<Real>(ng, SCL_ALIGNMENT);
-            scores_by_gene = scl::memory::aligned_alloc<Real>(ng, SCL_ALIGNMENT);
+            auto orig_expr_ptr = scl::memory::aligned_alloc<Real>(ng, SCL_ALIGNMENT);
+            auto scores_by_gene_ptr = scl::memory::aligned_alloc<Real>(ng, SCL_ALIGNMENT);
+            orig_expr = orig_expr_ptr.release();
+            scores_by_gene = scores_by_gene_ptr.release();
         }
     }
     
@@ -474,9 +482,11 @@ struct CellEnrichmentWorkspace {
         scl::memory::aligned_free(cell_expr, SCL_ALIGNMENT);
     }
     
-    // Non-copyable
+    // Non-copyable, non-movable
     CellEnrichmentWorkspace(const CellEnrichmentWorkspace&) = delete;
     CellEnrichmentWorkspace& operator=(const CellEnrichmentWorkspace&) = delete;
+    CellEnrichmentWorkspace(CellEnrichmentWorkspace&&) = delete;
+    CellEnrichmentWorkspace& operator=(CellEnrichmentWorkspace&&) = delete;
 };
 
 } // namespace detail
@@ -681,8 +691,9 @@ inline Index leading_edge_genes(
 
     // Main loop with prefetch
     Index i = 0;
-    for (; i + config::PREFETCH_DISTANCE < n_genes; ++i) {
-        SCL_PREFETCH_READ(&in_gene_set[ranked_genes[i + config::PREFETCH_DISTANCE]], 0);
+    const auto prefetch_dist = static_cast<Index>(config::PREFETCH_DISTANCE);
+    for (; i + prefetch_dist < n_genes; ++i) {
+        SCL_PREFETCH_READ(&in_gene_set[ranked_genes[i + prefetch_dist]], 0);
         
         Index gene = ranked_genes[i];
 
@@ -718,7 +729,7 @@ inline Index leading_edge_genes(
 
     // Collect leading edge genes
     Index count = 0;
-    Index max_count = static_cast<Index>(leading_genes.len);
+    auto max_count = static_cast<Index>(leading_genes.len);
     for (Index j = 0; j <= peak_pos && count < max_count; ++j) {
         Index gene = ranked_genes[j];
         if (SCL_LIKELY(in_gene_set[gene])) {
@@ -741,11 +752,12 @@ inline void ora_single_set(
     Real& odds_ratio_out,
     Real& fold_enrichment
 ) {
-    bool* is_de = scl::memory::aligned_alloc<bool>(n_total_genes, SCL_ALIGNMENT);
+    auto is_de_ptr = scl::memory::aligned_alloc<bool>(n_total_genes, SCL_ALIGNMENT);
+    bool* is_de = is_de_ptr.get();
     std::memset(is_de, 0, static_cast<Size>(n_total_genes) * sizeof(bool));
 
     for (Size i = 0; i < de_genes.len; ++i) {
-        Index g = de_genes[i];
+        Index g = de_genes[static_cast<Index>(i)];
         if (SCL_LIKELY(g >= 0 && g < n_total_genes)) {
             is_de[g] = true;
         }
@@ -755,10 +767,10 @@ inline void ora_single_set(
     Index a = 0;
     Size k = 0;
     for (; k + 4 <= pathway_genes.len; k += 4) {
-        Index g0 = pathway_genes[k];
-        Index g1 = pathway_genes[k + 1];
-        Index g2 = pathway_genes[k + 2];
-        Index g3 = pathway_genes[k + 3];
+        Index g0 = pathway_genes[static_cast<Index>(k)];
+        Index g1 = pathway_genes[static_cast<Index>(k + 1)];
+        Index g2 = pathway_genes[static_cast<Index>(k + 2)];
+        Index g3 = pathway_genes[static_cast<Index>(k + 3)];
         
         if (SCL_LIKELY(g0 >= 0 && g0 < n_total_genes) && is_de[g0]) ++a;
         if (SCL_LIKELY(g1 >= 0 && g1 < n_total_genes) && is_de[g1]) ++a;
@@ -767,14 +779,14 @@ inline void ora_single_set(
     }
 
     for (; k < pathway_genes.len; ++k) {
-        Index g = pathway_genes[k];
+        Index g = pathway_genes[static_cast<Index>(k)];
         if (SCL_LIKELY(g >= 0 && g < n_total_genes) && is_de[g]) {
             ++a;
         }
     }
 
-    Index n = static_cast<Index>(de_genes.len);
-    Index K = static_cast<Index>(pathway_genes.len);
+    auto n = static_cast<Index>(de_genes.len);
+    auto K = static_cast<Index>(pathway_genes.len);
     Index b = n - a;
     Index c = K - a;
     Index d = n_total_genes - n - c;
@@ -786,8 +798,6 @@ inline void ora_single_set(
                    static_cast<Real>(n_total_genes);
     fold_enrichment = (SCL_LIKELY(expected > config::EPSILON)) ?
         static_cast<Real>(a) / expected : Real(0);
-
-    scl::memory::aligned_free(is_de, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -810,17 +820,18 @@ inline void ora_batch(
     SCL_CHECK_DIM(fold_enrichments.len >= n_pathways_sz, "Enrichment: fold_enrichments buffer too small");
 
     // Build DE gene lookup once
-    bool* is_de = scl::memory::aligned_alloc<bool>(n_total_genes, SCL_ALIGNMENT);
+    auto is_de_ptr = scl::memory::aligned_alloc<bool>(n_total_genes, SCL_ALIGNMENT);
+    bool* is_de = is_de_ptr.get();
     std::memset(is_de, 0, static_cast<Size>(n_total_genes) * sizeof(bool));
 
     for (Size i = 0; i < de_genes.len; ++i) {
-        Index g = de_genes[i];
+        Index g = de_genes[static_cast<Index>(i)];
         if (SCL_LIKELY(g >= 0 && g < n_total_genes)) {
             is_de[g] = true;
         }
     }
 
-    Index n = static_cast<Index>(de_genes.len);
+    auto n = static_cast<Index>(de_genes.len);
     Real inv_n_total = Real(1) / static_cast<Real>(n_total_genes);
 
     const bool use_parallel = (n_pathways_sz >= config::PARALLEL_THRESHOLD);
@@ -832,9 +843,10 @@ inline void ora_batch(
         // Count overlap with prefetch and 4-way unrolling
         Index a = 0;
         Index k = 0;
+        const auto prefetch_dist = static_cast<Index>(config::PREFETCH_DISTANCE);
         for (; k + 4 <= K; k += 4) {
-            if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < K)) {
-                SCL_PREFETCH_READ(&is_de[pathway[k + config::PREFETCH_DISTANCE]], 0);
+            if (SCL_LIKELY(k + prefetch_dist < K)) {
+                SCL_PREFETCH_READ(&is_de[pathway[k + prefetch_dist]], 0);
             }
             
             Index g0 = pathway[k];
@@ -876,8 +888,6 @@ inline void ora_batch(
             process_pathway(p);
         }
     }
-
-    scl::memory::aligned_free(is_de, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -893,19 +903,22 @@ inline void benjamini_hochberg(
 
     if (SCL_UNLIKELY(n == 0)) return;
 
-    Index* sorted_idx = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* sorted_p = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto sorted_p_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Index* sorted_idx = sorted_idx_ptr.get();
+    Real* sorted_p = sorted_p_ptr.get();
 
     for (Size i = 0; i < n; ++i) {
         sorted_idx[i] = static_cast<Index>(i);
-        sorted_p[i] = p_values[i];
+        sorted_p[i] = p_values[static_cast<Index>(i)];
     }
 
     // Use efficient sort
     scl::sort::sort_pairs(Array<Real>(sorted_p, n), Array<Index>(sorted_idx, n));
 
     // Compute adjusted p-values
-    Real* adj_p = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto adj_p_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* adj_p = adj_p_ptr.get();
     Real n_real = static_cast<Real>(n);
 
     for (Size i = 0; i < n; ++i) {
@@ -926,10 +939,6 @@ inline void benjamini_hochberg(
         Index orig_idx = sorted_idx[i];
         q_values[orig_idx] = adj_p[i];
     }
-
-    scl::memory::aligned_free(adj_p, SCL_ALIGNMENT);
-    scl::memory::aligned_free(sorted_p, SCL_ALIGNMENT);
-    scl::memory::aligned_free(sorted_idx, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -978,7 +987,7 @@ inline void bonferroni(
 
     // Scalar cleanup
     for (; i < n; ++i) {
-        adjusted_p[i] = scl::algo::min2(p_values[i] * n_real, Real(1));
+        adjusted_p[static_cast<Index>(i)] = scl::algo::min2(p_values[static_cast<Index>(i)] * n_real, Real(1));
     }
 }
 
@@ -1001,11 +1010,12 @@ void pathway_activity(
     if (SCL_UNLIKELY(pathway_genes.len == 0)) return;
 
     // Build pathway gene lookup
-    bool* in_pathway = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    auto in_pathway_ptr = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    bool* in_pathway = in_pathway_ptr.get();
     std::memset(in_pathway, 0, static_cast<Size>(n_genes) * sizeof(bool));
 
     for (Size i = 0; i < pathway_genes.len; ++i) {
-        Index g = pathway_genes[i];
+        Index g = pathway_genes[static_cast<Index>(i)];
         if (SCL_LIKELY(g >= 0 && g < n_genes)) {
             in_pathway[g] = true;
         }
@@ -1024,9 +1034,10 @@ void pathway_activity(
 
             // 8-way unrolled accumulation with prefetch
             Index k = 0;
+            const auto prefetch_dist = static_cast<Index>(config::PREFETCH_DISTANCE);
             for (; k + 8 <= len; k += 8) {
-                if (SCL_LIKELY(k + config::PREFETCH_DISTANCE < len)) {
-                    SCL_PREFETCH_READ(&in_pathway[indices[k + config::PREFETCH_DISTANCE]], 0);
+                if (SCL_LIKELY(k + prefetch_dist < len)) {
+                    SCL_PREFETCH_READ(&in_pathway[indices[k + prefetch_dist]], 0);
                 }
                 
                 if (SCL_LIKELY(indices[k] < n_genes) && in_pathway[indices[k]])
@@ -1082,7 +1093,7 @@ void pathway_activity(
     } else {
         // CSC: accumulate by gene
         for (Size i = 0; i < pathway_genes.len; ++i) {
-            Index gene = pathway_genes[i];
+            Index gene = pathway_genes[static_cast<Index>(i)];
             if (SCL_UNLIKELY(gene < 0 || gene >= n_genes)) continue;
 
             auto indices = X.col_indices_unsafe(gene);
@@ -1106,7 +1117,7 @@ void pathway_activity(
 
         if (use_parallel) {
             scl::threading::parallel_for(Size(0), static_cast<Size>(n_cells), [&](size_t c) {
-                activity_scores[c] *= inv_n_pathway;
+                activity_scores[static_cast<Index>(c)] *= inv_n_pathway;
             });
         } else {
             Size c = 0;
@@ -1115,12 +1126,10 @@ void pathway_activity(
                 s::Store(s::Mul(v, v_inv), d, activity_scores.ptr + c);
             }
             for (; c < static_cast<Size>(n_cells); ++c) {
-                activity_scores[c] *= inv_n_pathway;
+                activity_scores[static_cast<Index>(c)] *= inv_n_pathway;
             }
         }
     }
-
-    scl::memory::aligned_free(in_pathway, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -1144,17 +1153,18 @@ void gsva_score(
     }
 
     // Build pathway gene lookup
-    bool* in_pathway = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    auto in_pathway_ptr = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    bool* in_pathway = in_pathway_ptr.get();
     std::memset(in_pathway, 0, static_cast<Size>(n_genes) * sizeof(bool));
 
     for (Size i = 0; i < pathway_genes.len; ++i) {
-        Index g = pathway_genes[i];
+        Index g = pathway_genes[static_cast<Index>(i)];
         if (SCL_LIKELY(g >= 0 && g < n_genes)) {
             in_pathway[g] = true;
         }
     }
 
-    Index n_pathway = static_cast<Index>(pathway_genes.len);
+    auto n_pathway = static_cast<Index>(pathway_genes.len);
     const Size n_genes_sz = static_cast<Size>(n_genes);
     const bool use_parallel = (static_cast<Size>(n_cells) >= config::PARALLEL_THRESHOLD);
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
@@ -1191,7 +1201,7 @@ void gsva_score(
                 // Binary search for cell
                 const Index* found = scl::algo::lower_bound(indices.ptr, indices.ptr + len, c);
                 if (found != indices.ptr + len && *found == c) {
-                    Index idx = static_cast<Index>(found - indices.ptr);
+                    auto idx = static_cast<Index>(found - indices.ptr);
                     ws.cell_expr[g] = static_cast<Real>(values[idx]);
                 }
             }
@@ -1221,8 +1231,6 @@ void gsva_score(
             process_cell(c, *workspaces[0]);
         }
     }
-
-    scl::memory::aligned_free(in_pathway, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -1242,7 +1250,8 @@ inline void rank_genes_by_score(
         ranked_genes[i] = i;
     }
 
-    Real* sorted_scores = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto sorted_scores_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    Real* sorted_scores = sorted_scores_ptr.get();
     std::memcpy(sorted_scores, scores.ptr, static_cast<Size>(n_genes) * sizeof(Real));
 
     // Use efficient sort
@@ -1250,8 +1259,6 @@ inline void rank_genes_by_score(
         Array<Real>(sorted_scores, static_cast<Size>(n_genes)),
         Array<Index>(ranked_genes.ptr, static_cast<Size>(n_genes))
     );
-
-    scl::memory::aligned_free(sorted_scores, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -1264,26 +1271,27 @@ inline Index gene_set_overlap(
     Index n_genes,
     Array<Index> overlap_genes
 ) {
-    bool* in_set1 = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    auto in_set1_ptr = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    bool* in_set1 = in_set1_ptr.get();
     std::memset(in_set1, 0, static_cast<Size>(n_genes) * sizeof(bool));
 
     for (Size i = 0; i < set1.len; ++i) {
-        Index g = set1[i];
+        Index g = set1[static_cast<Index>(i)];
         if (SCL_LIKELY(g >= 0 && g < n_genes)) {
             in_set1[g] = true;
         }
     }
 
     Index count = 0;
-    Index max_count = static_cast<Index>(overlap_genes.len);
+    auto max_count = static_cast<Index>(overlap_genes.len);
 
     // 4-way unrolled search
     Size i = 0;
     for (; i + 4 <= set2.len && count + 4 <= max_count; i += 4) {
-        Index g0 = set2[i];
-        Index g1 = set2[i + 1];
-        Index g2 = set2[i + 2];
-        Index g3 = set2[i + 3];
+        Index g0 = set2[static_cast<Index>(i)];
+        Index g1 = set2[static_cast<Index>(i + 1)];
+        Index g2 = set2[static_cast<Index>(i + 2)];
+        Index g3 = set2[static_cast<Index>(i + 3)];
         
         if (SCL_LIKELY(g0 >= 0 && g0 < n_genes) && in_set1[g0]) 
             overlap_genes[count++] = g0;
@@ -1296,13 +1304,12 @@ inline Index gene_set_overlap(
     }
 
     for (; i < set2.len && count < max_count; ++i) {
-        Index g = set2[i];
+        Index g = set2[static_cast<Index>(i)];
         if (SCL_LIKELY(g >= 0 && g < n_genes) && in_set1[g]) {
             overlap_genes[count++] = g;
         }
     }
 
-    scl::memory::aligned_free(in_set1, SCL_ALIGNMENT);
     return count;
 }
 
@@ -1315,12 +1322,13 @@ inline Real jaccard_similarity(
     Array<const Index> set2,
     Index n_genes
 ) {
-    bool* in_set1 = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    auto in_set1_ptr = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    bool* in_set1 = in_set1_ptr.get();
     std::memset(in_set1, 0, static_cast<Size>(n_genes) * sizeof(bool));
 
     Index size1 = 0;
     for (Size i = 0; i < set1.len; ++i) {
-        Index g = set1[i];
+        Index g = set1[static_cast<Index>(i)];
         if (SCL_LIKELY(g >= 0 && g < n_genes) && !in_set1[g]) {
             in_set1[g] = true;
             ++size1;
@@ -1333,10 +1341,10 @@ inline Real jaccard_similarity(
     // 4-way unrolled
     Size i = 0;
     for (; i + 4 <= set2.len; i += 4) {
-        Index g0 = set2[i];
-        Index g1 = set2[i + 1];
-        Index g2 = set2[i + 2];
-        Index g3 = set2[i + 3];
+        Index g0 = set2[static_cast<Index>(i)];
+        Index g1 = set2[static_cast<Index>(i + 1)];
+        Index g2 = set2[static_cast<Index>(i + 2)];
+        Index g3 = set2[static_cast<Index>(i + 3)];
         
         if (SCL_LIKELY(g0 >= 0 && g0 < n_genes)) {
             if (in_set1[g0]) { ++intersection; in_set1[g0] = false; }
@@ -1357,7 +1365,7 @@ inline Real jaccard_similarity(
     }
 
     for (; i < set2.len; ++i) {
-        Index g = set2[i];
+        Index g = set2[static_cast<Index>(i)];
         if (SCL_LIKELY(g >= 0 && g < n_genes)) {
             if (in_set1[g]) {
                 ++intersection;
@@ -1367,8 +1375,6 @@ inline Real jaccard_similarity(
             }
         }
     }
-
-    scl::memory::aligned_free(in_set1, SCL_ALIGNMENT);
 
     Index union_size = size1 + size2_unique;
     return (SCL_LIKELY(union_size > 0)) ?
@@ -1393,7 +1399,7 @@ inline void enrichment_map(
     // Initialize diagonal
     std::memset(similarity_matrix.ptr, 0, total * sizeof(Real));
     for (Index i = 0; i < n_pathways; ++i) {
-        similarity_matrix[static_cast<Size>(i) * n_pathways + i] = Real(1);
+        similarity_matrix[static_cast<Index>(static_cast<Size>(i) * static_cast<Size>(n_pathways) + static_cast<Size>(i))] = Real(1);
     }
 
     const bool use_parallel = (static_cast<Size>(n_pathways) >= 32);
@@ -1406,8 +1412,8 @@ inline void enrichment_map(
                 n_genes
             );
 
-            similarity_matrix[static_cast<Size>(i) * n_pathways + j] = sim;
-            similarity_matrix[static_cast<Size>(j) * n_pathways + i] = sim;
+            similarity_matrix[static_cast<Index>(static_cast<Size>(i) * static_cast<Size>(n_pathways) + static_cast<Size>(j))] = sim;
+            similarity_matrix[static_cast<Index>(static_cast<Size>(j) * static_cast<Size>(n_pathways) + static_cast<Size>(i))] = sim;
         }
     };
 
@@ -1444,17 +1450,18 @@ void ssgsea(
     }
 
     // Build pathway gene lookup
-    bool* in_pathway = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    auto in_pathway_ptr = scl::memory::aligned_alloc<bool>(n_genes, SCL_ALIGNMENT);
+    bool* in_pathway = in_pathway_ptr.get();
     std::memset(in_pathway, 0, static_cast<Size>(n_genes) * sizeof(bool));
 
     for (Size i = 0; i < pathway_genes.len; ++i) {
-        Index g = pathway_genes[i];
+        Index g = pathway_genes[static_cast<Index>(i)];
         if (SCL_LIKELY(g >= 0 && g < n_genes)) {
             in_pathway[g] = true;
         }
     }
 
-    Index n_pathway = static_cast<Index>(pathway_genes.len);
+    auto n_pathway = static_cast<Index>(pathway_genes.len);
     const Size n_genes_sz = static_cast<Size>(n_genes);
     const bool use_parallel = (static_cast<Size>(n_cells) >= config::PARALLEL_THRESHOLD);
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
@@ -1517,8 +1524,6 @@ void ssgsea(
             process_cell(c, *workspaces[0]);
         }
     }
-
-    scl::memory::aligned_free(in_pathway, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -1531,10 +1536,10 @@ inline Index filter_significant(
     Array<Index> significant_indices
 ) {
     Index count = 0;
-    Index max_count = static_cast<Index>(significant_indices.len);
+    auto max_count = static_cast<Index>(significant_indices.len);
 
     for (Size i = 0; i < p_values.len && count < max_count; ++i) {
-        if (p_values[i] < alpha) {
+        if (p_values[static_cast<Index>(i)] < alpha) {
             significant_indices[count++] = static_cast<Index>(i);
         }
     }
@@ -1556,8 +1561,8 @@ inline void sort_by_pvalue(
     SCL_CHECK_DIM(sorted_pvalues.len >= n, "Enrichment: sorted_pvalues buffer too small");
 
     for (Size i = 0; i < n; ++i) {
-        sorted_indices[i] = static_cast<Index>(i);
-        sorted_pvalues[i] = p_values[i];
+        sorted_indices[static_cast<Index>(i)] = static_cast<Index>(i);
+        sorted_pvalues[static_cast<Index>(i)] = p_values[static_cast<Index>(i)];
     }
 
     // Use efficient sort

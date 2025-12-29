@@ -5,6 +5,14 @@
 // BRIEF: Unified include file for all kernel implementations
 // =============================================================================
 
+// This is a convenience header that intentionally includes all kernel headers
+// for easy access. The "unused include" warnings from clangd's misc-include-cleaner
+// are expected and intentional as this header serves as a unified entry point.
+// Include order is alphabetical for maintainability. Individual headers should
+// be included directly when possible for better compile times.
+
+// NOLINTBEGIN
+
 // Core kernel implementations
 #include "scl/kernel/algebra.hpp"
 #include "scl/kernel/alignment.hpp"
@@ -79,3 +87,4 @@
 #include "scl/kernel/stat/rank_utils.hpp"
 #include "scl/kernel/stat/stat_base.hpp"
 
+// NOLINTEND

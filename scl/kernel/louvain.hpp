@@ -1,15 +1,13 @@
 #pragma once
 
 #include "scl/core/type.hpp"
-#include "scl/core/simd.hpp"
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/macros.hpp"
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
+#include "scl/core/vectorize.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
-#include "scl/threading/scheduler.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -55,24 +53,32 @@ struct CommunityInfo {
 struct NeighborHashTable {
     static constexpr Index EMPTY = -1;
 
-    Index* keys;
-    Real* values;
-    Size capacity;
-    Size size;
+    NeighborHashTable() noexcept = default;
+
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    std::unique_ptr<Index[], scl::memory::AlignedDeleter<Index>> keys_ptr;
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
+    std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>> values_ptr;
+    Index* keys = nullptr;
+    Real* values = nullptr;
+    Size capacity{};
+    Size size{};
 
     void init(Size max_size) {
         // Round up to power of 2 for efficient masking
         capacity = 1;
         while (capacity < max_size * 2) capacity <<= 1;
 
-        keys = scl::memory::aligned_alloc<Index>(capacity, SCL_ALIGNMENT);
-        values = scl::memory::aligned_alloc<Real>(capacity, SCL_ALIGNMENT);
+        keys_ptr = scl::memory::aligned_alloc<Index>(capacity, SCL_ALIGNMENT);
+        values_ptr = scl::memory::aligned_alloc<Real>(capacity, SCL_ALIGNMENT);
+        keys = keys_ptr.get();
+        values = values_ptr.get();
         clear();
     }
 
     void destroy() {
-        if (keys) scl::memory::aligned_free(keys, SCL_ALIGNMENT);
-        if (values) scl::memory::aligned_free(values, SCL_ALIGNMENT);
+        keys_ptr.reset();
+        values_ptr.reset();
         keys = nullptr;
         values = nullptr;
     }
@@ -84,7 +90,7 @@ struct NeighborHashTable {
         size = 0;
     }
 
-    SCL_FORCE_INLINE Size hash(Index key) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE Size hash(Index key) const noexcept {
         // Fibonacci hashing for better distribution
         uint32_t h = static_cast<uint32_t>(key) * 2654435769u;
         return static_cast<Size>(h) & (capacity - 1);
@@ -108,7 +114,7 @@ struct NeighborHashTable {
         }
     }
 
-    SCL_FORCE_INLINE Real get(Index key) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE Real get(Index key) const noexcept {
         Size idx = hash(key);
 
         while (keys[idx] != EMPTY) {
@@ -144,7 +150,7 @@ SCL_FORCE_INLINE Real compute_total_weight(const Sparse<T, IsCSR>& adj) {
         std::atomic<int64_t> atomic_total{0};
         constexpr int64_t SCALE = 1000000;
 
-        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), N, [&](Size i) {
             auto values = adj.primary_values_unsafe(static_cast<Index>(i));
             const Size len = static_cast<Size>(adj.primary_length_unsafe(static_cast<Index>(i)));
 
@@ -183,7 +189,7 @@ void compute_node_degrees(
     const Size N = static_cast<Size>(n);
 
     if (N >= config::PARALLEL_THRESHOLD) {
-        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), N, [&](Size i) {
             auto values = adj.primary_values_unsafe(static_cast<Index>(i));
             const Size len = static_cast<Size>(adj.primary_length_unsafe(static_cast<Index>(i)));
             degrees[i] = scl::vectorize::sum(Array<const Real>(
@@ -273,7 +279,7 @@ bool local_moving_phase(
     Real resolution,
     NeighborHashTable& hash_table  // Workspace: hash table for neighbor communities
 ) {
-    const Index n = static_cast<Index>(info.n_nodes);
+    const auto n = static_cast<Index>(info.n_nodes);
     const Real m = total_weight;
 
     bool any_move = false;
@@ -491,11 +497,16 @@ void cluster(
     }
 
     // Allocate working memory
-    Real* degrees = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* sigma_tot = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Index* comm_size = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Index* node_to_comm = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Index* old_to_new = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto degrees_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto sigma_tot_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto comm_size_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto node_to_comm_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto old_to_new_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    Real* degrees = degrees_ptr.get();
+    Real* sigma_tot = sigma_tot_ptr.get();
+    Index* comm_size = comm_size_ptr.get();
+    Index* node_to_comm = node_to_comm_ptr.get();
+    Index* old_to_new = old_to_new_ptr.get();
 
     // Initialize hash table for neighbor community lookup
     detail::NeighborHashTable hash_table;
@@ -505,7 +516,7 @@ void cluster(
     detail::compute_node_degrees(adjacency, degrees);
 
     // Initialize community info
-    detail::CommunityInfo info;
+    detail::CommunityInfo info{};
     info.sigma_tot = sigma_tot;
     info.comm_size = comm_size;
     info.node_to_comm = node_to_comm;
@@ -529,14 +540,20 @@ void cluster(
     if (improved && n_communities > 1 && n_communities < n) {
         // Allocate for aggregated graph
         Size max_edges = adjacency.nnz();
-        Index* agg_indptr = scl::memory::aligned_alloc<Index>(n + 1, SCL_ALIGNMENT);
-        Index* agg_indices = scl::memory::aligned_alloc<Index>(max_edges, SCL_ALIGNMENT);
-        T* agg_values = scl::memory::aligned_alloc<T>(max_edges, SCL_ALIGNMENT);
-        Index* comm_edge_targets = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-        T* comm_edge_weights = scl::memory::aligned_alloc<T>(n, SCL_ALIGNMENT);
+        auto agg_indptr_ptr = scl::memory::aligned_alloc<Index>(n + 1, SCL_ALIGNMENT);
+        auto agg_indices_ptr = scl::memory::aligned_alloc<Index>(max_edges, SCL_ALIGNMENT);
+        auto agg_values_ptr = scl::memory::aligned_alloc<T>(max_edges, SCL_ALIGNMENT);
+        auto comm_edge_targets_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        auto comm_edge_weights_ptr = scl::memory::aligned_alloc<T>(n, SCL_ALIGNMENT);
+        Index* agg_indptr = agg_indptr_ptr.get();
+        Index* agg_indices = agg_indices_ptr.get();
+        T* agg_values = agg_values_ptr.get();
+        Index* comm_edge_targets = comm_edge_targets_ptr.get();
+        T* comm_edge_weights = comm_edge_weights_ptr.get();
 
         // Track original node to community mapping
-        Index* original_labels = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        auto original_labels_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+        Index* original_labels = original_labels_ptr.get();
         for (Index i = 0; i < n; ++i) {
             original_labels[i] = labels[i];
         }
@@ -563,11 +580,12 @@ void cluster(
             );
 
             // Compute degrees for aggregated graph
-            Real* agg_degrees = scl::memory::aligned_alloc<Real>(current_n, SCL_ALIGNMENT);
+            auto agg_degrees_ptr = scl::memory::aligned_alloc<Real>(current_n, SCL_ALIGNMENT);
+            Real* agg_degrees = agg_degrees_ptr.get();
             detail::compute_node_degrees(agg_adj, agg_degrees);
 
             // Re-initialize community info for aggregated level
-            detail::CommunityInfo agg_info;
+            detail::CommunityInfo agg_info{};
             agg_info.sigma_tot = sigma_tot;
             agg_info.comm_size = comm_size;
             agg_info.node_to_comm = node_to_comm;
@@ -580,7 +598,7 @@ void cluster(
                 hash_table
             );
 
-            scl::memory::aligned_free(agg_degrees, SCL_ALIGNMENT);
+            // agg_degrees_ptr automatically freed
 
             if (!improved) break;
 
@@ -606,21 +624,13 @@ void cluster(
             labels[i] = original_labels[i];
         }
 
-        scl::memory::aligned_free(original_labels, SCL_ALIGNMENT);
-        scl::memory::aligned_free(comm_edge_weights, SCL_ALIGNMENT);
-        scl::memory::aligned_free(comm_edge_targets, SCL_ALIGNMENT);
-        scl::memory::aligned_free(agg_values, SCL_ALIGNMENT);
-        scl::memory::aligned_free(agg_indices, SCL_ALIGNMENT);
-        scl::memory::aligned_free(agg_indptr, SCL_ALIGNMENT);
+        // original_labels_ptr, comm_edge_weights_ptr, comm_edge_targets_ptr,
+        // agg_values_ptr, agg_indices_ptr, agg_indptr_ptr automatically freed
     }
 
     // Cleanup
     hash_table.destroy();
-    scl::memory::aligned_free(old_to_new, SCL_ALIGNMENT);
-    scl::memory::aligned_free(node_to_comm, SCL_ALIGNMENT);
-    scl::memory::aligned_free(comm_size, SCL_ALIGNMENT);
-    scl::memory::aligned_free(sigma_tot, SCL_ALIGNMENT);
-    scl::memory::aligned_free(degrees, SCL_ALIGNMENT);
+    // degrees_ptr, sigma_tot_ptr, comm_size_ptr, node_to_comm_ptr, old_to_new_ptr automatically freed
 }
 
 // =============================================================================
@@ -644,7 +654,8 @@ Real compute_modularity(
     const Real m2 = Real(2) * m;
 
     // Compute degree of each node
-    Real* degrees = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto degrees_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* degrees = degrees_ptr.get();
     detail::compute_node_degrees(adjacency, degrees);
 
     // Find number of communities
@@ -655,7 +666,8 @@ Real compute_modularity(
     Index n_communities = max_comm + 1;
 
     // Compute sigma_tot for each community
-    Real* sigma_tot = scl::memory::aligned_alloc<Real>(n_communities, SCL_ALIGNMENT);
+    auto sigma_tot_ptr = scl::memory::aligned_alloc<Real>(n_communities, SCL_ALIGNMENT);
+    Real* sigma_tot = sigma_tot_ptr.get();
     scl::algo::zero(sigma_tot, static_cast<Size>(n_communities));
 
     for (Index i = 0; i < n; ++i) {
@@ -685,8 +697,7 @@ Real compute_modularity(
         Q -= resolution * s * s / (m2 * m2);
     }
 
-    scl::memory::aligned_free(sigma_tot, SCL_ALIGNMENT);
-    scl::memory::aligned_free(degrees, SCL_ALIGNMENT);
+    // sigma_tot_ptr, degrees_ptr automatically freed
 
     return Q;
 }
@@ -705,7 +716,7 @@ inline void community_sizes(
     // Find max label
     Index max_label = 0;
     for (Size i = 0; i < n; ++i) {
-        max_label = scl::algo::max2(max_label, labels[i]);
+        max_label = scl::algo::max2(max_label, labels[static_cast<Index>(i)]);
     }
     n_communities = max_label + 1;
 
@@ -715,7 +726,7 @@ inline void community_sizes(
     scl::algo::zero(sizes.ptr, static_cast<Size>(n_communities));
 
     for (Size i = 0; i < n; ++i) {
-        ++sizes[labels[i]];
+        ++sizes[labels[static_cast<Index>(i)]];
     }
 }
 
@@ -732,7 +743,7 @@ inline void get_community_members(
     n_members = 0;
 
     for (Size i = 0; i < labels.len; ++i) {
-        if (labels[i] == community) {
+        if (labels[static_cast<Index>(i)] == community) {
             if (static_cast<Size>(n_members) < members.len) {
                 members[n_members] = static_cast<Index>(i);
             }

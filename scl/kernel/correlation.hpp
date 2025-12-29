@@ -57,8 +57,9 @@ SCL_FORCE_INLINE void compute_sum_sq_simd(
     T& out_sq_sum
 ) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -252,7 +253,7 @@ void compute_stats(
     SCL_CHECK_DIM(out_means.len >= static_cast<Size>(primary_dim), "Means size mismatch");
     SCL_CHECK_DIM(out_inv_stds.len >= static_cast<Size>(primary_dim), "Inv_stds size mismatch");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
         auto vals = matrix.primary_values_unsafe(static_cast<Index>(p));
 
         T sum, sq_sum;
@@ -289,7 +290,7 @@ void pearson(
 
     const Size n_chunks = (N_size + config::CHUNK_SIZE - 1) / config::CHUNK_SIZE;
 
-    scl::threading::parallel_for(Size(0), n_chunks, [&](size_t chunk_idx) {
+    scl::threading::parallel_for(Size(0), n_chunks, [&](Size chunk_idx) {
         Size i_start = chunk_idx * config::CHUNK_SIZE;
         Size i_end = scl::algo::min2(i_start + config::CHUNK_SIZE, N_size);
 
@@ -358,8 +359,10 @@ void pearson(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
-    T* means = scl::memory::aligned_alloc<T>(N, SCL_ALIGNMENT);
-    T* inv_stds = scl::memory::aligned_alloc<T>(N, SCL_ALIGNMENT);
+    auto means_ptr = scl::memory::aligned_alloc<T>(N, SCL_ALIGNMENT);
+    auto inv_stds_ptr = scl::memory::aligned_alloc<T>(N, SCL_ALIGNMENT);
+    T* means = means_ptr.release();
+    T* inv_stds = inv_stds_ptr.release();
 
     compute_stats(matrix, Array<T>(means, N), Array<T>(inv_stds, N));
     pearson(matrix, Array<const T>(means, N), Array<const T>(inv_stds, N), output);

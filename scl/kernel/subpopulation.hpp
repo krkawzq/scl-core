@@ -4,8 +4,9 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/memory.hpp"
+#include "scl/core/algo.hpp"
+#include "scl/core/macros.hpp"
 
-#include <algorithm>
 #include <cmath>
 
 // =============================================================================
@@ -63,13 +64,19 @@ void kmeans_cluster(
 ) {
     if (n_cells == 0 || k == 0) return;
 
-    k = std::min(k, n_cells);
+    k = scl::algo::min2(k, n_cells);
     const Size n_features = static_cast<Size>(data.cols());
 
     // Allocate centroids
-    Real* centroids = scl::memory::aligned_alloc<Real>(k * n_features, SCL_ALIGNMENT);
-    Real* new_centroids = scl::memory::aligned_alloc<Real>(k * n_features, SCL_ALIGNMENT);
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(k, SCL_ALIGNMENT);
+    auto centroids_ptr = scl::memory::aligned_alloc<Real>(k * n_features, SCL_ALIGNMENT);
+
+    Real* centroids = centroids_ptr.release();
+    auto new_centroids_ptr = scl::memory::aligned_alloc<Real>(k * n_features, SCL_ALIGNMENT);
+
+    Real* new_centroids = new_centroids_ptr.release();
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(k, SCL_ALIGNMENT);
+
+    Size* cluster_sizes = cluster_sizes_ptr.release();
 
     // Initialize centroids with random cells
     for (Size c = 0; c < k; ++c) {
@@ -258,7 +265,9 @@ void subclustering(
     }
 
     // Collect cell indices in parent cluster
-    Index* cell_indices = scl::memory::aligned_alloc<Index>(n_in_cluster, SCL_ALIGNMENT);
+    auto cell_indices_ptr = scl::memory::aligned_alloc<Index>(n_in_cluster, SCL_ALIGNMENT);
+
+    Index* cell_indices = cell_indices_ptr.release();
     Size idx = 0;
     for (Size i = 0; i < n_cells; ++i) {
         if (parent_labels.ptr[i] == parent_cluster) {
@@ -267,7 +276,9 @@ void subclustering(
     }
 
     // Run k-means on subset
-    Index* assignments = scl::memory::aligned_alloc<Index>(n_in_cluster, SCL_ALIGNMENT);
+    auto assignments_ptr = scl::memory::aligned_alloc<Index>(n_in_cluster, SCL_ALIGNMENT);
+
+    Index* assignments = assignments_ptr.release();
     for (Size i = 0; i < n_in_cluster; ++i) {
         assignments[i] = 0;
     }
@@ -325,8 +336,12 @@ void cluster_stability(
     detail::LCG rng(seed);
 
     // Co-occurrence matrix for each cluster
-    Size* cooccur_same = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
-    Size* cooccur_total = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto cooccur_same_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+
+    Size* cooccur_same = cooccur_same_ptr.release();
+    auto cooccur_total_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+
+    Size* cooccur_total = cooccur_total_ptr.release();
 
     for (Index c = 0; c < n_clusters; ++c) {
         cooccur_same[c] = 0;
@@ -334,8 +349,12 @@ void cluster_stability(
     }
 
     // Bootstrap iterations
-    Index* sample_indices = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
-    Index* bootstrap_labels = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto sample_indices_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+
+    Index* sample_indices = sample_indices_ptr.release();
+    auto bootstrap_labels_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+
+    Index* bootstrap_labels = bootstrap_labels_ptr.release();
 
     for (Size b = 0; b < n_bootstraps; ++b) {
         // Sample with replacement
@@ -412,8 +431,12 @@ void cluster_purity(
         "Purity array too small");
 
     // Count cells per cluster per class
-    Size* counts = scl::memory::aligned_alloc<Size>(n_clusters * n_classes, SCL_ALIGNMENT);
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_clusters * n_classes, SCL_ALIGNMENT);
+
+    Size* counts = counts_ptr.release();
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+
+    Size* cluster_sizes = cluster_sizes_ptr.release();
 
     for (Size i = 0; i < static_cast<Size>(n_clusters * n_classes); ++i) counts[i] = 0;
     for (Index c = 0; c < n_clusters; ++c) cluster_sizes[c] = 0;
@@ -465,7 +488,9 @@ void rare_cell_detection(
     if (n_cells == 0) return;
 
     // Compute average distance to k nearest neighbors
-    Real* avg_distances = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto avg_distances_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* avg_distances = avg_distances_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
         const Index row_start = neighbors.row_indices_unsafe()[i];
@@ -533,8 +558,12 @@ void population_balance(
     if (n == 0 || n_clusters == 0 || n_conditions == 0) return;
 
     // Count cells per cluster per condition
-    Size* counts = scl::memory::aligned_alloc<Size>(n_clusters * n_conditions, SCL_ALIGNMENT);
-    Size* total_per_cond = scl::memory::aligned_alloc<Size>(n_conditions, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_clusters * n_conditions, SCL_ALIGNMENT);
+
+    Size* counts = counts_ptr.release();
+    auto total_per_cond_ptr = scl::memory::aligned_alloc<Size>(n_conditions, SCL_ALIGNMENT);
+
+    Size* total_per_cond = total_per_cond_ptr.release();
 
     for (Size i = 0; i < n_clusters * n_conditions; ++i) counts[i] = 0;
     for (Size c = 0; c < n_conditions; ++c) total_per_cond[c] = 0;
@@ -593,8 +622,12 @@ void cluster_cohesion(
         "Cohesion scores array too small");
 
     // Compute average intra-cluster distance
-    Real* total_dist = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
-    Size* pair_counts = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto total_dist_ptr = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
+
+    Real* total_dist = total_dist_ptr.release();
+    auto pair_counts_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+
+    Size* pair_counts = pair_counts_ptr.release();
 
     for (Index c = 0; c < n_clusters; ++c) {
         total_dist[c] = Real(0.0);
@@ -650,8 +683,12 @@ void cluster_separation(
 
     // Compute centroids
     const Size n_features = static_cast<Size>(expression.cols());
-    Real* centroids = scl::memory::aligned_alloc<Real>(n_clusters * n_features, SCL_ALIGNMENT);
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto centroids_ptr = scl::memory::aligned_alloc<Real>(n_clusters * n_features, SCL_ALIGNMENT);
+
+    Real* centroids = centroids_ptr.release();
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+
+    Size* cluster_sizes = cluster_sizes_ptr.release();
 
     for (Size i = 0; i < n_clusters * n_features; ++i) centroids[i] = Real(0.0);
     for (Size c = 0; c < n_clusters; ++c) cluster_sizes[c] = 0;
@@ -729,9 +766,15 @@ void identify_heterogeneous_clusters(
 
     // Compute variance within each cluster
     const Size n_features = static_cast<Size>(expression.cols());
-    Real* cluster_var = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
-    Real* cluster_mean = scl::memory::aligned_alloc<Real>(n_clusters * n_features, SCL_ALIGNMENT);
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto cluster_var_ptr = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
+
+    Real* cluster_var = cluster_var_ptr.release();
+    auto cluster_mean_ptr = scl::memory::aligned_alloc<Real>(n_clusters * n_features, SCL_ALIGNMENT);
+
+    Real* cluster_mean = cluster_mean_ptr.release();
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+
+    Size* cluster_sizes = cluster_sizes_ptr.release();
 
     for (Index c = 0; c < n_clusters; ++c) {
         cluster_var[c] = Real(0.0);
@@ -876,12 +919,16 @@ void cluster_quality_score(
         "Quality scores array too small");
 
     // Compute cohesion
-    Real* cohesion = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
+    auto cohesion_ptr = scl::memory::aligned_alloc<Real>(n_clusters, SCL_ALIGNMENT);
+
+    Real* cohesion = cohesion_ptr.release();
     Array<Real> cohesion_arr = {cohesion, static_cast<Size>(n_clusters)};
     cluster_cohesion(expression, labels, cohesion_arr);
 
     // Compute separation
-    Real* separation = scl::memory::aligned_alloc<Real>(n_clusters * n_clusters, SCL_ALIGNMENT);
+    auto separation_ptr = scl::memory::aligned_alloc<Real>(n_clusters * n_clusters, SCL_ALIGNMENT);
+
+    Real* separation = separation_ptr.release();
     cluster_separation(expression, labels, separation, static_cast<Size>(n_clusters));
 
     // Quality = cohesion * min_separation
@@ -920,8 +967,8 @@ Index find_optimal_subclusters(
         return 1;
     }
 
-    max_k = std::min(max_k, n_cells / config::MIN_CLUSTER_SIZE);
-    max_k = std::max(max_k, Size(1));
+    max_k = scl::algo::min2(max_k, n_cells / config::MIN_CLUSTER_SIZE);
+    max_k = scl::algo::max2(max_k, Size(1));
 
     detail::LCG rng(seed);
 
@@ -929,8 +976,13 @@ Index find_optimal_subclusters(
     Real best_score = Real(-1.0);
     Index best_k = 1;
 
-    Index* assignments = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
-    Real* avg_dists = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto assignments_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+
+
+    Index* assignments = assignments_ptr.release();
+    auto avg_dists_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* avg_dists = avg_dists_ptr.release();
 
     for (Size k = 2; k <= max_k; ++k) {
         // Cluster
@@ -981,7 +1033,7 @@ Index find_optimal_subclusters(
             }
 
             if (b < std::numeric_limits<Real>::max()) {
-                Real max_ab = std::max(a, b);
+                Real max_ab = scl::algo::max2(a, b);
                 if (max_ab > config::EPSILON) {
                     total_score += (b - a) / max_ab;
                     ++valid_count;
@@ -1021,8 +1073,12 @@ void cell_type_proportions(
     if (n == 0 || n_clusters == 0 || n_types == 0) return;
 
     // Count cells per cluster per type
-    Size* counts = scl::memory::aligned_alloc<Size>(n_clusters * n_types, SCL_ALIGNMENT);
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+    auto counts_ptr = scl::memory::aligned_alloc<Size>(n_clusters * n_types, SCL_ALIGNMENT);
+
+    Size* counts = counts_ptr.release();
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
+
+    Size* cluster_sizes = cluster_sizes_ptr.release();
 
     for (Size i = 0; i < n_clusters * n_types; ++i) counts[i] = 0;
     for (Size c = 0; c < n_clusters; ++c) cluster_sizes[c] = 0;

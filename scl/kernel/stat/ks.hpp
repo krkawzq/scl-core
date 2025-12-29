@@ -1,6 +1,5 @@
 #pragma once
 
-#include "scl/kernel/stat/stat_base.hpp"
 #include "scl/kernel/stat/rank_utils.hpp"
 #include "scl/kernel/stat/group_partition.hpp"
 #include "scl/core/sparse.hpp"
@@ -32,9 +31,9 @@ SCL_FORCE_INLINE Real ks_pvalue(Real D, Size n1, Size n2) {
     }
 
     // Effective sample size
-    double n1d = static_cast<double>(n1);
-    double n2d = static_cast<double>(n2);
-    double n_eff = (n1d * n2d) / (n1d + n2d);
+    auto n1d = static_cast<double>(n1);
+    auto n2d = static_cast<double>(n2);
+    auto n_eff = (n1d * n2d) / (n1d + n2d);
 
     // Asymptotic approximation
     double lambda = (std::sqrt(n_eff) + 0.12 + 0.11 / std::sqrt(n_eff)) * static_cast<double>(D);
@@ -154,7 +153,7 @@ void ks_test(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
-    Size n1_total, n2_total;
+    Size n1_total{}, n2_total{};
     count_groups(group_ids, n1_total, n2_total);
 
     SCL_CHECK_ARG(n1_total > 0 && n2_total > 0,
@@ -166,12 +165,12 @@ void ks_test(
         if (len > max_len) max_len = len;
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const size_t n_threads = scl::threading::get_num_threads_runtime();
     scl::threading::DualWorkspacePool<T> buf_pool;
     buf_pool.init(n_threads, max_len);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -189,8 +188,8 @@ void ks_test(
         );
 
         if (SCL_UNLIKELY(n1 == 0 && n2 == 0)) {
-            out_D_stats[p] = Real(0);
-            out_p_values[p] = Real(1);
+            out_D_stats[static_cast<Index>(p)] = Real(0);
+            out_p_values[static_cast<Index>(p)] = Real(1);
             return;
         }
 
@@ -203,15 +202,15 @@ void ks_test(
         }
 
         // Compute KS statistic
-        double D;
+        double D = NAN;
         detail::compute_ks_sparse(
             buf1, n1, n1_total,
             buf2, n2, n2_total,
             D
         );
 
-        out_D_stats[p] = static_cast<Real>(D);
-        out_p_values[p] = detail::ks_pvalue(static_cast<Real>(D), n1_total, n2_total);
+        out_D_stats[static_cast<Index>(p)] = static_cast<Real>(D);
+        out_p_values[static_cast<Index>(p)] = detail::ks_pvalue(static_cast<Real>(D), n1_total, n2_total);
     });
 }
 

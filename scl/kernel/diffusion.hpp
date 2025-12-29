@@ -8,7 +8,6 @@
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
 
 #include <cmath>
@@ -178,7 +177,7 @@ SCL_HOT void spmv_parallel(
 
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
-            const Index idx = static_cast<Index>(i);
+            const auto idx = static_cast<Index>(i);
             auto indices = mat.primary_indices_unsafe(idx);
             auto values = mat.primary_values_unsafe(idx);
             const Index len = mat.primary_length_unsafe(idx);
@@ -207,7 +206,7 @@ SCL_HOT void spmv_parallel(
         });
     } else {
         for (Size i = 0; i < n; ++i) {
-            const Index idx = static_cast<Index>(i);
+            const auto idx = static_cast<Index>(i);
             auto indices = mat.primary_indices_unsafe(idx);
             auto values = mat.primary_values_unsafe(idx);
             const Index len = mat.primary_length_unsafe(idx);
@@ -240,7 +239,7 @@ SCL_HOT void spmm_block(
 
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
-            const Index idx = static_cast<Index>(i);
+            const auto idx = static_cast<Index>(i);
             auto indices = mat.primary_indices_unsafe(idx);
             auto values = mat.primary_values_unsafe(idx);
             const Index len = mat.primary_length_unsafe(idx);
@@ -258,7 +257,7 @@ SCL_HOT void spmm_block(
         });
     } else {
         for (Size i = 0; i < n; ++i) {
-            const Index idx = static_cast<Index>(i);
+            const auto idx = static_cast<Index>(i);
             auto indices = mat.primary_indices_unsafe(idx);
             auto values = mat.primary_values_unsafe(idx);
             const Index len = mat.primary_length_unsafe(idx);
@@ -296,7 +295,7 @@ SCL_HOT void spmv_fused_linear(
 
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), n, [&](size_t i) {
-            const Index idx = static_cast<Index>(i);
+            const auto idx = static_cast<Index>(i);
             auto indices = mat.primary_indices_unsafe(idx);
             auto values = mat.primary_values_unsafe(idx);
             const Index len = mat.primary_length_unsafe(idx);
@@ -317,7 +316,7 @@ SCL_HOT void spmv_fused_linear(
         });
     } else {
         for (Size i = 0; i < n; ++i) {
-            const Index idx = static_cast<Index>(i);
+            const auto idx = static_cast<Index>(i);
             auto indices = mat.primary_indices_unsafe(idx);
             auto values = mat.primary_values_unsafe(idx);
             const Index len = mat.primary_length_unsafe(idx);
@@ -375,8 +374,6 @@ void orthogonalize_vectors(
     Real* workspace    // temp storage of size n
 ) {
     for (Size v = 0; v < n_vecs; ++v) {
-        Real* qv = Q + v;  // Column v (strided access)
-        
         // Extract column to contiguous workspace
         for (Size i = 0; i < n; ++i) {
             workspace[i] = Q[i * n_vecs + v];
@@ -501,14 +498,18 @@ void compute_transition_matrix(
     const Index n = adjacency.primary_dim();
     const Size N = static_cast<Size>(n);
 
-    Real* row_sums = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto row_sums_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* row_sums = row_sums_ptr.get();
     detail::compute_row_sums_parallel(adjacency, row_sums);
 
     const size_t n_threads = scl::threading::Scheduler::get_num_threads();
 
     if (symmetric) {
         // Symmetric normalization: D^(-1/2) * A * D^(-1/2)
-        Real* d_inv_sqrt = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        // PERFORMANCE: RAII memory management with unique_ptr
+        auto d_inv_sqrt_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        Real* d_inv_sqrt = d_inv_sqrt_ptr.get();
         
         if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
             scl::threading::parallel_for(Size(0), N, [&](size_t i) {
@@ -525,7 +526,9 @@ void compute_transition_matrix(
         // Apply normalization
         if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
             // Compute offsets for parallel access
-            Size* offsets = scl::memory::aligned_alloc<Size>(N + 1, SCL_ALIGNMENT);
+            // PERFORMANCE: RAII memory management with unique_ptr
+            auto offsets_ptr = scl::memory::aligned_alloc<Size>(N + 1, SCL_ALIGNMENT);
+            Size* offsets = offsets_ptr.get();
             offsets[0] = 0;
             for (Index i = 0; i < n; ++i) {
                 offsets[i + 1] = offsets[i] + static_cast<Size>(adjacency.primary_length_unsafe(i));
@@ -543,7 +546,7 @@ void compute_transition_matrix(
                 }
             });
 
-            scl::memory::aligned_free(offsets, SCL_ALIGNMENT);
+            // unique_ptr automatically frees memory when going out of scope
         } else {
             Size val_idx = 0;
             for (Index i = 0; i < n; ++i) {
@@ -558,11 +561,13 @@ void compute_transition_matrix(
             }
         }
 
-        scl::memory::aligned_free(d_inv_sqrt, SCL_ALIGNMENT);
+        // unique_ptr automatically frees memory when going out of scope
     } else {
         // Row normalization: D^(-1) * A
         if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
-            Size* offsets = scl::memory::aligned_alloc<Size>(N + 1, SCL_ALIGNMENT);
+            // PERFORMANCE: RAII memory management with unique_ptr
+            auto offsets_ptr = scl::memory::aligned_alloc<Size>(N + 1, SCL_ALIGNMENT);
+            Size* offsets = offsets_ptr.get();
             offsets[0] = 0;
             for (Index i = 0; i < n; ++i) {
                 offsets[i + 1] = offsets[i] + static_cast<Size>(adjacency.primary_length_unsafe(i));
@@ -579,7 +584,7 @@ void compute_transition_matrix(
                 }
             });
 
-            scl::memory::aligned_free(offsets, SCL_ALIGNMENT);
+            // unique_ptr automatically frees memory when going out of scope
         } else {
             Size val_idx = 0;
             for (Index i = 0; i < n; ++i) {
@@ -594,7 +599,7 @@ void compute_transition_matrix(
         }
     }
 
-    scl::memory::aligned_free(row_sums, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -614,14 +619,16 @@ void diffuse_vector(
 
     if (n == 0 || n_steps == 0) return;
 
-    Real* x_new = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto x_new_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* x_new = x_new_ptr.get();
 
     for (Index step = 0; step < n_steps; ++step) {
         detail::spmv_parallel(transition, x.ptr, x_new, N);
         std::memcpy(x.ptr, x_new, N * sizeof(Real));
     }
 
-    scl::memory::aligned_free(x_new, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -644,14 +651,16 @@ void diffuse_matrix(
 
     if (n_nodes == 0 || n_features == 0 || n_steps == 0) return;
 
-    Real* X_new = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto X_new_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    Real* X_new = X_new_ptr.get();
 
     for (Index step = 0; step < n_steps; ++step) {
         detail::spmm_block(transition, X.ptr, X_new, N, F);
         std::memcpy(X.ptr, X_new, total * sizeof(Real));
     }
 
-    scl::memory::aligned_free(X_new, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -675,10 +684,15 @@ void compute_dpt(
     if (n == 0) return;
 
     // Allocate working arrays
-    Real* p = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Real* p_new = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Real* hitting_time = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Real* visited_prob = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto p_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto p_new_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto hitting_time_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto visited_prob_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* p = p_ptr.get();
+    Real* p_new = p_new_ptr.get();
+    Real* hitting_time = hitting_time_ptr.get();
+    Real* visited_prob = visited_prob_ptr.get();
 
     scl::algo::zero(p, N);
     scl::algo::zero(hitting_time, N);
@@ -740,20 +754,17 @@ void compute_dpt(
     
     if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-            pseudotime[i] = (visited_prob[i] > Real(0.5))
+            pseudotime[static_cast<Index>(i)] = (visited_prob[i] > Real(0.5))
                 ? hitting_time[i] * inv_max : Real(1);
         });
     } else {
         for (Size i = 0; i < N; ++i) {
-            pseudotime[i] = (visited_prob[i] > Real(0.5))
+            pseudotime[static_cast<Index>(i)] = (visited_prob[i] > Real(0.5))
                 ? hitting_time[i] * inv_max : Real(1);
         }
     }
 
-    scl::memory::aligned_free(visited_prob, SCL_ALIGNMENT);
-    scl::memory::aligned_free(hitting_time, SCL_ALIGNMENT);
-    scl::memory::aligned_free(p_new, SCL_ALIGNMENT);
-    scl::memory::aligned_free(p, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -774,24 +785,25 @@ void compute_dpt_multi_root(
 
     if (n == 0 || root_cells.len == 0) return;
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
     Size n_roots = root_cells.len;
 
     // Parallel computation of DPT from each root
-    Real* all_pt = scl::memory::aligned_alloc<Real>(N * n_roots, SCL_ALIGNMENT);
-    Index* valid_roots = scl::memory::aligned_alloc<Index>(n_roots, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto all_pt_ptr = scl::memory::aligned_alloc<Real>(N * n_roots, SCL_ALIGNMENT);
+    auto valid_roots_ptr = scl::memory::aligned_alloc<Index>(n_roots, SCL_ALIGNMENT);
+    Real* all_pt = all_pt_ptr.get();
+    Index* valid_roots = valid_roots_ptr.get();
     
     Index n_valid = 0;
     for (Size r = 0; r < n_roots; ++r) {
-        if (root_cells[r] >= 0 && root_cells[r] < n) {
-            valid_roots[n_valid++] = root_cells[r];
+        if (root_cells[static_cast<Index>(r)] >= 0 && root_cells[static_cast<Index>(r)] < n) {
+            valid_roots[static_cast<Index>(n_valid++)] = root_cells[static_cast<Index>(r)];
         }
     }
 
     if (n_valid == 0) {
         scl::algo::fill(pseudotime.ptr, N, Real(1));
-        scl::memory::aligned_free(valid_roots, SCL_ALIGNMENT);
-        scl::memory::aligned_free(all_pt, SCL_ALIGNMENT);
+        // unique_ptr automatically frees memory when going out of scope
         return;
     }
 
@@ -811,8 +823,7 @@ void compute_dpt_multi_root(
     Real inv_roots = Real(1) / static_cast<Real>(n_valid);
     detail::scale_simd(pseudotime.ptr, inv_roots, N);
 
-    scl::memory::aligned_free(valid_roots, SCL_ALIGNMENT);
-    scl::memory::aligned_free(all_pt, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -836,12 +847,14 @@ void random_walk_with_restart(
     if (n == 0) return;
 
     // Build and normalize restart vector
-    Real* restart = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto restart_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* restart = restart_ptr.get();
     scl::algo::zero(restart, N);
 
     Size n_seeds = 0;
     for (Size s = 0; s < seed_nodes.len; ++s) {
-        Index idx = seed_nodes[s];
+        auto idx = seed_nodes[static_cast<Index>(s)];
         if (idx >= 0 && idx < n) {
             restart[idx] = Real(1);
             ++n_seeds;
@@ -850,7 +863,7 @@ void random_walk_with_restart(
 
     if (n_seeds == 0) {
         scl::algo::zero(scores.ptr, N);
-        scl::memory::aligned_free(restart, SCL_ALIGNMENT);
+        // unique_ptr automatically frees memory when going out of scope
         return;
     }
 
@@ -860,7 +873,9 @@ void random_walk_with_restart(
     // Initialize scores
     detail::copy_simd(restart, scores.ptr, N);
 
-    Real* scores_new = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto scores_new_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* scores_new = scores_new_ptr.get();
     Real beta = Real(1) - alpha;
 
     // Iterate with fused operation
@@ -880,8 +895,7 @@ void random_walk_with_restart(
         // Already in correct place
     }
 
-    scl::memory::aligned_free(scores_new, SCL_ALIGNMENT);
-    scl::memory::aligned_free(restart, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -905,9 +919,13 @@ void diffusion_map_embedding(
     if (n == 0 || n_components == 0) return;
 
     // Allocate working arrays
-    Real* Q = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
-    Real* Q_new = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
-    Real* workspace = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto Q_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto Q_new_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+    auto workspace_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* Q = Q_ptr.get();
+    Real* Q_new = Q_new_ptr.get();
+    Real* workspace = workspace_ptr.get();
 
     // Deterministic initialization with good spread
     for (Size i = 0; i < N; ++i) {
@@ -937,9 +955,7 @@ void diffusion_map_embedding(
     // Copy to output
     std::memcpy(embedding.ptr, Q, total * sizeof(Real));
 
-    scl::memory::aligned_free(workspace, SCL_ALIGNMENT);
-    scl::memory::aligned_free(Q_new, SCL_ALIGNMENT);
-    scl::memory::aligned_free(Q, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -966,8 +982,9 @@ void heat_kernel_signature(
     Real dt = t / static_cast<Real>(n_steps);
     Real one_minus_dt = Real(1) - dt;
 
-    Real* sig_new = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Real* temp = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* temp = temp_ptr.get();
 
     // sig_new = (1 - dt) * sig + dt * T * sig
     for (Index step = 0; step < n_steps; ++step) {
@@ -977,17 +994,16 @@ void heat_kernel_signature(
         
         if (N >= config::PARALLEL_THRESHOLD && n_threads > 1) {
             scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-                signature[i] = one_minus_dt * signature[i] + dt * temp[i];
+                signature[static_cast<Index>(i)] = one_minus_dt * signature[static_cast<Index>(i)] + dt * temp[i];
             });
         } else {
             for (Size i = 0; i < N; ++i) {
-                signature[i] = one_minus_dt * signature[i] + dt * temp[i];
+                signature[static_cast<Index>(i)] = one_minus_dt * signature[static_cast<Index>(i)] + dt * temp[i];
             }
         }
     }
 
-    scl::memory::aligned_free(temp, SCL_ALIGNMENT);
-    scl::memory::aligned_free(sig_new, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -1026,9 +1042,13 @@ void diffusion_distance(
     // For large graphs, compute row by row to save memory
     if (N > 1000) {
         // Row-by-row computation
-        Real* row_i = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-        Real* row_j = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-        Real* temp = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        // PERFORMANCE: RAII memory management with unique_ptr
+        auto row_i_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        auto row_j_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        auto temp_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        Real* row_i = row_i_ptr.get();
+        Real* row_j = row_j_ptr.get();
+        Real* temp = temp_ptr.get();
 
         for (Size i = 0; i < N; ++i) {
             // Initialize row i as e_i
@@ -1071,13 +1091,14 @@ void diffusion_distance(
             }
         }
 
-        scl::memory::aligned_free(temp, SCL_ALIGNMENT);
-        scl::memory::aligned_free(row_j, SCL_ALIGNMENT);
-        scl::memory::aligned_free(row_i, SCL_ALIGNMENT);
+        // unique_ptr automatically frees memory when going out of scope
     } else {
         // Small graph: compute full T^t matrix
-        Real* T_power = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
-        Real* T_new = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+        // PERFORMANCE: RAII memory management with unique_ptr
+        auto T_power_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+        auto T_new_ptr = scl::memory::aligned_alloc<Real>(total, SCL_ALIGNMENT);
+        Real* T_power = T_power_ptr.get();
+        Real* T_new = T_new_ptr.get();
 
         // Initialize with identity
         scl::algo::zero(T_power, total);
@@ -1091,10 +1112,8 @@ void diffusion_distance(
             std::swap(T_power, T_new);
         }
 
-        // Compute pairwise distances
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-
-        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+    // Compute pairwise distances
+    scl::threading::parallel_for(Size(0), N, [&](size_t i) {
             distances[i * N + i] = Real(0);
 
             for (Size j = i + 1; j < N; ++j) {
@@ -1110,8 +1129,7 @@ void diffusion_distance(
             }
         });
 
-        scl::memory::aligned_free(T_new, SCL_ALIGNMENT);
-        scl::memory::aligned_free(T_power, SCL_ALIGNMENT);
+        // unique_ptr automatically frees memory when going out of scope
     }
 }
 
@@ -1128,7 +1146,10 @@ void personalized_pagerank(
     Index max_iter = config::MAX_ITER,
     Real tol = config::CONVERGENCE_TOL
 ) {
+    // PERFORMANCE: Small fixed-size array for single seed - std::array overhead unnecessary
+    // NOLINTNEXTLINE
     Index seeds[1] = { seed_node };
+    // NOLINTNEXTLINE
     random_walk_with_restart(transition, Array<const Index>(seeds, 1), 
                              scores, alpha, max_iter, tol);
 }
@@ -1152,8 +1173,9 @@ void lazy_random_walk(
     if (n == 0 || n_steps == 0) return;
 
     Real move_prob = Real(1) - laziness;
-    Real* x_new = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Real* temp = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* temp = temp_ptr.get();
 
     for (Index step = 0; step < n_steps; ++step) {
         detail::spmv_parallel(transition, x.ptr, temp, N);
@@ -1172,8 +1194,7 @@ void lazy_random_walk(
         }
     }
 
-    scl::memory::aligned_free(temp, SCL_ALIGNMENT);
-    scl::memory::aligned_free(x_new, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 } // namespace scl::kernel::diffusion

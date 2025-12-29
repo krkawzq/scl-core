@@ -44,8 +44,9 @@ inline void dispersion_simd(
     const Size n = means.len;
 
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<Real>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     const auto v_eps = s::Set(d, config::EPSILON);
     const auto v_zero = s::Zero(d);
@@ -91,9 +92,13 @@ inline void dispersion_simd(
     }
 
     for (; k < n; ++k) {
-        Real m = means[k];
-        Real v = vars[k];
-        out_dispersion[k] = (m > config::EPSILON) ? (v / m) : Real(0);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - k is bounded by array size and fits in Index
+        Real m = means[static_cast<Index>(k)];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        Real v = vars[static_cast<Index>(k)];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        out_dispersion[static_cast<Index>(k)] = (m > config::EPSILON) ? (v / m) : Real(0);
     }
 }
 
@@ -106,23 +111,28 @@ inline void normalize_dispersion_simd(
     const Size n = dispersions.len;
 
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<Real>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
 
     Size valid_count = 0;
     Real disp_sum = Real(0);
     Real disp_sq = Real(0);
 
     for (Size i = 0; i < n; ++i) {
-        Real m = means[i];
-        Real disp = dispersions[i];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - i is bounded by array size and fits in Index
+        Real m = means[static_cast<Index>(i)];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        Real disp = dispersions[static_cast<Index>(i)];
 
         if (m >= min_mean && m <= max_mean && disp > Real(0)) {
             disp_sum += disp;
             disp_sq += disp * disp;
             valid_count++;
         } else {
-            dispersions[i] = -std::numeric_limits<Real>::infinity();
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            dispersions[static_cast<Index>(i)] = -std::numeric_limits<Real>::infinity();
         }
     }
 
@@ -150,9 +160,12 @@ inline void normalize_dispersion_simd(
     }
 
     for (; k < n; ++k) {
-        Real disp = dispersions[k];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - k is bounded by array size and fits in Index
+        Real disp = dispersions[static_cast<Index>(k)];
         if (disp > -std::numeric_limits<Real>::infinity()) {
-            dispersions[k] = (disp - disp_mean) * inv_std;
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            dispersions[static_cast<Index>(k)] = (disp - disp_mean) * inv_std;
         }
     }
 }
@@ -165,7 +178,8 @@ inline void select_top_k_partial(
 ) {
     const Size n = scores.len;
 
-    Index* indices = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    Index* indices = indices_ptr.release();
     scl::algo::iota(indices, n, Index(0));
 
     // Partial sort: first k elements will be the k largest (in descending order)
@@ -176,8 +190,11 @@ inline void select_top_k_partial(
     scl::algo::zero(out_mask.ptr, n);
 
     for (Size i = 0; i < k; ++i) {
-        Index idx = indices[i];
-        out_indices[i] = idx;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - i is bounded by k and indices array, fits in Index
+        Index idx = indices[static_cast<Index>(i)];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        out_indices[static_cast<Index>(i)] = idx;
         out_mask[idx] = 1;
     }
 
@@ -196,16 +213,16 @@ void compute_moments(
     const Real N = static_cast<Real>(secondary_dim);
     const Real denom = N - static_cast<Real>(ddof);
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const auto values = matrix.primary_values_unsafe(idx);
-        const Size len_sz = values.size();
+        const auto len_sz = static_cast<Size>(values.len);
 
         Real sum = Real(0);
         Real sq_sum = Real(0);
 
         if (len_sz > 0) {
-            Array<const T> vals_arr(values.data(), len_sz);
+            Array<const T> vals_arr(values.ptr, len_sz);
             sum = scl::vectorize::sum(vals_arr);
             sq_sum = scl::vectorize::sum_squared(vals_arr);
         }
@@ -214,8 +231,11 @@ void compute_moments(
         Real var = (denom > Real(0)) ? ((sq_sum - sum * mu) / denom) : Real(0);
         if (var < Real(0)) var = Real(0);
 
-        out_means[p] = mu;
-        out_vars[p] = var;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - p is bounded by primary_dim and fits in Index
+        out_means[static_cast<Index>(p)] = mu;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        out_vars[static_cast<Index>(p)] = var;
     });
 }
 
@@ -231,11 +251,13 @@ void compute_clipped_moments(
     const Real N = static_cast<Real>(secondary_dim);
     const Real N_minus_1 = N - Real(1);
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const auto values = matrix.primary_values_unsafe(idx);
         const Index len = matrix.primary_length_unsafe(idx);
-        const Real clip = clip_vals[p];
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - p is bounded by primary_dim and fits in Index
+        const Real clip = clip_vals[static_cast<Index>(p)];
 
         Real sum = Real(0);
         Real sq_sum = Real(0);
@@ -253,8 +275,11 @@ void compute_clipped_moments(
         }
         if (var < Real(0)) var = Real(0);
 
-        out_means[p] = mu;
-        out_vars[p] = var;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - p is bounded by primary_dim and fits in Index
+        out_means[static_cast<Index>(p)] = mu;
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        out_vars[static_cast<Index>(p)] = var;
     });
 }
 
@@ -275,8 +300,10 @@ void select_by_dispersion(
     const Index primary_dim = matrix.primary_dim();
     const Size n = static_cast<Size>(primary_dim);
 
-    Real* means = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* vars = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto means_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto vars_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* means = means_ptr.release();
+    Real* vars = vars_ptr.release();
 
     detail::compute_moments(
         matrix,
@@ -314,7 +341,8 @@ void select_by_vst(
     const Index primary_dim = matrix.primary_dim();
     const Size n = static_cast<Size>(primary_dim);
 
-    Real* means = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto means_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    Real* means = means_ptr.release();
 
     detail::compute_clipped_moments(
         matrix,

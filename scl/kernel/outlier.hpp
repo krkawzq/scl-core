@@ -41,7 +41,6 @@ namespace detail {
 
 // Compute k-distance (distance to k-th nearest neighbor)
 SCL_FORCE_INLINE Real compute_k_distance(
-    const Index* neighbor_indices,
     const Real* neighbor_distances,
     Size n_neighbors,
     Size k
@@ -159,8 +158,8 @@ SCL_FORCE_INLINE Real compute_mad(Real* data, Size n, Real* temp) {
     // Copy data
     scl::algo::copy(data, temp, n);
 
-    // Find median
-    scl::algo::nth_element(temp, n / 2, n);
+    // Find median using correct nth_element signature
+    scl::algo::nth_element<Real>(temp, temp + (n / 2), temp + n);
     Real median = temp[n / 2];
 
     // Compute absolute deviations
@@ -168,8 +167,8 @@ SCL_FORCE_INLINE Real compute_mad(Real* data, Size n, Real* temp) {
         temp[i] = std::abs(data[i] - median);
     }
 
-    // Find MAD
-    scl::algo::nth_element(temp, n / 2, n);
+    // Find MAD (median absolute deviation)
+    scl::algo::nth_element<Real>(temp, temp + (n / 2), temp + n);
     return temp[n / 2] * Real(1.4826);  // Scale factor for normal distribution
 }
 
@@ -192,8 +191,12 @@ void isolation_score(
     const Size n_features = static_cast<Size>(data.cols());
 
     // Compute cell-wise statistics
-    Real* cell_means = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* cell_vars = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto cell_means_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* cell_means = cell_means_ptr.release();
+    auto cell_vars_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* cell_vars = cell_vars_ptr.release();
 
     // Global statistics accumulators
     std::atomic<Real> global_sum{Real(0.0)};
@@ -296,7 +299,9 @@ void local_outlier_factor(
     k = scl::algo::max2(k, config::MIN_K_NEIGHBORS);
 
     // Step 1: Compute k-distance for each point (parallel)
-    Real* k_distances = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto k_distances_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* k_distances = k_distances_ptr.release();
 
     auto compute_k_distance = [&](Size i) {
         const Index row_start = distances.row_indices_unsafe()[i];
@@ -323,11 +328,13 @@ void local_outlier_factor(
     }
 
     // Step 2: Compute local reachability density (LRD) for each point (parallel)
-    Real* lrd = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto lrd_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* lrd = lrd_ptr.release();
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
         scl::threading::WorkspacePool<Real> reach_pool;
-        reach_pool.init(scl::threading::max_threads(), k);
+        reach_pool.init(scl::threading::get_num_threads_runtime(), k);
 
         scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_id) {
             const Index row_start = neighbors.row_indices_unsafe()[i];
@@ -349,7 +356,9 @@ void local_outlier_factor(
             lrd[i] = detail::local_reachability_density(reach_dists, n_neighbors);
         });
     } else {
-        Real* reach_dists = scl::memory::aligned_alloc<Real>(k, SCL_ALIGNMENT);
+        auto reach_dists_ptr = scl::memory::aligned_alloc<Real>(k, SCL_ALIGNMENT);
+
+        Real* reach_dists = reach_dists_ptr.release();
 
         for (Size i = 0; i < n_cells; ++i) {
             const Index row_start = neighbors.row_indices_unsafe()[i];
@@ -426,7 +435,9 @@ void ambient_detection(
     if (n_cells == 0 || n_genes == 0) return;
 
     // Compute total UMI per cell
-    Real* total_umi = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto total_umi_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* total_umi = total_umi_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
         Real sum = Real(0.0);
@@ -440,7 +451,9 @@ void ambient_detection(
     }
 
     // Find low-UMI cells to estimate ambient profile
-    Real* sorted_umi = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto sorted_umi_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* sorted_umi = sorted_umi_ptr.release();
     scl::algo::copy(total_umi, sorted_umi, n_cells);
     scl::sort::sort(Array<Real>(sorted_umi, n_cells));
 
@@ -449,7 +462,9 @@ void ambient_detection(
     Real umi_threshold = sorted_umi[n_ambient];
 
     // Compute ambient gene profile
-    Real* ambient_profile = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto ambient_profile_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* ambient_profile = ambient_profile_ptr.release();
     for (Size g = 0; g < n_genes; ++g) {
         ambient_profile[g] = Real(0.0);
     }
@@ -535,8 +550,12 @@ void empty_drops(
     if (n_cells == 0 || n_genes == 0) return;
 
     // Compute total UMI per cell
-    Real* total_umi = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Index* sorted_indices = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto total_umi_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* total_umi = total_umi_ptr.release();
+    auto sorted_indices_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+
+    Index* sorted_indices = sorted_indices_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
         Real sum = Real(0.0);
@@ -577,7 +596,9 @@ void empty_drops(
     }
 
     // Estimate ambient profile from lowest-UMI barcodes
-    Real* ambient_profile = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto ambient_profile_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* ambient_profile = ambient_profile_ptr.release();
     for (Size g = 0; g < n_genes; ++g) {
         ambient_profile[g] = Real(0.0);
     }
@@ -604,8 +625,12 @@ void empty_drops(
     }
 
     // Test each cell against ambient profile
-    Real* p_values = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* cell_profile = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto p_values_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* p_values = p_values_ptr.release();
+    auto cell_profile_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* cell_profile = cell_profile_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
         Real umi = total_umi[i];
@@ -646,8 +671,12 @@ void empty_drops(
     }
 
     // Apply BH correction and determine empty status
-    Index* p_order = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
-    Real* p_values_copy = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto p_order_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+
+    Index* p_order = p_order_ptr.release();
+    auto p_values_copy_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* p_values_copy = p_values_copy_ptr.release();
     for (Size i = 0; i < n_cells; ++i) {
         p_order[i] = static_cast<Index>(i);
         p_values_copy[i] = p_values[i];
@@ -658,7 +687,9 @@ void empty_drops(
     );
 
     // BH correction
-    Real* adj_p = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto adj_p_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+
+    Real* adj_p = adj_p_ptr.release();
     const Real n_real = static_cast<Real>(n_cells);
 
     for (Size i = 0; i < n_cells; ++i) {
@@ -710,9 +741,15 @@ void outlier_genes(
     if (n_cells == 0 || n_genes == 0) return;
 
     // Compute gene-wise statistics
-    Real* gene_means = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Real* gene_vars = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Size* gene_nnz = scl::memory::aligned_alloc<Size>(n_genes, SCL_ALIGNMENT);
+    auto gene_means_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* gene_means = gene_means_ptr.release();
+    auto gene_vars_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* gene_vars = gene_vars_ptr.release();
+    auto gene_nnz_ptr = scl::memory::aligned_alloc<Size>(n_genes, SCL_ALIGNMENT);
+
+    Size* gene_nnz = gene_nnz_ptr.release();
 
     for (Size g = 0; g < n_genes; ++g) {
         gene_means[g] = Real(0.0);
@@ -760,8 +797,12 @@ void outlier_genes(
     }
 
     // Compute log mean and log CV^2 for outlier detection
-    Real* log_means = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Real* log_cv2 = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto log_means_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* log_means = log_means_ptr.release();
+    auto log_cv2_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* log_cv2 = log_cv2_ptr.release();
     Size valid_genes = 0;
 
     for (Size g = 0; g < n_genes; ++g) {
@@ -783,12 +824,14 @@ void outlier_genes(
     }
 
     // Compute median and MAD of log CV^2
-    Real* temp = scl::memory::aligned_alloc<Real>(valid_genes, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(valid_genes, SCL_ALIGNMENT);
+
+    Real* temp = temp_ptr.release();
     Real mad = detail::compute_mad(log_cv2, valid_genes, temp);
 
     // Find median of log_cv2
     scl::algo::copy(log_cv2, temp, valid_genes);
-    scl::algo::nth_element(temp, valid_genes / 2, valid_genes);
+    scl::algo::nth_element(temp, temp + (valid_genes / 2), temp + valid_genes);
     Real median_log_cv2 = temp[valid_genes / 2];
 
     scl::memory::aligned_free(temp);
@@ -840,9 +883,6 @@ void doublet_score(
             scores.ptr[i] = Real(0.0);
             continue;
         }
-
-        // Compute expression variance among neighbors
-        const Size n_features = static_cast<Size>(expression.cols());
 
         Real total_variance = Real(0.0);
         Size features_counted = 0;
@@ -922,7 +962,10 @@ void mitochondrial_outliers(
         }
     }
 
-    bool* is_mito = scl::memory::aligned_alloc<bool>(max_gene + 1, SCL_ALIGNMENT);
+    auto is_mito_ptr = scl::memory::aligned_alloc<bool>(max_gene + 1, SCL_ALIGNMENT);
+
+
+    bool* is_mito = is_mito_ptr.release();
     for (Index g = 0; g <= max_gene; ++g) {
         is_mito[g] = false;
     }
@@ -985,7 +1028,8 @@ void qc_filter(
         }
     }
 
-    bool* is_mito = nullptr;
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::unique_ptr<bool[], scl::memory::AlignedDeleter<bool>> is_mito;
     if (mito_genes.len > 0) {
         is_mito = scl::memory::aligned_alloc<bool>(max_gene_idx + 1, SCL_ALIGNMENT);
         for (Index g = 0; g <= max_gene_idx; ++g) {
@@ -1027,10 +1071,7 @@ void qc_filter(
 
         pass_qc.ptr[i] = pass;
     }
-
-    if (is_mito != nullptr) {
-        scl::memory::aligned_free(is_mito);
-    }
+    // is_mito will be automatically freed by unique_ptr and its custom deleter
 }
 
 } // namespace scl::kernel::outlier

@@ -4,8 +4,9 @@
 #include "scl/core/sparse.hpp"
 #include "scl/core/error.hpp"
 #include "scl/core/memory.hpp"
+#include "scl/core/algo.hpp"
+#include "scl/core/macros.hpp"
 
-#include <algorithm>
 #include <cmath>
 
 // =============================================================================
@@ -100,8 +101,11 @@ SCL_FORCE_INLINE Real compute_convex_hull_area_2d(
     Real area = Real(0.0);
 
     // Find convex hull using gift wrapping (simplified)
-    Index* hull = scl::memory::aligned_alloc<Index>(n_points, SCL_ALIGNMENT);
-    bool* in_hull = scl::memory::aligned_alloc<bool>(n_points, SCL_ALIGNMENT);
+    auto hull_unique = scl::memory::aligned_alloc<Index>(n_points, SCL_ALIGNMENT);
+    Index* hull = hull_unique.get();
+    auto in_hull_unique = scl::memory::aligned_alloc<bool>(n_points, SCL_ALIGNMENT);
+    bool* in_hull = in_hull_unique.get();
+
 
     for (Size i = 0; i < n_points; ++i) {
         in_hull[i] = false;
@@ -162,10 +166,14 @@ void find_knn(
     Size k,
     Index* neighbors  // [n_cells * k]
 ) {
-    k = std::min(k, n_cells - 1);
+    k = scl::algo::min2(k, n_cells - 1);
 
-    Real* distances = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Index* sorted_idx = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    // Use unique_ptr for automatic RAII; extract raw pointer for usage
+    auto distances_uptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* distances = distances_uptr.get();
+
+    auto sorted_idx_uptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    Index* sorted_idx = sorted_idx_uptr.get();
 
     for (Size i = 0; i < n_cells; ++i) {
         for (Size j = 0; j < n_cells; ++j) {
@@ -176,16 +184,14 @@ void find_knn(
                 n_dims);
         }
 
-        std::partial_sort(sorted_idx, sorted_idx + k + 1, sorted_idx + n_cells,
+        scl::algo::partial_sort(sorted_idx, static_cast<Size>(n_cells), k + 1,
             [&](Index a, Index b) { return distances[a] < distances[b]; });
 
         for (Size ki = 0; ki < k; ++ki) {
             neighbors[i * k + ki] = sorted_idx[ki + 1];  // Skip self
         }
     }
-
-    scl::memory::aligned_free(distances);
-    scl::memory::aligned_free(sorted_idx);
+    // aligned_free unnecessary (unique_ptr handles deallocation)
 }
 
 } // namespace detail
@@ -208,10 +214,11 @@ void tissue_architecture(
 
     if (n_cells == 0) return;
 
-    n_neighbors = std::min(n_neighbors, n_cells - 1);
+    n_neighbors = scl::algo::min2(n_neighbors, n_cells - 1);
 
     // Find KNN
-    Index* neighbors = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
+    auto neighbors_uptr = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
+    Index* neighbors = neighbors_uptr.get();
     detail::find_knn(coordinates, n_cells, n_dims, n_neighbors, neighbors);
 
     // Find number of cell types
@@ -222,7 +229,8 @@ void tissue_architecture(
         }
     }
 
-    Size* type_counts = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    auto type_counts_uptr = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    Size* type_counts = type_counts_uptr.get();
 
     for (Size i = 0; i < n_cells; ++i) {
         // Compute local density (inverse of average distance to neighbors)
@@ -286,9 +294,7 @@ void tissue_architecture(
         clustering_coef[i] = (n_possible > 0) ?
             static_cast<Real>(n_connected) / static_cast<Real>(n_possible) : Real(0.0);
     }
-
-    scl::memory::aligned_free(neighbors);
-    scl::memory::aligned_free(type_counts);
+    // aligned_free unnecessary (unique_ptr handles deallocation)
 }
 
 // =============================================================================
@@ -312,7 +318,8 @@ void layer_assignment(
     }
 
     // Extract reference coordinate
-    Real* ref_coords = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto ref_coords_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* ref_coords = ref_coords_ptr.get();
     Real min_val = std::numeric_limits<Real>::max();
     Real max_val = std::numeric_limits<Real>::lowest();
 
@@ -325,30 +332,20 @@ void layer_assignment(
     Real range = max_val - min_val;
 
     if (range < config::EPSILON) {
-        // All cells in same layer
         for (Size i = 0; i < n_cells; ++i) {
             layer_labels.ptr[i] = 0;
         }
-        scl::memory::aligned_free(ref_coords);
         return;
     }
 
     // Assign layers based on quantiles
-    Real layer_width = range / static_cast<Real>(n_layers);
-
     for (Size i = 0; i < n_cells; ++i) {
         Real normalized = (ref_coords[i] - min_val) / range;
-        Index layer = static_cast<Index>(normalized * static_cast<Real>(n_layers));
-        layer = std::min(layer, n_layers - 1);
+        auto layer = static_cast<Index>(normalized * static_cast<Real>(n_layers));
+        layer = scl::algo::min2(layer, n_layers - 1);
         layer_labels.ptr[i] = layer;
     }
-
-    scl::memory::aligned_free(ref_coords);
 }
-
-// =============================================================================
-// Radial Layer Assignment
-// =============================================================================
 
 void radial_layer_assignment(
     const Real* coordinates,
@@ -363,7 +360,8 @@ void radial_layer_assignment(
     if (n_cells == 0 || n_layers == 0) return;
 
     // Compute distance from center for each cell
-    Real* distances = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto distances_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* distances = distances_ptr.get();
     Real max_dist = Real(0.0);
 
     for (Size i = 0; i < n_cells; ++i) {
@@ -378,24 +376,17 @@ void radial_layer_assignment(
         for (Size i = 0; i < n_cells; ++i) {
             layer_labels.ptr[i] = 0;
         }
-        scl::memory::aligned_free(distances);
         return;
     }
 
     // Assign layers based on distance
     for (Size i = 0; i < n_cells; ++i) {
         Real normalized = distances[i] / max_dist;
-        Index layer = static_cast<Index>(normalized * static_cast<Real>(n_layers));
-        layer = std::min(layer, n_layers - 1);
+        auto layer = static_cast<Index>(normalized * static_cast<Real>(n_layers));
+        layer = scl::algo::min2(layer, n_layers - 1);
         layer_labels.ptr[i] = layer;
     }
-
-    scl::memory::aligned_free(distances);
 }
-
-// =============================================================================
-// Zonation Score
-// =============================================================================
 
 template <typename T, bool IsCSR>
 void zonation_score(
@@ -412,7 +403,8 @@ void zonation_score(
     if (n_cells == 0 || n_genes == 0) return;
 
     // Compute distance from reference for each cell
-    Real* distances = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto distances_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* distances = distances_ptr.get();
     Real max_dist = Real(0.0);
 
     for (Size i = 0; i < n_cells; ++i) {
@@ -427,7 +419,8 @@ void zonation_score(
     // Higher score = gene expression varies with distance from reference
 
     // For each cell, compute total expression
-    Real* total_expr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto total_expr_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* total_expr = total_expr_ptr.get();
 
     for (Size i = 0; i < n_cells; ++i) {
         total_expr[i] = Real(0.0);
@@ -474,10 +467,8 @@ void zonation_score(
         // Simple approach: use normalized distance weighted by global correlation
         zonation_scores.ptr[i] = distances[i] * std::abs(global_zonation);
     }
-
-    scl::memory::aligned_free(distances);
-    scl::memory::aligned_free(total_expr);
 }
+
 
 // =============================================================================
 // Morphological Features
@@ -507,7 +498,8 @@ void morphological_features(
     }
 
     // Count cells per group
-    Size* group_sizes = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
+    auto group_sizes_ptr = scl::memory::aligned_alloc<Size>(n_groups, SCL_ALIGNMENT);
+    Size* group_sizes = group_sizes_ptr.get();
     for (Size g = 0; g < n_groups; ++g) {
         group_sizes[g] = 0;
     }
@@ -524,8 +516,10 @@ void morphological_features(
         if (group_sizes[g] < 3) continue;
 
         // Collect coordinates for this group
-        Real* group_x = scl::memory::aligned_alloc<Real>(group_sizes[g], SCL_ALIGNMENT);
-        Real* group_y = scl::memory::aligned_alloc<Real>(group_sizes[g], SCL_ALIGNMENT);
+        auto group_x_ptr = scl::memory::aligned_alloc<Real>(group_sizes[g], SCL_ALIGNMENT);
+        Real* group_x = group_x_ptr.release();
+        auto group_y_ptr = scl::memory::aligned_alloc<Real>(group_sizes[g], SCL_ALIGNMENT);
+        Real* group_y = group_y_ptr.release();
 
         Size idx = 0;
         for (Size i = 0; i < n_cells; ++i) {
@@ -550,19 +544,13 @@ void morphological_features(
 
         // Compute radius statistics
         Real max_radius = Real(0.0);
-        Real sum_radius = Real(0.0);
-        Real sum_radius_sq = Real(0.0);
 
         for (Size i = 0; i < group_sizes[g]; ++i) {
             Real dx = group_x[i] - cx;
             Real dy = group_y[i] - cy;
             Real r = std::sqrt(dx * dx + dy * dy);
-            sum_radius += r;
-            sum_radius_sq += r * r;
             if (r > max_radius) max_radius = r;
         }
-
-        Real avg_radius = sum_radius / static_cast<Real>(group_sizes[g]);
 
         // Perimeter approximation (2 * pi * max_radius)
         perimeter[g] = Real(2.0) * config::PI * max_radius;
@@ -623,17 +611,20 @@ void tissue_module(
 
     if (n_cells == 0 || n_modules == 0) return;
 
-    n_modules = std::min(static_cast<Size>(n_modules), n_cells);
+    n_modules = scl::algo::min2(static_cast<Size>(n_modules), n_cells);
 
     // Combined spatial-expression features
-    Size n_expr_features = std::min(n_genes, Size(20));
+    Size n_expr_features = scl::algo::min2(n_genes, Size(20));
     Size n_features = n_dims + n_expr_features;
 
-    Real* features = scl::memory::aligned_alloc<Real>(n_cells * n_features, SCL_ALIGNMENT);
+    auto features_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_features, SCL_ALIGNMENT);
+    Real* features = features_ptr.release();
 
     // Normalize and add spatial coordinates
-    Real* coord_min = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
-    Real* coord_max = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+    auto coord_min_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+    Real* coord_min = coord_min_ptr.release();
+    auto coord_max_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
+    Real* coord_max = coord_max_ptr.release();
 
     for (Size d = 0; d < n_dims; ++d) {
         coord_min[d] = std::numeric_limits<Real>::max();
@@ -661,8 +652,10 @@ void tissue_module(
     }
 
     // Compute gene variances for feature selection
-    Real* gene_mean = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Real* gene_var = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto gene_mean_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    Real* gene_mean = gene_mean_ptr.release();
+    auto gene_var_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    Real* gene_var = gene_var_ptr.release();
 
     for (Size g = 0; g < n_genes; ++g) {
         gene_mean[g] = Real(0.0);
@@ -695,12 +688,13 @@ void tissue_module(
     }
 
     // Select top variable genes
-    Index* top_genes = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    auto top_genes_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    Index* top_genes = top_genes_ptr.release();
     for (Size g = 0; g < n_genes; ++g) {
         top_genes[g] = static_cast<Index>(g);
     }
 
-    std::partial_sort(top_genes, top_genes + n_expr_features, top_genes + n_genes,
+    scl::algo::partial_sort(top_genes, static_cast<Size>(n_genes), n_expr_features,
         [&](Index a, Index b) { return gene_var[a] > gene_var[b]; });
 
     // Add normalized expression features
@@ -730,8 +724,10 @@ void tissue_module(
     }
 
     // K-means clustering
-    Real* centroids = scl::memory::aligned_alloc<Real>(n_modules * n_features, SCL_ALIGNMENT);
-    Size* cluster_sizes = scl::memory::aligned_alloc<Size>(n_modules, SCL_ALIGNMENT);
+    auto centroids_ptr = scl::memory::aligned_alloc<Real>(n_modules * n_features, SCL_ALIGNMENT);
+    Real* centroids = centroids_ptr.release();
+    auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_modules, SCL_ALIGNMENT);
+    Size* cluster_sizes = cluster_sizes_ptr.release();
 
     detail::LCG rng(seed);
 
@@ -825,10 +821,11 @@ void neighborhood_composition(
 
     if (n_cells == 0 || n_types == 0) return;
 
-    n_neighbors = std::min(n_neighbors, n_cells - 1);
+    n_neighbors = scl::algo::min2(n_neighbors, n_cells - 1);
 
     // Find KNN
-    Index* neighbors = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
+    auto neighbors_ptr = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
+    Index* neighbors = neighbors_ptr.release();
     detail::find_knn(coordinates, n_cells, n_dims, n_neighbors, neighbors);
 
     // Compute composition for each cell
@@ -885,7 +882,8 @@ void cell_type_interaction(
     }
 
     // Count type pairs
-    Size* type_counts = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    auto type_counts_ptr = scl::memory::aligned_alloc<Size>(n_types, SCL_ALIGNMENT);
+    Size* type_counts = type_counts_ptr.release();
     for (Size t = 0; t < n_types; ++t) {
         type_counts[t] = 0;
     }
@@ -898,7 +896,8 @@ void cell_type_interaction(
     }
 
     // Count interactions
-    Size* interaction_counts = scl::memory::aligned_alloc<Size>(n_types * n_types, SCL_ALIGNMENT);
+    auto interaction_counts_ptr = scl::memory::aligned_alloc<Size>(n_types * n_types, SCL_ALIGNMENT);
+    Size* interaction_counts = interaction_counts_ptr.release();
     for (Size i = 0; i < n_types * n_types; ++i) {
         interaction_counts[i] = 0;
     }
@@ -966,10 +965,11 @@ void boundary_cells(
 
     if (n_cells == 0) return;
 
-    n_neighbors = std::min(n_neighbors, n_cells - 1);
+    n_neighbors = scl::algo::min2(n_neighbors, n_cells - 1);
 
     // Find KNN
-    Index* neighbors = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
+    auto neighbors_ptr = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
+    Index* neighbors = neighbors_ptr.release();
     detail::find_knn(coordinates, n_cells, n_dims, n_neighbors, neighbors);
 
     // Check for boundary cells
@@ -1091,10 +1091,11 @@ void spatial_coherence(
 
     if (n_cells == 0) return;
 
-    n_neighbors = std::min(n_neighbors, n_cells - 1);
+    n_neighbors = scl::algo::min2(n_neighbors, n_cells - 1);
 
     // Find KNN
-    Index* neighbors = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
+    auto neighbors_ptr = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
+    Index* neighbors = neighbors_ptr.release();
     detail::find_knn(coordinates, n_cells, n_dims, n_neighbors, neighbors);
 
     // Compute coherence (fraction of same-label neighbors)

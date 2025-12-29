@@ -11,9 +11,10 @@
 #include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
 
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
-#include <atomic>
 
 // =============================================================================
 // FILE: scl/kernel/scoring.hpp
@@ -77,14 +78,15 @@ namespace detail {
 // =============================================================================
 
 struct alignas(16) FastRNG {
-    uint32_t s[4];
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::array<uint32_t, 4> s{};
 
     SCL_FORCE_INLINE explicit FastRNG(uint64_t seed) noexcept {
         uint64_t z = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (uint32_t& si : s) {
             z += 0x9e3779b97f4a7c15ULL;
             z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-            s[i] = static_cast<uint32_t>(z >> 32);
+            si = static_cast<uint32_t>(z >> 32);
         }
     }
 
@@ -117,7 +119,7 @@ SCL_HOT SCL_FORCE_INLINE Real sum_simd(const Real* SCL_RESTRICT x, Size n) noexc
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -141,7 +143,7 @@ SCL_HOT SCL_FORCE_INLINE void scale_simd(Real* SCL_RESTRICT x, Real alpha, Size 
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_alpha = s::Set(d, alpha);
     Size k = 0;
@@ -165,7 +167,7 @@ SCL_HOT SCL_FORCE_INLINE void axpy_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_alpha = s::Set(d, alpha);
     Size k = 0;
@@ -193,7 +195,8 @@ struct GeneSetLookup {
     void init(Index n_genes_total) {
         n_genes = n_genes_total;
         n_words = (static_cast<Size>(n_genes) + 63) / 64;
-        bits = scl::memory::aligned_alloc<uint64_t>(n_words, SCL_ALIGNMENT);
+        auto bits_ptr = scl::memory::aligned_alloc<uint64_t>(n_words, SCL_ALIGNMENT);
+        bits = bits_ptr.get();
         std::memset(bits, 0, n_words * sizeof(uint64_t));
     }
 
@@ -207,7 +210,7 @@ struct GeneSetLookup {
         }
     }
 
-    SCL_FORCE_INLINE bool contains(Index gene) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE bool contains(Index gene) const noexcept {
         if (gene < 0 || gene >= n_genes) return false;
         return (bits[gene >> 6] & (1ULL << (gene & 63))) != 0;
     }
@@ -249,7 +252,7 @@ SCL_HOT void compute_ranks_optimized(
         }
     } else {
         // Shell sort for larger n
-        Index gaps[] = {701, 301, 132, 57, 23, 10, 4, 1};
+        constexpr std::array<Index, 8> gaps = {701, 301, 132, 57, 23, 10, 4, 1};
 
         for (Index gap : gaps) {
             if (gap >= n) continue;
@@ -299,7 +302,7 @@ SCL_FORCE_INLINE Real compute_auc(
 ) noexcept {
     if (n_genes_in_set == 0 || n_total_genes == 0) return Real(0);
 
-    Index max_rank = static_cast<Index>(std::ceil(quantile * static_cast<Real>(n_total_genes)));
+    auto max_rank = static_cast<Index>(std::ceil(quantile * static_cast<Real>(n_total_genes)));
     max_rank = scl::algo::max2(max_rank, Index(1));
 
     Index count = 0;
@@ -349,8 +352,8 @@ void compute_gene_means(
         // Use atomic accumulation for CSR
         constexpr int64_t SCALE = 1000000LL;
 
-        std::atomic<int64_t>* atomic_sums = static_cast<std::atomic<int64_t>*>(
-            scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT));
+        auto atomic_sums_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT);
+        std::atomic<int64_t>* atomic_sums = atomic_sums_ptr.get();
 
         for (Size g = 0; g < G; ++g) {
             atomic_sums[g].store(0, std::memory_order_relaxed);
@@ -364,7 +367,7 @@ void compute_gene_means(
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
                 if (gene < n_genes) {
-                    int64_t scaled = static_cast<int64_t>(static_cast<Real>(values[k]) * SCALE);
+                    auto scaled = static_cast<int64_t>(static_cast<Real>(values[k]) * SCALE);
                     atomic_sums[gene].fetch_add(scaled, std::memory_order_relaxed);
                 }
             }
@@ -373,22 +376,22 @@ void compute_gene_means(
         Real inv_n = Real(1) / static_cast<Real>(n_cells);
 
         for (Size g = 0; g < G; ++g) {
-            gene_means[g] = static_cast<Real>(atomic_sums[g].load()) / SCALE * inv_n;
+            gene_means[static_cast<Index>(g)] = static_cast<Real>(atomic_sums[g].load()) / SCALE * inv_n;
         }
 
         scl::memory::aligned_free(atomic_sums, SCL_ALIGNMENT);
     } else {
         // Parallel over genes for CSC
         scl::threading::parallel_for(Size(0), G, [&](size_t g) {
-            auto values = X.col_values_unsafe(static_cast<Index>(g));
-            const Index len = X.col_length_unsafe(static_cast<Index>(g));
+            auto values = X.col_values_unsafe(static_cast<Index>(static_cast<Index>(g)));
+            const Index len = X.col_length_unsafe(static_cast<Index>(static_cast<Index>(g)));
 
             Real sum = Real(0);
             for (Index k = 0; k < len; ++k) {
                 sum += static_cast<Real>(values[k]);
             }
 
-            gene_means[g] = sum / static_cast<Real>(n_cells);
+            gene_means[static_cast<Index>(g)] = sum / static_cast<Real>(n_cells);
         });
     }
 }
@@ -406,7 +409,6 @@ void mean_score(
     Index n_genes
 ) {
     const Size N = static_cast<Size>(n_cells);
-    const Size G = static_cast<Size>(n_genes);
 
     SCL_CHECK_DIM(scores.len >= N, "Scoring: scores buffer too small");
 
@@ -415,11 +417,11 @@ void mean_score(
     if (gene_set.len == 0) return;
 
     // Build gene set lookup
-    detail::GeneSetLookup lookup;
+    detail::GeneSetLookup lookup{};
     lookup.init(n_genes);
 
     for (Size i = 0; i < gene_set.len; ++i) {
-        lookup.set(gene_set[i]);
+        lookup.set(static_cast<Index>(gene_set[static_cast<Index>(i)]));
     }
 
     Real inv_n_genes = Real(1) / static_cast<Real>(gene_set.len);
@@ -438,21 +440,21 @@ void mean_score(
                 }
             }
 
-            scores[c] = sum * inv_n_genes;
+            scores[static_cast<Index>(c)] = sum * inv_n_genes;
         });
     } else {
         // Parallel over genes, atomic accumulation
         constexpr int64_t SCALE = 1000000LL;
 
-        std::atomic<int64_t>* atomic_scores = static_cast<std::atomic<int64_t>*>(
-            scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT));
+        auto atomic_scores_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
+        std::atomic<int64_t>* atomic_scores = atomic_scores_ptr.get();
 
         for (Size c = 0; c < N; ++c) {
             atomic_scores[c].store(0, std::memory_order_relaxed);
         }
 
         scl::threading::parallel_for(Size(0), gene_set.len, [&](size_t i) {
-            Index gene = gene_set[i];
+            Index gene = gene_set[static_cast<Index>(i)];
             if (gene < 0 || gene >= n_genes) return;
 
             auto indices = X.col_indices_unsafe(gene);
@@ -462,14 +464,14 @@ void mean_score(
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
                 if (c < n_cells) {
-                    int64_t scaled = static_cast<int64_t>(static_cast<Real>(values[k]) * SCALE);
-                    atomic_scores[c].fetch_add(scaled, std::memory_order_relaxed);
+                    auto scaled = static_cast<int64_t>(static_cast<Real>(values[k]) * SCALE);
+                    atomic_scores[static_cast<Index>(c)].fetch_add(scaled, std::memory_order_relaxed);
                 }
             }
         });
 
         for (Size c = 0; c < N; ++c) {
-            scores[c] = static_cast<Real>(atomic_scores[c].load()) / SCALE * inv_n_genes;
+            scores[static_cast<Index>(c)] = static_cast<Real>(atomic_scores[static_cast<Index>(c)].load()) / SCALE * inv_n_genes;
         }
 
         scl::memory::aligned_free(atomic_scores, SCL_ALIGNMENT);
@@ -506,13 +508,15 @@ void weighted_score(
     if (total_weight < config::MIN_VAR) return;
 
     // Create gene -> weight mapping
-    Real* weight_map = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto weight_map_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+
+    Real* weight_map = weight_map_ptr.release();
     scl::algo::zero(weight_map, G);
 
     for (Size i = 0; i < gene_set.len; ++i) {
-        Index g = gene_set[i];
+        auto g = static_cast<Index>(gene_set[static_cast<Index>(i)]);
         if (g >= 0 && g < n_genes) {
-            weight_map[g] = gene_weights[i];
+            weight_map[static_cast<Index>(g)] = gene_weights[static_cast<Index>(i)];
         }
     }
 
@@ -532,23 +536,23 @@ void weighted_score(
                 }
             }
 
-            scores[c] = weighted_sum * inv_total;
+            scores[static_cast<Index>(c)] = weighted_sum * inv_total;
         });
     } else {
         constexpr int64_t SCALE = 1000000LL;
 
-        std::atomic<int64_t>* atomic_scores = static_cast<std::atomic<int64_t>*>(
-            scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT));
+        auto atomic_scores_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
+        std::atomic<int64_t>* atomic_scores = atomic_scores_ptr.get();
 
         for (Size c = 0; c < N; ++c) {
             atomic_scores[c].store(0, std::memory_order_relaxed);
         }
 
         scl::threading::parallel_for(Size(0), gene_set.len, [&](size_t i) {
-            Index gene = gene_set[i];
+            auto gene = static_cast<Index>(gene_set[static_cast<Index>(i)]);
             if (gene < 0 || gene >= n_genes) return;
 
-            Real w = gene_weights[i];
+            Real w = gene_weights[static_cast<Index>(i)];
             auto indices = X.col_indices_unsafe(gene);
             auto values = X.col_values_unsafe(gene);
             const Index len = X.col_length_unsafe(gene);
@@ -556,14 +560,14 @@ void weighted_score(
             for (Index k = 0; k < len; ++k) {
                 Index c = indices[k];
                 if (c < n_cells) {
-                    int64_t scaled = static_cast<int64_t>(w * static_cast<Real>(values[k]) * SCALE);
-                    atomic_scores[c].fetch_add(scaled, std::memory_order_relaxed);
+                    auto scaled = static_cast<int64_t>(w * static_cast<Real>(values[k]) * SCALE);
+                    atomic_scores[static_cast<Index>(c)].fetch_add(scaled, std::memory_order_relaxed);
                 }
             }
         });
 
         for (Size c = 0; c < N; ++c) {
-            scores[c] = static_cast<Real>(atomic_scores[c].load()) / SCALE * inv_total;
+            scores[static_cast<Index>(c)] = static_cast<Real>(atomic_scores[static_cast<Index>(c)].load()) / SCALE * inv_total;
         }
 
         scl::memory::aligned_free(atomic_scores, SCL_ALIGNMENT);
@@ -595,7 +599,7 @@ void auc_score(
         return;
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Per-thread workspace
     scl::threading::WorkspacePool<Real> expr_pool;
@@ -614,9 +618,9 @@ void auc_score(
         scl::algo::zero(expr_values, G);
 
         if (IsCSR) {
-            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
-            auto values = X.row_values_unsafe(static_cast<Index>(c));
-            const Index len = X.row_length_unsafe(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(static_cast<Index>(c)));
+            auto values = X.row_values_unsafe(static_cast<Index>(static_cast<Index>(c)));
+            const Index len = X.row_length_unsafe(static_cast<Index>(static_cast<Index>(c)));
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
@@ -641,7 +645,7 @@ void auc_score(
 
         detail::compute_ranks_optimized(expr_values, n_genes, ranks, sorted_indices);
 
-        scores[c] = detail::compute_auc(
+        scores[static_cast<Index>(c)] = detail::compute_auc(
             ranks, gene_set.ptr, static_cast<Index>(gene_set.len), n_genes, quantile
         );
     });
@@ -679,14 +683,16 @@ inline void bin_genes_by_expression(
     }
 
     // Compute bin edges
-    Real* bin_edges = scl::memory::aligned_alloc<Real>(n_bins + 1, SCL_ALIGNMENT);
+    auto bin_edges_ptr = scl::memory::aligned_alloc<Real>(n_bins + 1, SCL_ALIGNMENT);
+
+    Real* bin_edges = bin_edges_ptr.release();
     for (Index b = 0; b <= n_bins; ++b) {
         bin_edges[b] = min_expr + range * static_cast<Real>(b) / static_cast<Real>(n_bins);
     }
 
     // Parallel bin assignment
     scl::threading::parallel_for(Size(0), G, [&](size_t g) {
-        gene_bins[g] = detail::find_bin(gene_means[g], bin_edges, n_bins);
+        gene_bins[static_cast<Index>(g)] = detail::find_bin(gene_means[static_cast<Index>(g)], bin_edges, n_bins);
     });
 
     scl::memory::aligned_free(bin_edges, SCL_ALIGNMENT);
@@ -697,7 +703,7 @@ inline void bin_genes_by_expression(
 // =============================================================================
 
 inline Index select_control_genes(
-    Array<const Real> gene_means,
+    Array<const Real> /* gene_means */,
     Index n_genes,
     Array<const Index> gene_set,
     Array<const Index> gene_bins,
@@ -706,18 +712,18 @@ inline Index select_control_genes(
     Array<Index> control_genes,
     uint64_t seed = 42
 ) {
-    const Size G = static_cast<Size>(n_genes);
-
     // Build gene set lookup
-    detail::GeneSetLookup in_set;
+    detail::GeneSetLookup in_set{};
     in_set.init(n_genes);
 
     for (Size i = 0; i < gene_set.len; ++i) {
-        in_set.set(gene_set[i]);
+        in_set.set(static_cast<Index>(gene_set[static_cast<Index>(i)]));
     }
 
     // Count genes per bin
-    Index* bin_counts = scl::memory::aligned_alloc<Index>(n_bins, SCL_ALIGNMENT);
+    auto bin_counts_ptr = scl::memory::aligned_alloc<Index>(n_bins, SCL_ALIGNMENT);
+
+    Index* bin_counts = bin_counts_ptr.release();
     scl::algo::zero(bin_counts, static_cast<Size>(n_bins));
 
     for (Index g = 0; g < n_genes; ++g) {
@@ -730,13 +736,17 @@ inline Index select_control_genes(
     }
 
     // Build per-bin gene lists
-    Index** bin_genes = scl::memory::aligned_alloc<Index*>(n_bins, SCL_ALIGNMENT);
-    Index* bin_fill = scl::memory::aligned_alloc<Index>(n_bins, SCL_ALIGNMENT);
+    auto bin_genes_ptr = scl::memory::aligned_alloc<Index*>(n_bins, SCL_ALIGNMENT);
+    Index** bin_genes = bin_genes_ptr.get();
+    auto bin_fill_ptr = scl::memory::aligned_alloc<Index>(n_bins, SCL_ALIGNMENT);
+
+    Index* bin_fill = bin_fill_ptr.release();
     scl::algo::zero(bin_fill, static_cast<Size>(n_bins));
 
     for (Index b = 0; b < n_bins; ++b) {
         if (bin_counts[b] > 0) {
-            bin_genes[b] = scl::memory::aligned_alloc<Index>(bin_counts[b], SCL_ALIGNMENT);
+            auto bin_array_ptr = scl::memory::aligned_alloc<Index>(bin_counts[b], SCL_ALIGNMENT);
+            bin_genes[b] = bin_array_ptr.get();
         } else {
             bin_genes[b] = nullptr;
         }
@@ -754,20 +764,20 @@ inline Index select_control_genes(
     // Sample control genes
     detail::FastRNG rng(seed);
     Index total_control = 0;
-    Index max_control = static_cast<Index>(control_genes.len);
+    auto max_control = static_cast<Index>(control_genes.len);
 
     for (Size i = 0; i < gene_set.len && total_control < max_control; ++i) {
-        Index gene = gene_set[i];
+        auto gene = static_cast<Index>(gene_set[static_cast<Index>(i)]);
         if (gene < 0 || gene >= n_genes) continue;
 
-        Index bin = gene_bins[gene];
+        Index bin = gene_bins[static_cast<Index>(gene)];
         if (bin < 0 || bin >= n_bins || !bin_genes[bin]) continue;
 
         Index bin_size = bin_counts[bin];
         if (bin_size == 0) continue;
 
         for (Index j = 0; j < n_control_per_gene && total_control < max_control; ++j) {
-            Index idx = static_cast<Index>(rng.bounded(bin_size));
+            auto idx = static_cast<Index>(rng.bounded(static_cast<Size>(bin_size)));
             control_genes[total_control++] = bin_genes[bin][idx];
         }
     }
@@ -813,11 +823,15 @@ void module_score(
     }
 
     // Compute gene means
-    Real* gene_means = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto gene_means_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+
+    Real* gene_means = gene_means_ptr.release();
     compute_gene_means(X, Array<Real>(gene_means, G), n_cells, n_genes);
 
     // Bin genes
-    Index* gene_bins = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+    auto gene_bins_ptr = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+
+    Index* gene_bins = gene_bins_ptr.release();
     bin_genes_by_expression(
         Array<const Real>(gene_means, G), n_genes, n_bins,
         Array<Index>(gene_bins, G)
@@ -825,7 +839,9 @@ void module_score(
 
     // Select control genes
     Index max_control = static_cast<Index>(gene_set.len) * n_control_per_gene;
-    Index* control_genes = scl::memory::aligned_alloc<Index>(max_control, SCL_ALIGNMENT);
+    auto control_genes_ptr = scl::memory::aligned_alloc<Index>(max_control, SCL_ALIGNMENT);
+
+    Index* control_genes = control_genes_ptr.release();
 
     Index n_control = select_control_genes(
         Array<const Real>(gene_means, G), n_genes,
@@ -834,8 +850,12 @@ void module_score(
     );
 
     // Compute scores
-    Real* set_scores = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Real* ctrl_scores = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto set_scores_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* set_scores = set_scores_ptr.release();
+    auto ctrl_scores_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* ctrl_scores = ctrl_scores_ptr.release();
 
     mean_score(X, gene_set, Array<Real>(set_scores, N), n_cells, n_genes);
     mean_score(X, Array<const Index>(control_genes, n_control),
@@ -843,7 +863,7 @@ void module_score(
 
     // Final score (parallel)
     scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-        scores[c] = set_scores[c] - ctrl_scores[c];
+        scores[static_cast<Index>(c)] = set_scores[static_cast<Index>(c)] - ctrl_scores[static_cast<Index>(c)];
     });
 
     scl::memory::aligned_free(ctrl_scores, SCL_ALIGNMENT);
@@ -876,36 +896,42 @@ void zscore_score(
     }
 
     // Compute gene statistics
-    Real* gene_means = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
-    Real* gene_inv_std = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto gene_means_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+
+    Real* gene_means = gene_means_ptr.release();
+    auto gene_inv_std_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+
+    Real* gene_inv_std = gene_inv_std_ptr.release();
 
     compute_gene_means(X, Array<Real>(gene_means, G), n_cells, n_genes);
 
     // Compute variances (parallel)
-    Real* gene_vars = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto gene_vars_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+
+    Real* gene_vars = gene_vars_ptr.release();
     scl::algo::zero(gene_vars, G);
 
     if (IsCSR) {
         constexpr int64_t SCALE = 1000000LL;
 
-        std::atomic<int64_t>* atomic_vars = static_cast<std::atomic<int64_t>*>(
-            scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT));
+        auto atomic_vars_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(G, SCL_ALIGNMENT);
+        std::atomic<int64_t>* atomic_vars = atomic_vars_ptr.get();
 
         for (Size g = 0; g < G; ++g) {
             atomic_vars[g].store(0, std::memory_order_relaxed);
         }
 
         scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-            auto indices = X.row_indices_unsafe(static_cast<Index>(c));
-            auto values = X.row_values_unsafe(static_cast<Index>(c));
-            const Index len = X.row_length_unsafe(static_cast<Index>(c));
+            auto indices = X.row_indices_unsafe(static_cast<Index>(static_cast<Index>(c)));
+            auto values = X.row_values_unsafe(static_cast<Index>(static_cast<Index>(c)));
+            const Index len = X.row_length_unsafe(static_cast<Index>(static_cast<Index>(c)));
 
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
                 if (gene < n_genes) {
-                    Real d = static_cast<Real>(values[k]) - gene_means[gene];
-                    int64_t scaled = static_cast<int64_t>(d * d * SCALE);
-                    atomic_vars[gene].fetch_add(scaled, std::memory_order_relaxed);
+                    Real d = static_cast<Real>(values[k]) - gene_means[static_cast<Index>(gene)];
+                    auto scaled = static_cast<int64_t>(d * d * SCALE);
+                    atomic_vars[static_cast<Index>(gene)].fetch_add(scaled, std::memory_order_relaxed);
                 }
             }
         });
@@ -943,9 +969,13 @@ void zscore_score(
     scl::memory::aligned_free(gene_vars, SCL_ALIGNMENT);
 
     // Build gene set data for fast access
-    Index n_set = static_cast<Index>(gene_set.len);
-    Real* set_means = scl::memory::aligned_alloc<Real>(n_set, SCL_ALIGNMENT);
-    Real* set_inv_std = scl::memory::aligned_alloc<Real>(n_set, SCL_ALIGNMENT);
+    auto n_set = static_cast<Index>(gene_set.len);
+    auto set_means_ptr = scl::memory::aligned_alloc<Real>(n_set, SCL_ALIGNMENT);
+
+    Real* set_means = set_means_ptr.release();
+    auto set_inv_std_ptr = scl::memory::aligned_alloc<Real>(n_set, SCL_ALIGNMENT);
+
+    Real* set_inv_std = set_inv_std_ptr.release();
 
     for (Index i = 0; i < n_set; ++i) {
         Index g = gene_set[i];
@@ -963,7 +993,9 @@ void zscore_score(
     // Compute z-scores per cell (parallel)
     if (IsCSR) {
         // Build gene -> set index map
-        Index* gene_to_set = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+        auto gene_to_set_ptr = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+
+        Index* gene_to_set = gene_to_set_ptr.release();
 
         for (Size g = 0; g < G; ++g) {
             gene_to_set[g] = -1;
@@ -977,12 +1009,14 @@ void zscore_score(
         }
 
         // Precompute z-score for zeros
-        Real* z_zero = scl::memory::aligned_alloc<Real>(n_set, SCL_ALIGNMENT);
+        auto z_zero_ptr = scl::memory::aligned_alloc<Real>(n_set, SCL_ALIGNMENT);
+
+        Real* z_zero = z_zero_ptr.release();
         for (Index i = 0; i < n_set; ++i) {
             z_zero[i] = -set_means[i] * set_inv_std[i];
         }
 
-        const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+        const Size n_threads = scl::threading::Scheduler::get_num_threads();
         scl::threading::WorkspacePool<Real> zscore_pool;
         zscore_pool.init(n_threads, static_cast<Size>(n_set));
 
@@ -1010,7 +1044,7 @@ void zscore_score(
 
             // Average
             Real sum = detail::sum_simd(cell_zscores, static_cast<Size>(n_set));
-            scores[c] = sum * inv_n_set;
+            scores[static_cast<Index>(c)] = sum * inv_n_set;
         });
 
         scl::memory::aligned_free(z_zero, SCL_ALIGNMENT);
@@ -1019,8 +1053,8 @@ void zscore_score(
         // CSC: accumulate per gene
         constexpr int64_t SCALE = 1000000LL;
 
-        std::atomic<int64_t>* atomic_scores = static_cast<std::atomic<int64_t>*>(
-            scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT));
+        auto atomic_scores_ptr = scl::memory::aligned_alloc<std::atomic<int64_t>>(N, SCL_ALIGNMENT);
+        std::atomic<int64_t>* atomic_scores = atomic_scores_ptr.get();
 
         // Initialize with z-score sum for all zeros
         Real z_zero_sum = Real(0);
@@ -1033,11 +1067,11 @@ void zscore_score(
         }
 
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_set), [&](size_t i) {
-            Index gene = gene_set[i];
+            Index gene = gene_set[static_cast<Index>(i)];
             if (gene < 0 || gene >= n_genes) return;
 
-            Real mean_g = set_means[i];
-            Real inv_std = set_inv_std[i];
+            Real mean_g = set_means[static_cast<Index>(i)];
+            Real inv_std = set_inv_std[static_cast<Index>(i)];
             Real z_zero = -mean_g * inv_std;
 
             auto indices = X.col_indices_unsafe(gene);
@@ -1050,14 +1084,14 @@ void zscore_score(
                     Real val = static_cast<Real>(values[k]);
                     Real z = (val - mean_g) * inv_std;
                     Real delta = z - z_zero;  // Correction from zero assumption
-                    int64_t scaled_delta = static_cast<int64_t>(delta * SCALE);
-                    atomic_scores[c].fetch_add(scaled_delta, std::memory_order_relaxed);
+                    auto scaled_delta = static_cast<int64_t>(delta * SCALE);
+                    atomic_scores[static_cast<Index>(c)].fetch_add(scaled_delta, std::memory_order_relaxed);
                 }
             }
         });
 
         for (Size c = 0; c < N; ++c) {
-            scores[c] = static_cast<Real>(atomic_scores[c].load()) / SCALE * inv_n_set;
+            scores[static_cast<Index>(c)] = static_cast<Real>(atomic_scores[static_cast<Index>(c)].load()) / SCALE * inv_n_set;
         }
 
         scl::memory::aligned_free(atomic_scores, SCL_ALIGNMENT);
@@ -1119,14 +1153,19 @@ void differential_score(
 
     SCL_CHECK_DIM(scores.len >= N, "Scoring: scores buffer too small");
 
-    Real* pos_scores = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Real* neg_scores = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto pos_scores_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+
+    Real* pos_scores = pos_scores_ptr.release();
+    auto neg_scores_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* neg_scores = neg_scores_ptr.release();
 
     mean_score(X, positive_genes, Array<Real>(pos_scores, N), n_cells, n_genes);
     mean_score(X, negative_genes, Array<Real>(neg_scores, N), n_cells, n_genes);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-        scores[c] = pos_scores[c] - neg_scores[c];
+        scores[static_cast<Index>(c)] = pos_scores[static_cast<Index>(c)] - neg_scores[static_cast<Index>(c)];
     });
 
     scl::memory::aligned_free(neg_scores, SCL_ALIGNMENT);
@@ -1158,12 +1197,13 @@ void cell_cycle_score(
     module_score(X, g2m_genes, g2m_scores, n_cells, n_genes);
 
     scl::threading::parallel_for(Size(0), N, [&](size_t c) {
-        if (s_scores[c] > Real(0) && s_scores[c] > g2m_scores[c]) {
-            phase_labels[c] = static_cast<Index>(CellCyclePhase::S);
-        } else if (g2m_scores[c] > Real(0) && g2m_scores[c] > s_scores[c]) {
-            phase_labels[c] = static_cast<Index>(CellCyclePhase::G2M);
+        const auto idx = static_cast<Index>(c);
+        if (s_scores[idx] > Real(0) && s_scores[idx] > g2m_scores[idx]) {
+            phase_labels[idx] = static_cast<Index>(CellCyclePhase::S);
+        } else if (g2m_scores[idx] > Real(0) && g2m_scores[idx] > s_scores[idx]) {
+            phase_labels[idx] = static_cast<Index>(CellCyclePhase::G2M);
         } else {
-            phase_labels[c] = static_cast<Index>(CellCyclePhase::G1);
+            phase_labels[idx] = static_cast<Index>(CellCyclePhase::G1);
         }
     });
 }
@@ -1190,18 +1230,20 @@ void quantile_score(
         return;
     }
 
-    Index n_set = static_cast<Index>(gene_set.len);
+    auto n_set = static_cast<Index>(gene_set.len);
 
     // Build lookup
-    detail::GeneSetLookup lookup;
+    detail::GeneSetLookup lookup{};
     lookup.init(n_genes);
 
     for (Size i = 0; i < gene_set.len; ++i) {
-        lookup.set(gene_set[i]);
+        lookup.set(static_cast<Index>(gene_set[static_cast<Index>(i)]));
     }
 
     // Gene to set index
-    Index* gene_to_set = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+    auto gene_to_set_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
+
+    Index* gene_to_set = gene_to_set_ptr.release();
 
     for (Index g = 0; g < n_genes; ++g) {
         gene_to_set[g] = -1;
@@ -1214,7 +1256,7 @@ void quantile_score(
         }
     }
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     scl::threading::WorkspacePool<Real> values_pool;
     values_pool.init(n_threads, static_cast<Size>(n_set));
 
@@ -1249,9 +1291,9 @@ void quantile_score(
             values[j] = v;
         }
 
-        Index q_idx = static_cast<Index>(quantile * static_cast<Real>(n_set - 1));
+        auto q_idx = static_cast<Index>(quantile * static_cast<Real>(n_set - 1));
         q_idx = scl::algo::min2(q_idx, n_set - 1);
-        scores[c] = values[q_idx];
+        scores[static_cast<Index>(c)] = values[q_idx];
     });
 
     scl::memory::aligned_free(gene_to_set, SCL_ALIGNMENT);
@@ -1280,7 +1322,9 @@ void multi_signature_score(
 
     // Parallel over signatures
     scl::threading::parallel_for(Size(0), S, [&](size_t s) {
-        Real* scores = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+        auto scores_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+        Real* scores = scores_ptr.release();
 
         gene_set_score(
             X,
@@ -1293,7 +1337,7 @@ void multi_signature_score(
 
         // Copy to output (column s)
         for (Size c = 0; c < N; ++c) {
-            all_scores[c * S + s] = scores[c];
+            all_scores[static_cast<Index>(c * S + s)] = scores[static_cast<Index>(c)];
         }
 
         scl::memory::aligned_free(scores, SCL_ALIGNMENT);

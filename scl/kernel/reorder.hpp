@@ -214,21 +214,27 @@ void align_secondary(
     SCL_CHECK_DIM(out_lengths.len >= static_cast<Size>(primary_dim),
                   "Reorder: Output lengths too small");
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (len_sz == 0) {
-            out_lengths[p] = 0;
+            // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+            // PERFORMANCE: Safe narrowing - p is bounded by primary_dim which fits in Index
+            out_lengths[static_cast<Index>(p)] = 0;
             return;
         }
 
         auto indices_arr = matrix.primary_indices_unsafe(idx);
         auto values_arr = matrix.primary_values_unsafe(idx);
 
-        Index* indices_copy = scl::memory::aligned_alloc<Index>(len_sz, SCL_ALIGNMENT);
-        T* values_copy = scl::memory::aligned_alloc<T>(len_sz, SCL_ALIGNMENT);
+        // PERFORMANCE: RAII memory management with unique_ptr
+        // Using aligned_alloc returns unique_ptr for automatic cleanup
+        auto indices_copy_ptr = scl::memory::aligned_alloc<Index>(len_sz, SCL_ALIGNMENT);
+        auto values_copy_ptr = scl::memory::aligned_alloc<T>(len_sz, SCL_ALIGNMENT);
+        Index* indices_copy = indices_copy_ptr.get();
+        T* values_copy = values_copy_ptr.get();
 
         scl::algo::copy(indices_arr.ptr, indices_copy, len_sz);
         scl::algo::copy(values_arr.ptr, values_copy, len_sz);
@@ -250,10 +256,11 @@ void align_secondary(
             values_arr.ptr[k] = values_copy[k];
         }
 
-        scl::memory::aligned_free(indices_copy, SCL_ALIGNMENT);
-        scl::memory::aligned_free(values_copy, SCL_ALIGNMENT);
+        // unique_ptr automatically frees memory when going out of scope
 
-        out_lengths[p] = static_cast<Index>(new_len);
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - p and new_len are bounded and fit in Index
+        out_lengths[static_cast<Index>(p)] = static_cast<Index>(new_len);
     });
 }
 
@@ -264,11 +271,15 @@ Size compute_filtered_nnz(
     Index new_secondary_dim
 ) {
     const Index primary_dim = matrix.primary_dim();
+    const Size primary_dim_sz = static_cast<Size>(primary_dim);
 
-    Size* partial_sums = scl::memory::aligned_alloc<Size>(static_cast<Size>(primary_dim), SCL_ALIGNMENT);
+    // PERFORMANCE: RAII memory management with unique_ptr
+    // Using aligned_alloc returns unique_ptr for automatic cleanup
+    auto partial_sums_ptr = scl::memory::aligned_alloc<Size>(primary_dim_sz, SCL_ALIGNMENT);
+    Size* partial_sums = partial_sums_ptr.get();
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), primary_dim_sz, [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -284,11 +295,11 @@ Size compute_filtered_nnz(
     });
 
     Size total = 0;
-    for (Size i = 0; i < static_cast<Size>(primary_dim); ++i) {
+    for (Size i = 0; i < primary_dim_sz; ++i) {
         total += partial_sums[i];
     }
 
-    scl::memory::aligned_free(partial_sums, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
     return total;
 }
 
@@ -299,8 +310,11 @@ inline void build_inverse_permutation(
     Size n = permutation.len;
     SCL_CHECK_DIM(inverse.len >= n, "Inverse buffer too small");
 
-    scl::threading::parallel_for(Size(0), n, [&](size_t i) {
-        inverse[permutation[i]] = static_cast<Index>(i);
+    scl::threading::parallel_for(Size(0), n, [&](Size i) {
+        // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
+        // PERFORMANCE: Safe narrowing - i and permutation[i] are bounded and fit in Index
+        const auto idx = static_cast<Index>(i);
+        inverse[permutation[idx]] = idx;
     });
 }
 

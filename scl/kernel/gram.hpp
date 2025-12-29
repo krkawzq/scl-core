@@ -271,7 +271,7 @@ void gram(
     SCL_CHECK_DIM(output.len >= N_size * N_size, "Gram: Output size mismatch");
 
     scl::threading::parallel_for(Size(0), N_size, [&](size_t i) {
-        const Index idx_i = static_cast<Index>(i);
+        const auto idx_i = static_cast<Index>(i);
         const Index len_i = matrix.primary_length_unsafe(idx_i);
         const Size len_i_sz = static_cast<Size>(len_i);
 
@@ -283,7 +283,7 @@ void gram(
         row_ptr[i] = scl::vectorize::sum_squared(Array<const T>(val_i_arr.ptr, len_i_sz));
 
         for (Size j = i + 1; j < N_size; ++j) {
-            const Index idx_j = static_cast<Index>(j);
+            const auto idx_j = static_cast<Index>(j);
             const Index len_j = matrix.primary_length_unsafe(idx_j);
             const Size len_j_sz = static_cast<Size>(len_j);
 

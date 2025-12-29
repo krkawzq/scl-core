@@ -129,7 +129,7 @@ SCL_FORCE_INLINE bool check_convergence_real(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     // Multi-accumulator pattern for L1 norm of difference
     auto v_diff0 = s::Zero(d);
@@ -204,7 +204,7 @@ void compute_row_sums(
             namespace s = scl::simd;
             using SimdTag = s::SimdTagFor<Real>;
             const SimdTag d;
-            const size_t lanes = s::Lanes(d);
+            const Size lanes = s::Lanes(d);
 
             // Multi-accumulator for longer rows
             if (static_cast<Size>(len) >= config::SIMD_THRESHOLD) {
@@ -300,7 +300,7 @@ SCL_FORCE_INLINE void normalize_row(Real* SCL_RESTRICT row, Index n_classes) {
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     // Compute sum
     Real sum = Real(0);
@@ -375,8 +375,12 @@ void label_propagation(
     const Size n_classes_sz = static_cast<Size>(n_classes);
 
     // Allocate workspace
-    Index* labels_new = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
-    Index* order = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    auto labels_new_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* labels_new = labels_new_ptr.release();
+    auto order_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+    Index* order = order_ptr.release();
 
     // Initialize with SIMD copy
     std::memcpy(labels_new, labels.ptr, N * sizeof(Index));
@@ -386,7 +390,7 @@ void label_propagation(
     }
 
     // Per-thread workspace for class votes
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     scl::threading::WorkspacePool<Real> vote_pool;
@@ -395,9 +399,12 @@ void label_propagation(
     }
 
     // Single-thread workspace
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>> class_votes_st_ptr;
     Real* class_votes_st = nullptr;
     if (!use_parallel) {
-        class_votes_st = scl::memory::aligned_alloc<Real>(n_classes_sz, SCL_ALIGNMENT);
+        class_votes_st_ptr = scl::memory::aligned_alloc<Real>(static_cast<Size>(n_classes_sz), SCL_ALIGNMENT);
+        class_votes_st = class_votes_st_ptr.get();
     }
 
     detail::FastRNG rng(seed);
@@ -547,11 +554,15 @@ void label_spreading(
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     // Compute normalized graph
-    Real* row_sums = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto row_sums_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* row_sums = row_sums_ptr.release();
     detail::compute_row_sums(adjacency, row_sums);
 
     // Compute D^(-1/2) with SIMD
-    Real* d_inv_sqrt = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto d_inv_sqrt_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* d_inv_sqrt = d_inv_sqrt_ptr.release();
 
     if (use_parallel) {
         scl::threading::parallel_for(Size(0), N, [&](size_t i) {
@@ -566,8 +577,12 @@ void label_spreading(
     }
 
     // Store initial labels
-    Real* Y0 = scl::memory::aligned_alloc<Real>(total_probs, SCL_ALIGNMENT);
-    Real* Y_new = scl::memory::aligned_alloc<Real>(total_probs, SCL_ALIGNMENT);
+    auto Y0_ptr = scl::memory::aligned_alloc<Real>(total_probs, SCL_ALIGNMENT);
+
+    Real* Y0 = Y0_ptr.release();
+    auto Y_new_ptr = scl::memory::aligned_alloc<Real>(total_probs, SCL_ALIGNMENT);
+
+    Real* Y_new = Y_new_ptr.release();
     std::memcpy(Y0, label_probs.ptr, total_probs * sizeof(Real));
 
     // Iterate
@@ -582,7 +597,7 @@ void label_spreading(
                     namespace s = scl::simd;
                     using SimdTag = s::SimdTagFor<Real>;
                     const SimdTag d;
-                    const size_t lanes = s::Lanes(d);
+                    const Size lanes = s::Lanes(d);
                     auto v_scale = s::Set(d, one_minus_alpha);
                     Index c = 0;
 
@@ -614,7 +629,7 @@ void label_spreading(
                     namespace s = scl::simd;
                     using SimdTag = s::SimdTagFor<Real>;
                     const SimdTag d;
-                    const size_t lanes = s::Lanes(d);
+                    const Size lanes = s::Lanes(d);
                     auto v_sij = s::Set(d, s_ij);
                     Index c = 0;
 
@@ -703,7 +718,7 @@ void inductive_transfer(
     if (SCL_UNLIKELY(n_query == 0 || n_classes == 0)) return;
 
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::WorkspacePool<Real> score_pool;
     if (use_parallel) {
@@ -765,7 +780,9 @@ void inductive_transfer(
             process_query(static_cast<Index>(q), class_scores);
         });
     } else {
-        Real* class_scores = scl::memory::aligned_alloc<Real>(n_classes_sz, SCL_ALIGNMENT);
+        auto class_scores_ptr = scl::memory::aligned_alloc<Real>(n_classes_sz, SCL_ALIGNMENT);
+
+        Real* class_scores = class_scores_ptr.release();
         for (Index q = 0; q < n_query; ++q) {
             process_query(q, class_scores);
         }
@@ -796,10 +813,15 @@ void confidence_propagation(
     if (SCL_UNLIKELY(n == 0 || n_classes == 0)) return;
 
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
-    Index* labels_new = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
-    Real* conf_new = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto labels_new_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+
+
+    Index* labels_new = labels_new_ptr.release();
+    auto conf_new_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* conf_new = conf_new_ptr.release();
 
     std::memcpy(labels_new, labels.ptr, N * sizeof(Index));
     std::memcpy(conf_new, confidence.ptr, N * sizeof(Real));
@@ -861,7 +883,9 @@ void confidence_propagation(
                 process_node(static_cast<Index>(i), class_votes);
             });
         } else {
-            Real* class_votes = scl::memory::aligned_alloc<Real>(n_classes_sz, SCL_ALIGNMENT);
+            auto class_votes_ptr = scl::memory::aligned_alloc<Real>(n_classes_sz, SCL_ALIGNMENT);
+
+            Real* class_votes = class_votes_ptr.release();
             for (Index i = 0; i < n; ++i) {
                 process_node(i, class_votes);
             }
@@ -900,8 +924,13 @@ void harmonic_function(
 
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
-    Real* row_sums = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
-    Real* values_new = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto row_sums_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+
+    Real* row_sums = row_sums_ptr.release();
+    auto values_new_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+
+    Real* values_new = values_new_ptr.release();
 
     detail::compute_row_sums(adjacency, row_sums);
     std::memcpy(values_new, values.ptr, N * sizeof(Real));
@@ -1065,14 +1094,14 @@ inline void init_soft_labels(
 
     auto process_node = [&](Size i) {
         Real* pi = soft_labels.ptr + i * n_classes_sz;
-        Index label = hard_labels[i];
+        Index label = hard_labels[static_cast<Index>(i)];
 
         if (label >= 0 && label < n_classes) {
             // Labeled node - vectorized fill
             namespace s = scl::simd;
             using SimdTag = s::SimdTagFor<Real>;
             const SimdTag d;
-            const size_t lanes = s::Lanes(d);
+            const Size lanes = s::Lanes(d);
             auto v_non_label = s::Set(d, non_label_prob);
             Index c = 0;
 
@@ -1090,7 +1119,7 @@ inline void init_soft_labels(
             namespace s = scl::simd;
             using SimdTag = s::SimdTagFor<Real>;
             const SimdTag d;
-            const size_t lanes = s::Lanes(d);
+            const Size lanes = s::Lanes(d);
             auto v_uniform = s::Set(d, uniform_prob);
             Index c = 0;
 

@@ -35,8 +35,9 @@ namespace detail {
 template <typename T>
 SCL_FORCE_INLINE void scale_simd(T* SCL_RESTRICT vals, Size len, T scale) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
+    const Size lanes = s::Lanes(d);
     const auto v_scale = s::Set(d, scale);
 
     Size k = 0;
@@ -133,7 +134,7 @@ void compute_row_sums(
     SCL_CHECK_DIM(output.len >= static_cast<Size>(primary_dim), "Output size mismatch");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -157,10 +158,10 @@ void scale_primary(
     SCL_CHECK_DIM(scales.len >= static_cast<Size>(primary_dim), "Scales dim mismatch");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        Real scale = scales[p];
+        Real scale = scales[static_cast<Index>(p)];
         if (scale == Real(1)) return;
 
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return;
 
@@ -180,19 +181,19 @@ void primary_sums_masked(
     SCL_CHECK_DIM(output.len >= static_cast<Size>(primary_dim), "Output size mismatch");
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) {
-            output[p] = Real(0);
+            output[static_cast<Index>(p)] = Real(0);
             return;
         }
 
         auto values = matrix.primary_values_unsafe(idx);
         auto indices = matrix.primary_indices_unsafe(idx);
 
-        output[p] = detail::sum_masked_simd(
+        output[static_cast<Index>(p)] = detail::sum_masked_simd(
             values.ptr,
             indices.ptr,
             len_sz,
@@ -213,17 +214,17 @@ void detect_highly_expressed(
     scl::memory::zero(out_mask);
 
     // Cast to atomic for thread-safe writes
-    std::atomic<Byte>* atomic_mask = reinterpret_cast<std::atomic<Byte>*>(out_mask.ptr);
+    auto* atomic_mask = reinterpret_cast<std::atomic<Byte>*>(out_mask.ptr);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        Real total = row_sums[p];
+        Real total = row_sums[static_cast<Index>(p)];
         if (SCL_UNLIKELY(total <= Real(0))) return;
 
         Real threshold = total * max_fraction;
 
-        const Index idx = static_cast<Index>(p);
-        const Index len = matrix.primary_length_unsafe(idx);
-        const Size len_sz = static_cast<Size>(len);
+        auto idx = static_cast<Index>(p);
+        auto len = matrix.primary_length_unsafe(idx);
+        auto len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) return;
 

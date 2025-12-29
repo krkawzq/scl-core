@@ -82,7 +82,7 @@ SCL_FORCE_INLINE Real gini_coefficient(const Real* SCL_RESTRICT values, Size n) 
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     // Compute sum and weighted sum
     auto v_sum = s::Zero(d);
@@ -96,12 +96,12 @@ SCL_FORCE_INLINE Real gini_coefficient(const Real* SCL_RESTRICT values, Size n) 
             v_sum = s::Add(v_sum, v);
 
             // Weighted sum: (i+1) * values[i]
-            // Need to create weight vector for this batch
-            Real weights[16];  // Assume max lanes <= 16
-            for (size_t j = 0; j < lanes; ++j) {
-                weights[j] = static_cast<Real>(i + j + 1);
+            // Use static array of Real, initialized below
+            std::array<Real, 16> weights = {};
+            for (Size j = 0; j < lanes; ++j) {
+                weights[static_cast<Size>(j)] = static_cast<Real>(i + j + 1);
             }
-            auto v_weights = s::Load(d, weights);
+            auto v_weights = s::Load(d, weights.data());
             v_weighted = s::MulAdd(v_weights, v, v_weighted);
         }
     }
@@ -146,7 +146,7 @@ SCL_FORCE_INLINE void compute_log2_fc_batch(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_pseudo = s::Set(d, pseudo_count);
     auto v_log2_e = s::Set(d, Real(1.4426950408889634));  // 1/ln(2)
@@ -195,7 +195,9 @@ void group_mean_expression(
     std::memset(mean_expr.ptr, 0, total * sizeof(Real));
 
     // Count cells per group
-    Index* group_counts = scl::memory::aligned_alloc<Index>(n_groups, SCL_ALIGNMENT);
+    auto group_counts_ptr = scl::memory::aligned_alloc<Index>(n_groups, SCL_ALIGNMENT);
+
+    Index* group_counts = group_counts_ptr.release();
     std::memset(group_counts, 0, static_cast<Size>(n_groups) * sizeof(Index));
 
     for (Index c = 0; c < n_cells; ++c) {
@@ -206,7 +208,9 @@ void group_mean_expression(
     }
 
     // Precompute inverse counts for division
-    Real* inv_counts = scl::memory::aligned_alloc<Real>(n_groups, SCL_ALIGNMENT);
+    auto inv_counts_ptr = scl::memory::aligned_alloc<Real>(n_groups, SCL_ALIGNMENT);
+
+    Real* inv_counts = inv_counts_ptr.release();
     for (Index g = 0; g < n_groups; ++g) {
         inv_counts[g] = (group_counts[g] > 0) ?
             Real(1) / static_cast<Real>(group_counts[g]) : Real(0);
@@ -228,19 +232,19 @@ void group_mean_expression(
                 Index gene0 = indices[k], gene1 = indices[k + 1];
                 Index gene2 = indices[k + 2], gene3 = indices[k + 3];
                 if (SCL_LIKELY(gene0 < n_genes))
-                    mean_expr[static_cast<Size>(gene0) * n_groups + g] += static_cast<Real>(values[k]);
+                    mean_expr[static_cast<Index>(static_cast<Size>(gene0) * n_groups + g)] += static_cast<Real>(values[k]);
                 if (SCL_LIKELY(gene1 < n_genes))
-                    mean_expr[static_cast<Size>(gene1) * n_groups + g] += static_cast<Real>(values[k + 1]);
+                    mean_expr[static_cast<Index>(static_cast<Size>(gene1) * n_groups + g)] += static_cast<Real>(values[k + 1]);
                 if (SCL_LIKELY(gene2 < n_genes))
-                    mean_expr[static_cast<Size>(gene2) * n_groups + g] += static_cast<Real>(values[k + 2]);
+                    mean_expr[static_cast<Index>(static_cast<Size>(gene2) * n_groups + g)] += static_cast<Real>(values[k + 2]);
                 if (SCL_LIKELY(gene3 < n_genes))
-                    mean_expr[static_cast<Size>(gene3) * n_groups + g] += static_cast<Real>(values[k + 3]);
+                    mean_expr[static_cast<Index>(static_cast<Size>(gene3) * n_groups + g)] += static_cast<Real>(values[k + 3]);
             }
 
             for (; k < len; ++k) {
                 Index gene = indices[k];
                 if (SCL_LIKELY(gene < n_genes)) {
-                    mean_expr[static_cast<Size>(gene) * n_groups + g] += static_cast<Real>(values[k]);
+                    mean_expr[static_cast<Index>(static_cast<Size>(gene) * n_groups + g)] += static_cast<Real>(values[k]);
                 }
             }
         }
@@ -322,7 +326,9 @@ void percent_expressed(
     std::memset(pct_expr.ptr, 0, total * sizeof(Real));
 
     // Count cells per group
-    Index* group_counts = scl::memory::aligned_alloc<Index>(n_groups, SCL_ALIGNMENT);
+    auto group_counts_ptr = scl::memory::aligned_alloc<Index>(n_groups, SCL_ALIGNMENT);
+
+    Index* group_counts = group_counts_ptr.release();
     std::memset(group_counts, 0, static_cast<Size>(n_groups) * sizeof(Index));
 
     for (Index c = 0; c < n_cells; ++c) {
@@ -333,7 +339,9 @@ void percent_expressed(
     }
 
     // Precompute inverse counts
-    Real* inv_counts = scl::memory::aligned_alloc<Real>(n_groups, SCL_ALIGNMENT);
+    auto inv_counts_ptr = scl::memory::aligned_alloc<Real>(n_groups, SCL_ALIGNMENT);
+
+    Real* inv_counts = inv_counts_ptr.release();
     for (Index g = 0; g < n_groups; ++g) {
         inv_counts[g] = (group_counts[g] > 0) ?
             Real(1) / static_cast<Real>(group_counts[g]) : Real(0);
@@ -352,7 +360,7 @@ void percent_expressed(
             for (Index k = 0; k < len; ++k) {
                 Index gene = indices[k];
                 if (SCL_LIKELY(gene < n_genes && static_cast<Real>(values[k]) > threshold)) {
-                    pct_expr[static_cast<Size>(gene) * n_groups + g] += Real(1);
+                    pct_expr[static_cast<Index>(static_cast<Size>(gene) * n_groups + g)] += Real(1);
                 }
             }
         }
@@ -432,12 +440,18 @@ void log_fold_change(
                   "Markers: log_fc buffer too small");
 
     const Size mean_size = static_cast<Size>(n_genes) * static_cast<Size>(n_groups);
-    Real* mean_expr = scl::memory::aligned_alloc<Real>(mean_size, SCL_ALIGNMENT);
+    auto mean_expr_ptr = scl::memory::aligned_alloc<Real>(mean_size, SCL_ALIGNMENT);
+
+    Real* mean_expr = mean_expr_ptr.release();
     group_mean_expression(X, group_labels, n_groups, Array<Real>(mean_expr, mean_size), n_genes);
 
     // Extract target means and compute other means
-    Real* target_means = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-    Real* other_means = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+    auto target_means_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* target_means = target_means_ptr.release();
+    auto other_means_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
+
+    Real* other_means = other_means_ptr.release();
 
     Real inv_other_count = (n_groups > 1) ? Real(1) / static_cast<Real>(n_groups - 1) : Real(0);
 
@@ -482,7 +496,6 @@ template <typename T, bool IsCSR>
 void one_vs_rest_stats(
     const Sparse<T, IsCSR>& X,
     Array<const Index> group_labels,
-    Index n_groups,
     Index target_group,
     Array<Real> log_fc,
     Array<Real> effect_size,
@@ -499,12 +512,24 @@ void one_vs_rest_stats(
     SCL_CHECK_DIM(pct_out.len >= n_genes_sz, "Markers: pct_out buffer too small");
 
     // Allocate workspace
-    Real* sum_in = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
-    Real* sum_out = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
-    Real* sum_sq_in = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
-    Real* sum_sq_out = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
-    Index* count_in = scl::memory::aligned_alloc<Index>(n_genes_sz, SCL_ALIGNMENT);
-    Index* count_out = scl::memory::aligned_alloc<Index>(n_genes_sz, SCL_ALIGNMENT);
+    auto sum_in_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+
+    Real* sum_in = sum_in_ptr.release();
+    auto sum_out_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+
+    Real* sum_out = sum_out_ptr.release();
+    auto sum_sq_in_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+
+    Real* sum_sq_in = sum_sq_in_ptr.release();
+    auto sum_sq_out_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+
+    Real* sum_sq_out = sum_sq_out_ptr.release();
+    auto count_in_ptr = scl::memory::aligned_alloc<Index>(n_genes_sz, SCL_ALIGNMENT);
+
+    Index* count_in = count_in_ptr.release();
+    auto count_out_ptr = scl::memory::aligned_alloc<Index>(n_genes_sz, SCL_ALIGNMENT);
+
+    Index* count_out = count_out_ptr.release();
 
     std::memset(sum_in, 0, n_genes_sz * sizeof(Real));
     std::memset(sum_out, 0, n_genes_sz * sizeof(Real));
@@ -686,7 +711,7 @@ inline void tau_specificity(
         namespace s = scl::simd;
         using SimdTag = s::SimdTagFor<Real>;
         const SimdTag d;
-        const size_t lanes = s::Lanes(d);
+        const Size lanes = s::Lanes(d);
 
         Real max_expr = means[0];
         Index g = 1;
@@ -765,7 +790,7 @@ inline void gini_specificity(
     }
 
     const bool use_parallel = (static_cast<Size>(n_genes) >= config::PARALLEL_THRESHOLD);
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Per-thread workspace for sorting
     scl::threading::WorkspacePool<Real> sort_pool;
@@ -789,7 +814,9 @@ inline void gini_specificity(
             compute_gini(static_cast<Index>(gene), sorted);
         });
     } else {
-        Real* sorted = scl::memory::aligned_alloc<Real>(n_groups, SCL_ALIGNMENT);
+        auto sorted_ptr = scl::memory::aligned_alloc<Real>(n_groups, SCL_ALIGNMENT);
+
+        Real* sorted = sorted_ptr.release();
         for (Index gene = 0; gene < n_genes; ++gene) {
             compute_gini(gene, sorted);
         }
@@ -848,7 +875,7 @@ void rank_genes_groups(
     SCL_CHECK_DIM(all_ranked_scores.len >= total, "Markers: ranked_scores buffer too small");
 
     const bool use_parallel = (static_cast<Size>(n_groups) >= 4);  // Parallelize over groups
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Per-thread workspace
     struct GroupWorkspace {
@@ -863,7 +890,7 @@ void rank_genes_groups(
     size_t ws_count = use_parallel ? n_threads : 1;
     workspaces = new GroupWorkspace[ws_count];
 
-    for (size_t t = 0; t < ws_count; ++t) {
+    for (Size t = 0; t < ws_count; ++t) {
         workspaces[t].log_fc = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
         workspaces[t].effect_size = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
         workspaces[t].pct_in = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
@@ -928,7 +955,7 @@ void rank_genes_groups(
     }
 
     // Cleanup
-    for (size_t t = 0; t < ws_count; ++t) {
+    for (Size t = 0; t < ws_count; ++t) {
         scl::memory::aligned_free(workspaces[t].scores, SCL_ALIGNMENT);
         scl::memory::aligned_free(workspaces[t].pct_out, SCL_ALIGNMENT);
         scl::memory::aligned_free(workspaces[t].pct_in, SCL_ALIGNMENT);
@@ -958,7 +985,7 @@ inline Index filter_markers(
     Index count = 0;
 
     for (Size i = 0; i < n; ++i) {
-        Index gene = candidate_genes[i];
+        Index gene = candidate_genes[static_cast<Index>(i)];
         if (SCL_LIKELY(log_fc[gene] >= log2_min_fc && pct_expr[gene] >= min_pct)) {
             filtered_genes[count++] = gene;
         }
@@ -978,7 +1005,7 @@ inline Index top_n_markers(
     Array<Index> top_indices,
     Array<Real> top_scores
 ) {
-    Index n = static_cast<Index>(ranked_indices.len);
+    auto n = static_cast<Index>(ranked_indices.len);
     Index actual_n = scl::algo::min2(n_top, n);
 
     SCL_CHECK_DIM(top_indices.len >= static_cast<Size>(actual_n),
@@ -1009,7 +1036,7 @@ inline void marker_overlap_jaccard(
     // Initialize with identity
     std::memset(overlap_matrix.ptr, 0, total * sizeof(Real));
     for (Index i = 0; i < n_sets; ++i) {
-        overlap_matrix[static_cast<Size>(i) * n_sets + i] = Real(1);
+        overlap_matrix[static_cast<Index>(static_cast<Size>(i) * n_sets + i)] = Real(1);
     }
 
     // Parallelize over pairs
@@ -1039,8 +1066,8 @@ inline void marker_overlap_jaccard(
         Real jaccard = (union_size > 0) ?
             static_cast<Real>(intersection) / static_cast<Real>(union_size) : Real(0);
 
-        overlap_matrix[static_cast<Size>(i) * n_sets + j] = jaccard;
-        overlap_matrix[static_cast<Size>(j) * n_sets + i] = jaccard;
+        overlap_matrix[static_cast<Index>(static_cast<Size>(i) * n_sets + j)] = jaccard;
+        overlap_matrix[static_cast<Index>(static_cast<Size>(j) * n_sets + i)] = jaccard;
     };
 
     if (use_parallel) {
@@ -1120,7 +1147,7 @@ inline void volcano_score(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     auto v_fc_weight = s::Set(d, fc_weight);
     auto v_es_weight = s::Set(d, es_weight);
@@ -1134,7 +1161,7 @@ inline void volcano_score(
     }
 
     for (; i < n; ++i) {
-        volcano_scores[i] = fc_weight * log_fc[i] + es_weight * effect_size[i];
+        volcano_scores[static_cast<Index>(i)] = fc_weight * log_fc[static_cast<Index>(i)] + es_weight * effect_size[static_cast<Index>(i)];
     }
 }
 
@@ -1163,7 +1190,7 @@ inline void expression_entropy(
         namespace s = scl::simd;
         using SimdTag = s::SimdTagFor<Real>;
         const SimdTag d;
-        const size_t lanes = s::Lanes(d);
+        const Size lanes = s::Lanes(d);
 
         auto v_sum = s::Zero(d);
         Index g = 0;

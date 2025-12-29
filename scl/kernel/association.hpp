@@ -15,6 +15,8 @@
 #include <cmath>
 #include <atomic>
 #include <algorithm>
+#include <concepts>
+#include <memory>
 
 // =============================================================================
 // FILE: scl/kernel/association.hpp
@@ -29,12 +31,23 @@
 
 namespace scl::kernel::association {
 
+// =============================================================================
+// C++20 Concepts
+// =============================================================================
+
+template <typename T>
+concept Arithmetic = std::is_arithmetic_v<T>;
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
 namespace config {
-    constexpr Real EPSILON = Real(1e-10);
-    constexpr Real MIN_CORRELATION = Real(0.1);
-    constexpr Size MIN_CELLS_FOR_CORRELATION = 10;
-    constexpr Size MAX_LINKS_PER_GENE = 1000;
-    constexpr Size PARALLEL_THRESHOLD = 32;
+    inline constexpr Real EPSILON = Real(1e-10);
+    inline constexpr Real MIN_CORRELATION = Real(0.1);
+    inline constexpr Size MIN_CELLS_FOR_CORRELATION = 10;
+    inline constexpr Size MAX_LINKS_PER_GENE = 1000;
+    inline constexpr Size PARALLEL_THRESHOLD = 32;
 }
 
 namespace detail {
@@ -60,7 +73,7 @@ SCL_FORCE_INLINE Index binary_search_feature(
 }
 
 // Pearson correlation between two sparse vectors
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 SCL_FORCE_INLINE Real pearson_correlation(
     const Sparse<T, IsCSR1>& data1,
     Index feature1,
@@ -79,13 +92,13 @@ SCL_FORCE_INLINE Real pearson_correlation(
     Size n_valid = 0;
 
     // This is expensive - we need to gather values per cell
-    Real* vals1 = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* vals2 = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto vals1_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto vals2_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* vals1 = vals1_ptr.release();
+    Real* vals2 = vals2_ptr.release();
 
-    for (Size c = 0; c < n_cells; ++c) {
-        vals1[c] = Real(0.0);
-        vals2[c] = Real(0.0);
-    }
+    scl::algo::zero(vals1, n_cells);
+    scl::algo::zero(vals2, n_cells);
 
     // Gather values for feature1 from data1
     for (Size c = 0; c < n_cells; ++c) {
@@ -95,8 +108,8 @@ SCL_FORCE_INLINE Real pearson_correlation(
             Index row_len = data1.row_length_unsafe(static_cast<Index>(c));
             
             for (Index j = 0; j < row_len; ++j) {
-                if (row_idxs[j] == feature1) {
-                    vals1[c] = static_cast<Real>(row_vals[j]);
+                if (row_idxs.ptr[j] == feature1) {
+                    vals1[c] = static_cast<Real>(row_vals.ptr[j]);
                     break;
                 }
             }
@@ -106,8 +119,8 @@ SCL_FORCE_INLINE Real pearson_correlation(
             Index col_len = data1.col_length_unsafe(feature1);
             
             for (Index j = 0; j < col_len; ++j) {
-                if (col_idxs[j] == static_cast<Index>(c)) {
-                    vals1[c] = static_cast<Real>(col_vals[j]);
+                if (col_idxs.ptr[j] == static_cast<Index>(c)) {
+                    vals1[c] = static_cast<Real>(col_vals.ptr[j]);
                     break;
                 }
             }
@@ -174,7 +187,7 @@ SCL_FORCE_INLINE Real pearson_correlation(
 }
 
 // Spearman correlation via rank transformation
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 SCL_FORCE_INLINE Real spearman_correlation(
     const Sparse<T, IsCSR1>& data1,
     Index feature1,
@@ -187,12 +200,18 @@ SCL_FORCE_INLINE Real spearman_correlation(
     }
 
     // Gather values
-    Real* vals1 = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* vals2 = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* ranks1 = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Real* ranks2 = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-    Index* indices = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
-    Real* sorted_vals = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto vals1_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto vals2_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto ranks1_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto ranks2_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    auto indices_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
+    auto sorted_vals_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
+    Real* vals1 = vals1_ptr.release();
+    Real* vals2 = vals2_ptr.release();
+    Real* ranks1 = ranks1_ptr.release();
+    Real* ranks2 = ranks2_ptr.release();
+    Index* indices = indices_ptr.release();
+    Real* sorted_vals = sorted_vals_ptr.release();
 
     for (Size c = 0; c < n_cells; ++c) {
         vals1[c] = Real(0.0);
@@ -208,8 +227,8 @@ SCL_FORCE_INLINE Real spearman_correlation(
             Index row_len = data1.row_length_unsafe(static_cast<Index>(c));
             
             for (Index j = 0; j < row_len; ++j) {
-                if (row_idxs[j] == feature1) {
-                    vals1[c] = static_cast<Real>(row_vals[j]);
+                if (row_idxs.ptr[j] == feature1) {
+                    vals1[c] = static_cast<Real>(row_vals.ptr[j]);
                     break;
                 }
             }
@@ -219,8 +238,8 @@ SCL_FORCE_INLINE Real spearman_correlation(
             Index col_len = data1.col_length_unsafe(feature1);
             
             for (Index j = 0; j < col_len; ++j) {
-                if (col_idxs[j] == static_cast<Index>(c)) {
-                    vals1[c] = static_cast<Real>(col_vals[j]);
+                if (col_idxs.ptr[j] == static_cast<Index>(c)) {
+                    vals1[c] = static_cast<Real>(col_vals.ptr[j]);
                     break;
                 }
             }
@@ -286,12 +305,12 @@ SCL_FORCE_INLINE Real spearman_correlation(
     Real n = static_cast<Real>(n_cells);
     Real rho = Real(1.0) - (Real(6.0) * sum_d2) / (n * (n * n - Real(1.0)));
 
-    scl::memory::aligned_free(vals1);
-    scl::memory::aligned_free(vals2);
-    scl::memory::aligned_free(ranks1);
-    scl::memory::aligned_free(ranks2);
-    scl::memory::aligned_free(indices);
-    scl::memory::aligned_free(sorted_vals);
+    scl::memory::aligned_free(vals1, SCL_ALIGNMENT);
+    scl::memory::aligned_free(vals2, SCL_ALIGNMENT);
+    scl::memory::aligned_free(ranks1, SCL_ALIGNMENT);
+    scl::memory::aligned_free(ranks2, SCL_ALIGNMENT);
+    scl::memory::aligned_free(indices, SCL_ALIGNMENT);
+    scl::memory::aligned_free(sorted_vals, SCL_ALIGNMENT);
 
     return rho;
 }
@@ -302,7 +321,7 @@ SCL_FORCE_INLINE Real spearman_correlation(
 // Gene-Peak Correlation
 // =============================================================================
 
-template <typename T, bool IsCSR_RNA, bool IsCSR_ATAC>
+template <Arithmetic T, bool IsCSR_RNA, bool IsCSR_ATAC>
 void gene_peak_correlation(
     const Sparse<T, IsCSR_RNA>& rna_expression,
     const Sparse<T, IsCSR_ATAC>& atac_accessibility,
@@ -349,7 +368,7 @@ void gene_peak_correlation(
 // Cis-Regulatory Associations
 // =============================================================================
 
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void cis_regulatory(
     const Sparse<T, IsCSR1>& rna_expression,
     const Sparse<T, IsCSR2>& atac_accessibility,
@@ -369,7 +388,7 @@ void cis_regulatory(
     }
 
     // Parallel over pairs
-    scl::threading::parallel_for(Size(0), n_pairs, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_pairs, [&](Size i) {
         Index gene = gene_indices[i];
         Index peak = peak_indices[i];
 
@@ -403,7 +422,7 @@ void cis_regulatory(
 // Enhancer-Gene Links
 // =============================================================================
 
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void enhancer_gene_link(
     const Sparse<T, IsCSR1>& rna,
     const Sparse<T, IsCSR2>& atac,
@@ -451,7 +470,7 @@ void enhancer_gene_link(
 // Multi-modal Neighbors
 // =============================================================================
 
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void multimodal_neighbors(
     const Sparse<T, IsCSR1>& modality1,
     const Sparse<T, IsCSR2>& modality2,
@@ -482,7 +501,7 @@ void multimodal_neighbors(
     indices_pool.init(scl::threading::Scheduler::get_num_threads(), n_cells);
 
     // Parallel over cells
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t i, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size i, Size thread_rank) {
         Real* all_dists = dists_pool.get(thread_rank);
         Index* all_indices = indices_pool.get(thread_rank);
 
@@ -498,7 +517,7 @@ void multimodal_neighbors(
             Real dist1 = Real(0.0);
             Array<T> row1_i_vals, row1_j_vals;
             Array<Index> row1_i_idxs, row1_j_idxs;
-            Index row1_i_len, row1_j_len;
+            Index row1_i_len = 0, row1_j_len = 0;
             
             if constexpr (IsCSR1) {
                 row1_i_vals = modality1.row_values_unsafe(static_cast<Index>(i));
@@ -518,29 +537,29 @@ void multimodal_neighbors(
 
             Index i1 = 0, j1 = 0;
             while (i1 < row1_i_len && j1 < row1_j_len) {
-                Index col_i = row1_i_idxs[i1];
-                Index col_j = row1_j_idxs[j1];
+                Index col_i = row1_i_idxs.ptr[i1];
+                Index col_j = row1_j_idxs.ptr[j1];
                 if (col_i == col_j) {
-                    Real diff = static_cast<Real>(row1_i_vals[i1]) -
-                               static_cast<Real>(row1_j_vals[j1]);
+                    Real diff = static_cast<Real>(row1_i_vals.ptr[i1]) -
+                               static_cast<Real>(row1_j_vals.ptr[j1]);
                     dist1 += diff * diff;
                     ++i1; ++j1;
                 } else if (col_i < col_j) {
-                    Real val = static_cast<Real>(row1_i_vals[i1]);
+                    Real val = static_cast<Real>(row1_i_vals.ptr[i1]);
                     dist1 += val * val;
                     ++i1;
                 } else {
-                    Real val = static_cast<Real>(row1_j_vals[j1]);
+                    Real val = static_cast<Real>(row1_j_vals.ptr[j1]);
                     dist1 += val * val;
                     ++j1;
                 }
             }
             while (i1 < row1_i_len) {
-                Real val = static_cast<Real>(row1_i_vals[i1++]);
+                Real val = static_cast<Real>(row1_i_vals.ptr[i1++]);
                 dist1 += val * val;
             }
             while (j1 < row1_j_len) {
-                Real val = static_cast<Real>(row1_j_vals[j1++]);
+                Real val = static_cast<Real>(row1_j_vals.ptr[j1++]);
                 dist1 += val * val;
             }
 
@@ -548,7 +567,7 @@ void multimodal_neighbors(
             Real dist2 = Real(0.0);
             Array<T> row2_i_vals, row2_j_vals;
             Array<Index> row2_i_idxs, row2_j_idxs;
-            Index row2_i_len, row2_j_len;
+            Index row2_i_len = 0, row2_j_len = 0;
             
             if constexpr (IsCSR2) {
                 row2_i_vals = modality2.row_values_unsafe(static_cast<Index>(i));
@@ -619,7 +638,7 @@ void multimodal_neighbors(
 // Feature Coupling
 // =============================================================================
 
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void feature_coupling(
     const Sparse<T, IsCSR1>& modality1,
     const Sparse<T, IsCSR2>& modality2,
@@ -663,7 +682,7 @@ void feature_coupling(
 // =============================================================================
 
 // Compute correlation for specific cell subset
-template <typename T, bool IsCSR1, bool IsCSR2>
+template <Arithmetic T, bool IsCSR1, bool IsCSR2>
 void correlation_in_subset(
     const Sparse<T, IsCSR1>& data1,
     Index feature1,
@@ -679,8 +698,10 @@ void correlation_in_subset(
         return;
     }
 
-    Real* vals1 = scl::memory::aligned_alloc<Real>(n_subset, SCL_ALIGNMENT);
-    Real* vals2 = scl::memory::aligned_alloc<Real>(n_subset, SCL_ALIGNMENT);
+    auto vals1_ptr = scl::memory::aligned_alloc<Real>(n_subset, SCL_ALIGNMENT);
+    auto vals2_ptr = scl::memory::aligned_alloc<Real>(n_subset, SCL_ALIGNMENT);
+    Real* vals1 = vals1_ptr.release();
+    Real* vals2 = vals2_ptr.release();
 
     for (Size s = 0; s < n_subset; ++s) {
         Index c = cell_indices.ptr[s];
@@ -693,8 +714,8 @@ void correlation_in_subset(
             Index row1_len = data1.row_length_unsafe(c);
             
             for (Index j = 0; j < row1_len; ++j) {
-                if (row1_idxs[j] == feature1) {
-                    vals1[s] = static_cast<Real>(row1_vals[j]);
+                if (row1_idxs.ptr[j] == feature1) {
+                    vals1[s] = static_cast<Real>(row1_vals.ptr[j]);
                     break;
                 }
             }
@@ -704,8 +725,8 @@ void correlation_in_subset(
             Index col1_len = data1.col_length_unsafe(feature1);
             
             for (Index j = 0; j < col1_len; ++j) {
-                if (col1_idxs[j] == c) {
-                    vals1[s] = static_cast<Real>(col1_vals[j]);
+                if (col1_idxs.ptr[j] == c) {
+                    vals1[s] = static_cast<Real>(col1_vals.ptr[j]);
                     break;
                 }
             }
@@ -717,8 +738,8 @@ void correlation_in_subset(
             Index row2_len = data2.row_length_unsafe(c);
             
             for (Index j = 0; j < row2_len; ++j) {
-                if (row2_idxs[j] == feature2) {
-                    vals2[s] = static_cast<Real>(row2_vals[j]);
+                if (row2_idxs.ptr[j] == feature2) {
+                    vals2[s] = static_cast<Real>(row2_vals.ptr[j]);
                     break;
                 }
             }
@@ -728,8 +749,8 @@ void correlation_in_subset(
             Index col2_len = data2.col_length_unsafe(feature2);
             
             for (Index j = 0; j < col2_len; ++j) {
-                if (col2_idxs[j] == c) {
-                    vals2[s] = static_cast<Real>(col2_vals[j]);
+                if (col2_idxs.ptr[j] == c) {
+                    vals2[s] = static_cast<Real>(col2_vals.ptr[j]);
                     break;
                 }
             }
@@ -762,12 +783,12 @@ void correlation_in_subset(
         correlation = cov_xy / (std::sqrt(var_x) * std::sqrt(var_y));
     }
 
-    scl::memory::aligned_free(vals1);
-    scl::memory::aligned_free(vals2);
+    scl::memory::aligned_free(vals1, SCL_ALIGNMENT);
+    scl::memory::aligned_free(vals2, SCL_ALIGNMENT);
 }
 
 // Peak-to-gene score (activity score)
-template <typename T, bool IsCSR>
+template <Arithmetic T, bool IsCSR>
 void peak_to_gene_activity(
     const Sparse<T, IsCSR>& atac,
     const Index* peak_to_gene_map,  // For each peak, which gene it maps to (-1 for none)
@@ -778,7 +799,7 @@ void peak_to_gene_activity(
     const Size n_cells = static_cast<Size>(atac.rows());
 
     // Initialize and aggregate in parallel over cells
-    scl::threading::parallel_for(Size(0), n_cells, [&](size_t c) {
+    scl::threading::parallel_for(Size(0), n_cells, [&](Size c) {
         // Initialize this cell's activity to zero
         Real* cell_activity = gene_activity + c * n_genes;
         scl::algo::zero(cell_activity, n_genes);
@@ -790,11 +811,11 @@ void peak_to_gene_activity(
             Index row_len = atac.row_length_unsafe(c);
 
             for (Index j = 0; j < row_len; ++j) {
-                Index peak = row_idxs[j];
+                Index peak = row_idxs.ptr[j];
                 if (peak < static_cast<Index>(n_peaks)) {
                     Index gene = peak_to_gene_map[peak];
                     if (gene >= 0 && gene < static_cast<Index>(n_genes)) {
-                        cell_activity[gene] += static_cast<Real>(row_vals[j]);
+                        cell_activity[gene] += static_cast<Real>(row_vals.ptr[j]);
                     }
                 }
             }
@@ -805,10 +826,10 @@ void peak_to_gene_activity(
                 Index col_len = atac.col_length_unsafe(static_cast<Index>(p));
                 
                 for (Index j = 0; j < col_len; ++j) {
-                    if (col_idxs[j] == c) {
+                    if (col_idxs.ptr[j] == static_cast<Index>(c)) {
                         Index gene = peak_to_gene_map[p];
                         if (gene >= 0 && gene < static_cast<Index>(n_genes)) {
-                            cell_activity[gene] += static_cast<Real>(col_vals[j]);
+                            cell_activity[gene] += static_cast<Real>(col_vals.ptr[j]);
                         }
                         break;
                     }

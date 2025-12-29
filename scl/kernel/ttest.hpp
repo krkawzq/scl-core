@@ -68,7 +68,8 @@ void ttest(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
-    Size n1_total, n2_total;
+    Size n1_total = 0;
+    Size n2_total = 0;
     count_groups(group_ids, n1_total, n2_total);
 
     SCL_CHECK_ARG(n1_total > 0 && n2_total > 0,
@@ -84,12 +85,12 @@ void ttest(
     }
 
     // Pre-allocate dual buffer pool
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::get_num_threads_runtime();
     scl::threading::DualWorkspacePool<T> buf_pool;
     buf_pool.init(n_threads, max_len);
 
-    scl::threading::parallel_for(Size(0), N, [&](size_t p, size_t thread_rank) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), N, [&](Size p, Size thread_rank) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -114,10 +115,11 @@ void ttest(
         double mean2 = sum2 * c.inv_n2;
 
         // Log2 fold change
-        out_log2_fc[p] = compute_log2_fc(mean1, mean2);
+        out_log2_fc[static_cast<Index>(p)] = compute_log2_fc(mean1, mean2);
 
         // Compute variances (with zero adjustment)
-        double var1, var2;
+        double var1 = 0.0;
+        double var2 = 0.0;
 
         // For group 1
         if (n1_total > 1) {
@@ -170,8 +172,8 @@ void ttest(
             }
         }
 
-        out_t_stats[p] = static_cast<Real>(t_stat);
-        out_p_values[p] = static_cast<Real>(p_val);
+        out_t_stats[static_cast<Index>(p)] = static_cast<Real>(t_stat);
+        out_p_values[static_cast<Index>(p)] = static_cast<Real>(p_val);
     });
 }
 
@@ -199,8 +201,8 @@ void compute_group_stats(
     scl::memory::zero(out_vars);
     scl::algo::zero(out_counts.ptr, total_size);
 
-    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+    scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](Size p) {
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -242,19 +244,19 @@ void compute_group_stats(
     });
 
     // Finalize statistics
-    scl::threading::parallel_for(Size(0), total_size, [&](size_t i) {
-        Size n = out_counts[i];
+    scl::threading::parallel_for(Size(0), total_size, [&](Size i) {
+        Size n = out_counts[static_cast<Index>(i)];
         if (n > 0) {
-            Real mean = out_means[i] / static_cast<Real>(n);
-            Real sum_sq = out_vars[i];
+            Real mean = out_means[static_cast<Index>(i)] / static_cast<Real>(n);
+            Real sum_sq = out_vars[static_cast<Index>(i)];
             Real var = (n > 1) ? (sum_sq / static_cast<Real>(n) - mean * mean) : Real(0);
 
             if (n > 1) {
                 var = var * static_cast<Real>(n) / static_cast<Real>(n - 1);
             }
 
-            out_means[i] = mean;
-            out_vars[i] = var;
+            out_means[static_cast<Index>(i)] = mean;
+            out_vars[static_cast<Index>(i)] = var;
         }
     });
 }

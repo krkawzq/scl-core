@@ -8,7 +8,6 @@
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
 
 #include <cmath>
@@ -74,7 +73,7 @@ SCL_HOT SCL_FORCE_INLINE Real dot_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_sum0 = s::Zero(d);
     auto v_sum1 = s::Zero(d);
@@ -107,7 +106,7 @@ SCL_HOT SCL_FORCE_INLINE void axpy_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_alpha = s::Set(d, alpha);
 
@@ -130,7 +129,7 @@ SCL_HOT SCL_FORCE_INLINE void scale_simd(Real* SCL_RESTRICT x, Real alpha, Size 
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<Real>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = static_cast<Size>(s::Lanes(d));
 
     auto v_alpha = s::Set(d, alpha);
 
@@ -149,11 +148,15 @@ SCL_HOT SCL_FORCE_INLINE void scale_simd(Real* SCL_RESTRICT x, Real alpha, Size 
 // Fast PRNG (Xoshiro128+)
 // =============================================================================
 
+// PERFORMANCE: C-style array for SIMD-friendly initialization
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
 struct alignas(16) FastRNG {
-    uint32_t s[4];
+    uint32_t s[4]{};  // Zero-initialize
 
     SCL_FORCE_INLINE explicit FastRNG(uint64_t seed) noexcept {
         uint64_t z = seed;
+        // PERFORMANCE: Loop unrolling not beneficial for this seed initialization
+        // NOLINTNEXTLINE(modernize-loop-convert)
         for (int i = 0; i < 4; ++i) {
             z += 0x9e3779b97f4a7c15ULL;
             z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
@@ -182,30 +185,41 @@ struct alignas(16) FastRNG {
 // 4-ary Min Heap (Faster than binary for Dijkstra)
 // =============================================================================
 
+// PERFORMANCE: Raw pointers for zero-overhead heap operations
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays,modernize-avoid-c-arrays)
 struct alignas(64) FastMinHeap {
     static constexpr Index ARITY = config::HEAP_ARITY;
 
-    Index* indices;
-    Real* keys;
-    Index* positions;
-    Index size;
-    Index capacity;
+    std::unique_ptr<Index[], scl::memory::AlignedDeleter<Index>> indices_ptr;
+    std::unique_ptr<Real[], scl::memory::AlignedDeleter<Real>> keys_ptr;
+    std::unique_ptr<Index[], scl::memory::AlignedDeleter<Index>> positions_ptr;
+    Index* indices{nullptr};
+    Real* keys{nullptr};
+    Index* positions{nullptr};
+    Index size{0};
+    Index capacity{0};
 
     void init(Index cap) {
         capacity = cap;
         size = 0;
-        indices = scl::memory::aligned_alloc<Index>(cap, SCL_ALIGNMENT);
-        keys = scl::memory::aligned_alloc<Real>(cap, SCL_ALIGNMENT);
-        positions = scl::memory::aligned_alloc<Index>(cap, SCL_ALIGNMENT);
+        indices_ptr = scl::memory::aligned_alloc<Index>(cap, SCL_ALIGNMENT);
+        keys_ptr = scl::memory::aligned_alloc<Real>(cap, SCL_ALIGNMENT);
+        positions_ptr = scl::memory::aligned_alloc<Index>(cap, SCL_ALIGNMENT);
+        indices = indices_ptr.get();
+        keys = keys_ptr.get();
+        positions = positions_ptr.get();
         for (Index i = 0; i < cap; ++i) {
             positions[i] = -1;
         }
     }
 
     void destroy() {
-        scl::memory::aligned_free(positions, SCL_ALIGNMENT);
-        scl::memory::aligned_free(keys, SCL_ALIGNMENT);
-        scl::memory::aligned_free(indices, SCL_ALIGNMENT);
+        indices_ptr.reset();
+        keys_ptr.reset();
+        positions_ptr.reset();
+        indices = nullptr;
+        keys = nullptr;
+        positions = nullptr;
     }
 
     void clear() noexcept {
@@ -248,9 +262,9 @@ struct alignas(64) FastMinHeap {
         return min_idx;
     }
 
-    SCL_FORCE_INLINE bool empty() const noexcept { return size == 0; }
+    [[nodiscard]] SCL_FORCE_INLINE bool empty() const noexcept { return size == 0; }
 
-    SCL_FORCE_INLINE bool contains(Index idx) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE bool contains(Index idx) const noexcept {
         return idx >= 0 && idx < capacity && positions[idx] >= 0 && positions[idx] < size;
     }
 
@@ -323,10 +337,10 @@ SCL_HOT void spmv_parallel(
     Real* SCL_RESTRICT y,
     Size n
 ) {
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
 
     if (n >= config::PARALLEL_THRESHOLD && n_threads > 1) {
-        scl::threading::parallel_for(Size(0), n, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), n, [&](Size i) {
             const Index idx = static_cast<Index>(i);
             auto indices = mat.primary_indices_unsafe(idx);
             auto values = mat.primary_values_unsafe(idx);
@@ -373,8 +387,6 @@ SCL_HOT void spmm_block(
     Size n,
     Index n_cols
 ) {
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-
     scl::threading::parallel_for(Size(0), n, [&](size_t i) {
         const Index idx = static_cast<Index>(i);
         auto indices = mat.primary_indices_unsafe(idx);
@@ -529,17 +541,22 @@ void dijkstra_multi_source(
     const Size N = static_cast<Size>(n);
     const Size n_sources = sources.len;
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
 
     // Per-thread heaps
-    detail::FastMinHeap* heaps = static_cast<detail::FastMinHeap*>(
-        scl::memory::aligned_alloc<detail::FastMinHeap>(n_threads, SCL_ALIGNMENT));
+    // PERFORMANCE: Placement new needed for non-trivial type FastMinHeap
+    auto heaps_raw = scl::memory::aligned_alloc<Byte>(sizeof(detail::FastMinHeap) * n_threads, SCL_ALIGNMENT);
+    Byte* raw_mem = heaps_raw.release();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+    auto* heaps = reinterpret_cast<detail::FastMinHeap*>(raw_mem);
     
-    for (size_t t = 0; t < n_threads; ++t) {
+    // Initialize heaps using placement new
+    for (Size t = 0; t < n_threads; ++t) {
+        new (&heaps[t]) detail::FastMinHeap();
         heaps[t].init(n);
     }
 
-    scl::threading::parallel_for(Size(0), n_sources, [&](size_t s, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), n_sources, [&](Size s, Size thread_rank) {
         Index source = sources[s];
         Real* dist = distances + s * N;
 
@@ -579,10 +596,12 @@ void dijkstra_multi_source(
         }
     });
 
-    for (size_t t = 0; t < n_threads; ++t) {
+    // Destroy heaps using explicit destructor calls
+    for (Size t = 0; t < n_threads; ++t) {
         heaps[t].destroy();
+        heaps[t].~FastMinHeap();
     }
-    scl::memory::aligned_free(heaps, SCL_ALIGNMENT);
+    scl::memory::aligned_free(raw_mem, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -639,9 +658,12 @@ void diffusion_pseudotime(
 
     // Allocate diffusion components
     Size dc_size = N * static_cast<Size>(n_dcs);
-    Real* dc = scl::memory::aligned_alloc<Real>(dc_size, SCL_ALIGNMENT);
-    Real* dc_new = scl::memory::aligned_alloc<Real>(dc_size, SCL_ALIGNMENT);
-    Real* workspace = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto dc_ptr = scl::memory::aligned_alloc<Real>(dc_size, SCL_ALIGNMENT);
+    auto dc_new_ptr = scl::memory::aligned_alloc<Real>(dc_size, SCL_ALIGNMENT);
+    auto workspace_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* dc = dc_ptr.get();
+    Real* dc_new = dc_new_ptr.get();
+    Real* workspace = workspace_ptr.get();
 
     // Initialize with random values
     detail::FastRNG rng(42);
@@ -667,9 +689,7 @@ void diffusion_pseudotime(
     // Compute DPT: distance from root in diffusion space
     const Real* root_dc = dc + static_cast<Size>(root_cell) * n_dcs;
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-
-    scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), N, [&](Size i) {
         const Real* cell_dc = dc + i * n_dcs;
 
         Real dist_sq = Real(0);
@@ -691,9 +711,7 @@ void diffusion_pseudotime(
         detail::scale_simd(pseudotime.ptr, Real(1) / max_pt, N);
     }
 
-    scl::memory::aligned_free(workspace, SCL_ALIGNMENT);
-    scl::memory::aligned_free(dc_new, SCL_ALIGNMENT);
-    scl::memory::aligned_free(dc, SCL_ALIGNMENT);
+    // workspace_ptr, dc_new_ptr, dc_ptr automatically freed
 }
 
 // =============================================================================
@@ -730,11 +748,10 @@ Index select_root_peripheral(
     const Index n = adjacency.primary_dim();
     const Size N = static_cast<Size>(n);
 
-    Real* avg_dist = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto avg_dist_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* avg_dist = avg_dist_ptr.get();
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-
-    scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), N, [&](Size i) {
         auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
         const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
@@ -761,7 +778,7 @@ Index select_root_peripheral(
         }
     }
 
-    scl::memory::aligned_free(avg_dist, SCL_ALIGNMENT);
+    // avg_dist_ptr automatically freed
     return root;
 }
 
@@ -782,18 +799,26 @@ Index detect_branch_points(
     SCL_CHECK_DIM(branch_points.len >= N, "Pseudotime: branch_points buffer too small");
 
     // Parallel detection with thread-local counts
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
     
-    Index* local_counts = scl::memory::aligned_alloc<Index>(n_threads, SCL_ALIGNMENT);
-    Index** local_branches = static_cast<Index**>(
-        scl::memory::aligned_alloc<Index*>(n_threads, SCL_ALIGNMENT));
+    auto local_counts_ptr = scl::memory::aligned_alloc<Index>(n_threads, SCL_ALIGNMENT);
+    Index* local_counts = local_counts_ptr.get();
     
-    for (size_t t = 0; t < n_threads; ++t) {
+    // PERFORMANCE: Array of pointers needed for parallel access
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, modernize-avoid-c-arrays)
+    auto local_branches_ptr = scl::memory::aligned_alloc<Index*>(n_threads, SCL_ALIGNMENT);
+    Index** local_branches = local_branches_ptr.get();
+    
+    // Allocate per-thread branch arrays
+    std::vector<std::unique_ptr<Index[], scl::memory::AlignedDeleter<Index>>> branch_arrays;
+    branch_arrays.reserve(n_threads);
+    for (Size t = 0; t < n_threads; ++t) {
         local_counts[t] = 0;
-        local_branches[t] = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+        branch_arrays.emplace_back(scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT));
+        local_branches[t] = branch_arrays[t].get();
     }
 
-    scl::threading::parallel_for(Size(0), N, [&](size_t i, size_t thread_rank) {
+    scl::threading::parallel_for(Size(0), N, [&](Size i, Size thread_rank) {
         auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
         const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
 
@@ -821,15 +846,14 @@ Index detect_branch_points(
 
     // Merge results
     Index total = 0;
-    for (size_t t = 0; t < n_threads; ++t) {
+    for (Size t = 0; t < n_threads; ++t) {
         for (Index i = 0; i < local_counts[t] && total < static_cast<Index>(branch_points.len); ++i) {
             branch_points[total++] = local_branches[t][i];
         }
-        scl::memory::aligned_free(local_branches[t], SCL_ALIGNMENT);
+        // branch_arrays automatically freed
     }
 
-    scl::memory::aligned_free(local_branches, SCL_ALIGNMENT);
-    scl::memory::aligned_free(local_counts, SCL_ALIGNMENT);
+    // local_branches_ptr, local_counts_ptr automatically freed
 
     return total;
 }
@@ -857,8 +881,10 @@ void segment_trajectory(
     }
 
     // Sort branch points by pseudotime
-    Index* sorted_bp = scl::memory::aligned_alloc<Index>(n_branch_points, SCL_ALIGNMENT);
-    Real* bp_times = scl::memory::aligned_alloc<Real>(n_branch_points, SCL_ALIGNMENT);
+    auto sorted_bp_ptr = scl::memory::aligned_alloc<Index>(n_branch_points, SCL_ALIGNMENT);
+    auto bp_times_ptr = scl::memory::aligned_alloc<Real>(n_branch_points, SCL_ALIGNMENT);
+    Index* sorted_bp = sorted_bp_ptr.get();
+    Real* bp_times = bp_times_ptr.get();
 
     for (Index i = 0; i < n_branch_points; ++i) {
         sorted_bp[i] = branch_points[i];
@@ -882,7 +908,7 @@ void segment_trajectory(
     }
 
     // Parallel segment assignment
-    scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), N, [&](Size i) {
         Real pt = pseudotime[i];
         Index seg = 0;
 
@@ -895,8 +921,7 @@ void segment_trajectory(
         segment_labels[i] = seg;
     });
 
-    scl::memory::aligned_free(bp_times, SCL_ALIGNMENT);
-    scl::memory::aligned_free(sorted_bp, SCL_ALIGNMENT);
+    // bp_times_ptr, sorted_bp_ptr automatically freed
 }
 
 // =============================================================================
@@ -913,11 +938,12 @@ void smooth_pseudotime(
     const Index n = adjacency.primary_dim();
     const Size N = static_cast<Size>(n);
 
-    Real* temp = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* temp = temp_ptr.get();
     Real one_minus_alpha = Real(1) - alpha;
 
     for (Index iter = 0; iter < n_iterations; ++iter) {
-        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), N, [&](Size i) {
             auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
             auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
             const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
@@ -943,10 +969,13 @@ void smooth_pseudotime(
             temp[i] = one_minus_alpha * pseudotime[i] + alpha * neighbor_avg;
         });
 
+        // PERFORMANCE: memcpy is faster than loop for copying arrays
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+        // Intentional: efficient array copying
         std::memcpy(pseudotime.ptr, temp, N * sizeof(Real));
     }
 
-    scl::memory::aligned_free(temp, SCL_ALIGNMENT);
+    // temp_ptr automatically freed
 }
 
 // =============================================================================
@@ -980,10 +1009,14 @@ void pseudotime_correlation(
     }
 
     // Gene statistics
-    Real* gene_means = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
-    Real* gene_vars = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
-    Real* covariances = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
-    Index* gene_nnz = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+    auto gene_means_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto gene_vars_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto covariances_ptr = scl::memory::aligned_alloc<Real>(G, SCL_ALIGNMENT);
+    auto gene_nnz_ptr = scl::memory::aligned_alloc<Index>(G, SCL_ALIGNMENT);
+    Real* gene_means = gene_means_ptr.get();
+    Real* gene_vars = gene_vars_ptr.get();
+    Real* covariances = covariances_ptr.get();
+    Index* gene_nnz = gene_nnz_ptr.get();
 
     scl::algo::zero(gene_means, G);
     scl::algo::zero(gene_vars, G);
@@ -1037,15 +1070,12 @@ void pseudotime_correlation(
     }
 
     // Compute correlations in parallel
-    scl::threading::parallel_for(Size(0), G, [&](size_t g) {
+    scl::threading::parallel_for(static_cast<size_t>(0), static_cast<size_t>(G), [&](size_t g) {
         Real denom = std::sqrt(pt_var * gene_vars[g]);
         correlations[g] = (denom > Real(1e-15)) ? covariances[g] / denom : Real(0);
     });
 
-    scl::memory::aligned_free(gene_nnz, SCL_ALIGNMENT);
-    scl::memory::aligned_free(covariances, SCL_ALIGNMENT);
-    scl::memory::aligned_free(gene_vars, SCL_ALIGNMENT);
-    scl::memory::aligned_free(gene_means, SCL_ALIGNMENT);
+    // gene_nnz_ptr, covariances_ptr, gene_vars_ptr, gene_means_ptr automatically freed
 }
 
 // =============================================================================
@@ -1067,10 +1097,11 @@ void velocity_weighted_pseudotime(
 
     std::memcpy(refined_pseudotime.ptr, initial_pseudotime.ptr, N * sizeof(Real));
 
-    Real* temp = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto temp_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* temp = temp_ptr.get();
 
     for (Index iter = 0; iter < n_iterations; ++iter) {
-        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), N, [&](Size i) {
             auto indices = adjacency.primary_indices_unsafe(static_cast<Index>(i));
             auto values = adjacency.primary_values_unsafe(static_cast<Index>(i));
             const Index len = adjacency.primary_length_unsafe(static_cast<Index>(i));
@@ -1115,12 +1146,12 @@ void velocity_weighted_pseudotime(
 
     Real range = max_pt - min_pt;
     if (range > Real(1e-15)) {
-        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), N, [&](Size i) {
             refined_pseudotime[i] = (refined_pseudotime[i] - min_pt) / range;
         });
     }
 
-    scl::memory::aligned_free(temp, SCL_ALIGNMENT);
+    // temp_ptr automatically freed
 }
 
 // =============================================================================
@@ -1138,7 +1169,11 @@ Index find_terminal_states(
     const Size N = static_cast<Size>(n);
 
     // Find threshold via partial sort
-    Real* sorted = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    auto sorted_ptr = scl::memory::aligned_alloc<Real>(N, SCL_ALIGNMENT);
+    Real* sorted = sorted_ptr.get();
+    // PERFORMANCE: memcpy is faster than loop for copying arrays
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic,cppcoreguidelines-pro-bounds-constant-array-index)
+    // Intentional: efficient array copying
     std::memcpy(sorted, pseudotime.ptr, N * sizeof(Real));
 
     // Quick select for percentile
@@ -1156,7 +1191,7 @@ Index find_terminal_states(
     }
 
     Real threshold = sorted[threshold_idx];
-    scl::memory::aligned_free(sorted, SCL_ALIGNMENT);
+    // sorted_ptr automatically freed
 
     // Find cells above threshold
     Index count = 0;
@@ -1187,7 +1222,8 @@ Index compute_backbone(
                   "Pseudotime: backbone_indices buffer too small");
 
     // Sort indices by pseudotime
-    Index* sorted_idx = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
+    Index* sorted_idx = sorted_idx_ptr.get();
     
     for (Size i = 0; i < N; ++i) {
         sorted_idx[i] = static_cast<Index>(i);
@@ -1219,7 +1255,7 @@ Index compute_backbone(
         }
     }
 
-    scl::memory::aligned_free(sorted_idx, SCL_ALIGNMENT);
+    // sorted_idx_ptr automatically freed
     return actual_n;
 }
 

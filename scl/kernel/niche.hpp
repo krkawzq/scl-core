@@ -134,10 +134,10 @@ SCL_FORCE_INLINE SCL_HOT void compute_cell_composition(
     Index* SCL_RESTRICT count_buffer
 ) {
     // Zero the count buffer
-    scl::algo::zero(count_buffer, static_cast<size_t>(n_types));
+    scl::algo::zero(count_buffer, static_cast<Size>(n_types));
 
     if (SCL_UNLIKELY(n_neighbors == 0)) {
-        scl::algo::zero(composition, static_cast<size_t>(n_types));
+        scl::algo::zero(composition, static_cast<Size>(n_types));
         return;
     }
 
@@ -168,16 +168,17 @@ SCL_FORCE_INLINE void compute_global_type_frequencies(
     Real* SCL_RESTRICT frequencies
 ) {
     // Zero frequencies
-    scl::algo::zero(frequencies, static_cast<size_t>(n_types));
+    scl::algo::zero(frequencies, static_cast<Size>(n_types));
 
     // Thread-local counting for parallel accumulation
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     
     if (n_cells >= config::PARALLEL_THRESHOLD && n_threads > 1) {
         // Parallel counting with per-thread buffers
-        Index* partial_counts = scl::memory::aligned_alloc<Index>(
-            n_threads * static_cast<size_t>(n_types), SCL_ALIGNMENT);
-        scl::algo::zero(partial_counts, n_threads * static_cast<size_t>(n_types));
+        auto partial_counts_mem = scl::memory::aligned_alloc<Index>(
+            n_threads * static_cast<Size>(n_types), SCL_ALIGNMENT);
+        Index* partial_counts = partial_counts_mem.get();
+        scl::algo::zero(partial_counts, n_threads * static_cast<Size>(n_types));
 
         scl::threading::parallel_for(Size(0), n_cells, [&](size_t i, size_t thread_rank) {
             Index t = cell_type_labels[i];
@@ -187,7 +188,7 @@ SCL_FORCE_INLINE void compute_global_type_frequencies(
         });
 
         // Reduce partial counts
-        for (size_t tid = 0; tid < n_threads; ++tid) {
+        for (Size tid = 0; tid < n_threads; ++tid) {
             for (Index t = 0; t < n_types; ++t) {
                 frequencies[t] += static_cast<Real>(partial_counts[tid * n_types + t]);
             }
@@ -268,14 +269,14 @@ void neighborhood_composition(
                   "Composition output size mismatch");
     SCL_CHECK_ARG(n_cell_types > 0, "Number of cell types must be positive");
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Pre-allocate workspace: count buffer per thread
     scl::threading::WorkspacePool<Index> count_pool;
     count_pool.init(n_threads, n_types_sz);
 
     scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -323,27 +324,35 @@ void neighborhood_enrichment(
     SCL_CHECK_ARG(n_cell_types > 0, "Number of cell types must be positive");
     SCL_CHECK_ARG(n_permutations > 0, "Number of permutations must be positive");
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Compute observed contact frequencies: type_a -> type_b
     // contact_matrix[a * n_types + b] = fraction of type_a neighbors that are type_b
-    Real* observed_contacts = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
-    Real* type_counts = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+    auto observed_contacts_ptr = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
+
+    Real* observed_contacts = observed_contacts_ptr.release();
+    auto type_counts_ptr = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+
+    Real* type_counts = type_counts_ptr.release();
     scl::algo::zero(observed_contacts, n_pairs);
     scl::algo::zero(type_counts, n_types_sz);
 
     // Thread-local accumulators
-    Real* thread_contacts = scl::memory::aligned_alloc<Real>(
+    auto thread_contacts_ptr = scl::memory::aligned_alloc<Real>(
         n_threads * n_pairs, SCL_ALIGNMENT);
-    Real* thread_type_counts = scl::memory::aligned_alloc<Real>(
+
+    Real* thread_contacts = thread_contacts_ptr.release();
+    auto thread_type_counts_ptr = scl::memory::aligned_alloc<Real>(
         n_threads * n_types_sz, SCL_ALIGNMENT);
+
+    Real* thread_type_counts = thread_type_counts_ptr.release();
     scl::algo::zero(thread_contacts, n_threads * n_pairs);
     scl::algo::zero(thread_type_counts, n_threads * n_types_sz);
 
     // Count observed contacts
     scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
-        const Index idx = static_cast<Index>(i);
-        const Index type_a = cell_type_labels[i];
+        const auto idx = static_cast<Index>(i);
+        const Index type_a = cell_type_labels[static_cast<Index>(i)];
         
         if (SCL_UNLIKELY(type_a < 0 || type_a >= n_cell_types)) return;
 
@@ -370,7 +379,7 @@ void neighborhood_enrichment(
     });
 
     // Reduce thread-local accumulators
-    for (size_t tid = 0; tid < n_threads; ++tid) {
+    for (Size tid = 0; tid < n_threads; ++tid) {
         for (Size p = 0; p < n_pairs; ++p) {
             observed_contacts[p] += thread_contacts[tid * n_pairs + p];
         }
@@ -391,8 +400,12 @@ void neighborhood_enrichment(
     }
 
     // Permutation testing for significance
-    Real* perm_means = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
-    Real* perm_vars = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
+    auto perm_means_ptr = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
+
+    Real* perm_means = perm_means_ptr.release();
+    auto perm_vars_ptr = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
+
+    Real* perm_vars = perm_vars_ptr.release();
     scl::algo::zero(perm_means, n_pairs);
     scl::algo::zero(perm_vars, n_pairs);
 
@@ -403,14 +416,18 @@ void neighborhood_enrichment(
     perm_contact_pool.init(n_threads, n_pairs);
 
     // Initialize permuted labels
-    for (size_t tid = 0; tid < n_threads; ++tid) {
+    for (Size tid = 0; tid < n_threads; ++tid) {
         Index* perm_labels = perm_label_pool.get(tid);
         scl::algo::copy(cell_type_labels.ptr, perm_labels, n_cells_sz);
     }
 
     // Per-permutation accumulation
-    Real* perm_sum = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
-    Real* perm_sum_sq = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
+    auto perm_sum_ptr = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
+
+    Real* perm_sum = perm_sum_ptr.release();
+    auto perm_sum_sq_ptr = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
+
+    Real* perm_sum_sq = perm_sum_sq_ptr.release();
     scl::algo::zero(perm_sum, n_pairs);
     scl::algo::zero(perm_sum_sq, n_pairs);
 
@@ -427,11 +444,13 @@ void neighborhood_enrichment(
         detail::fisher_yates_shuffle(perm_labels, n_cells_sz, rng_state);
 
         // Compute contact counts for this permutation
-        Real* perm_type_counts = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+        auto perm_type_counts_ptr = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+
+        Real* perm_type_counts = perm_type_counts_ptr.release();
         scl::algo::zero(perm_type_counts, n_types_sz);
 
         for (Size i = 0; i < n_cells_sz; ++i) {
-            const Index idx = static_cast<Index>(i);
+            const auto idx = static_cast<Index>(i);
             const Index type_a = perm_labels[i];
             
             if (SCL_UNLIKELY(type_a < 0 || type_a >= n_cell_types)) continue;
@@ -469,7 +488,9 @@ void neighborhood_enrichment(
 
     // Compute enrichment z-scores
     // For simplicity, use observed vs expected (global frequency)
-    Real* global_freq = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+    auto global_freq_ptr = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+
+    Real* global_freq = global_freq_ptr.release();
     detail::compute_global_type_frequencies(cell_type_labels.ptr, n_cells_sz, 
                                              n_cell_types, global_freq);
 
@@ -481,11 +502,11 @@ void neighborhood_enrichment(
             Real std_dev = std::sqrt(expected * (Real(1.0) - expected) / 
                                       scl::algo::max2(type_counts[a], Real(1.0)));
             
-            enrichment_scores[pair_idx] = detail::compute_zscore(observed, expected, std_dev);
+            enrichment_scores[static_cast<Index>(pair_idx)] = detail::compute_zscore(observed, expected, std_dev);
             
             // Approximate p-value from z-score (two-tailed)
-            Real z = std::abs(enrichment_scores[pair_idx]);
-            p_values[pair_idx] = Real(2.0) * std::erfc(z / std::sqrt(Real(2.0))) / Real(2.0);
+            Real z = std::abs(enrichment_scores[static_cast<Index>(pair_idx)]);
+            p_values[static_cast<Index>(pair_idx)] = Real(2.0) * std::erfc(z / std::sqrt(Real(2.0))) / Real(2.0);
         }
     }
 
@@ -523,16 +544,18 @@ void cell_cell_contact(
     SCL_CHECK_DIM(contact_matrix.len >= n_pairs, "Contact matrix size mismatch");
     SCL_CHECK_ARG(n_cell_types > 0, "Number of cell types must be positive");
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Thread-local contact accumulators
-    Real* thread_contacts = scl::memory::aligned_alloc<Real>(
+    auto thread_contacts_ptr = scl::memory::aligned_alloc<Real>(
         n_threads * n_pairs, SCL_ALIGNMENT);
+
+    Real* thread_contacts = thread_contacts_ptr.release();
     scl::algo::zero(thread_contacts, n_threads * n_pairs);
 
     scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
-        const Index idx = static_cast<Index>(i);
-        const Index type_a = cell_type_labels[i];
+        const auto idx = static_cast<Index>(i);
+        const Index type_a = cell_type_labels[static_cast<Index>(i)];
         
         if (SCL_UNLIKELY(type_a < 0 || type_a >= n_cell_types)) return;
 
@@ -578,9 +601,9 @@ void cell_cell_contact(
 
     // Reduce thread-local accumulators
     scl::algo::zero(contact_matrix.ptr, n_pairs);
-    for (size_t tid = 0; tid < n_threads; ++tid) {
+    for (Size tid = 0; tid < n_threads; ++tid) {
         for (Size p = 0; p < n_pairs; ++p) {
-            contact_matrix[p] += thread_contacts[tid * n_pairs + p];
+            contact_matrix[static_cast<Index>(p)] += thread_contacts[tid * n_pairs + p];
         }
     }
 
@@ -589,7 +612,7 @@ void cell_cell_contact(
     if (total_contacts > config::EPS) {
         Real inv_total = Real(1.0) / total_contacts;
         for (Size p = 0; p < n_pairs; ++p) {
-            contact_matrix[p] *= inv_total;
+            contact_matrix[static_cast<Index>(p)] *= inv_total;
         }
     }
 
@@ -625,9 +648,9 @@ void colocalization_score(
     Real total_neighbors_a = Real(0.0);
 
     for (Size i = 0; i < n_cells_sz; ++i) {
-        if (cell_type_labels[i] != type_a) continue;
+        if (cell_type_labels[static_cast<Index>(i)] != type_a) continue;
 
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
@@ -646,7 +669,7 @@ void colocalization_score(
     // Compute expected co-localization based on global frequencies
     Real freq_b = Real(0.0);
     for (Size i = 0; i < n_cells_sz; ++i) {
-        if (cell_type_labels[i] == type_b) freq_b += Real(1.0);
+        if (cell_type_labels[static_cast<Index>(i)] == type_b) freq_b += Real(1.0);
     }
     freq_b /= static_cast<Real>(n_cells_sz);
 
@@ -663,7 +686,9 @@ void colocalization_score(
 
     // Permutation test for p-value
     Index more_extreme = 0;
-    Index* perm_labels = scl::memory::aligned_alloc<Index>(n_cells_sz, SCL_ALIGNMENT);
+    auto perm_labels_ptr = scl::memory::aligned_alloc<Index>(n_cells_sz, SCL_ALIGNMENT);
+
+    Index* perm_labels = perm_labels_ptr.release();
     scl::algo::copy(cell_type_labels.ptr, perm_labels, n_cells_sz);
 
     for (Index perm = 0; perm < n_permutations; ++perm) {
@@ -674,7 +699,7 @@ void colocalization_score(
         for (Size i = 0; i < n_cells_sz; ++i) {
             if (perm_labels[i] != type_a) continue;
 
-            const Index idx = static_cast<Index>(i);
+            const auto idx = static_cast<Index>(i);
             const Index len = spatial_neighbors.primary_length_unsafe(idx);
             const Size len_sz = static_cast<Size>(len);
 
@@ -719,25 +744,33 @@ void colocalization_matrix(
     SCL_CHECK_DIM(coloc_matrix.len >= n_pairs, "Coloc matrix size mismatch");
     SCL_CHECK_ARG(n_cell_types > 0, "Number of cell types must be positive");
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Compute observed contact counts
-    Real* observed_counts = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
-    Real* total_neighbors = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+    auto observed_counts_ptr = scl::memory::aligned_alloc<Real>(n_pairs, SCL_ALIGNMENT);
+
+    Real* observed_counts = observed_counts_ptr.release();
+    auto total_neighbors_ptr = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+
+    Real* total_neighbors = total_neighbors_ptr.release();
     scl::algo::zero(observed_counts, n_pairs);
     scl::algo::zero(total_neighbors, n_types_sz);
 
     // Thread-local accumulators
-    Real* thread_counts = scl::memory::aligned_alloc<Real>(
+    auto thread_counts_ptr = scl::memory::aligned_alloc<Real>(
         n_threads * n_pairs, SCL_ALIGNMENT);
-    Real* thread_neighbors = scl::memory::aligned_alloc<Real>(
+
+    Real* thread_counts = thread_counts_ptr.release();
+    auto thread_neighbors_ptr = scl::memory::aligned_alloc<Real>(
         n_threads * n_types_sz, SCL_ALIGNMENT);
+
+    Real* thread_neighbors = thread_neighbors_ptr.release();
     scl::algo::zero(thread_counts, n_threads * n_pairs);
     scl::algo::zero(thread_neighbors, n_threads * n_types_sz);
 
     scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
-        const Index idx = static_cast<Index>(i);
-        const Index type_a = cell_type_labels[i];
+        const auto idx = static_cast<Index>(i);
+        const Index type_a = cell_type_labels[static_cast<Index>(i)];
         
         if (SCL_UNLIKELY(type_a < 0 || type_a >= n_cell_types)) return;
 
@@ -761,7 +794,7 @@ void colocalization_matrix(
     });
 
     // Reduce
-    for (size_t tid = 0; tid < n_threads; ++tid) {
+    for (Size tid = 0; tid < n_threads; ++tid) {
         for (Size p = 0; p < n_pairs; ++p) {
             observed_counts[p] += thread_counts[tid * n_pairs + p];
         }
@@ -771,7 +804,9 @@ void colocalization_matrix(
     }
 
     // Compute global type frequencies
-    Real* type_freq = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+    auto type_freq_ptr = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
+
+    Real* type_freq = type_freq_ptr.release();
     detail::compute_global_type_frequencies(cell_type_labels.ptr, n_cells_sz,
                                              n_cell_types, type_freq);
 
@@ -783,11 +818,11 @@ void colocalization_matrix(
             Real expected = total_neighbors[a] * type_freq[b];
 
             if (expected > config::EPS && observed > Real(0.0)) {
-                coloc_matrix[pair_idx] = std::log2(observed / expected);
+                coloc_matrix[static_cast<Index>(pair_idx)] = std::log2(observed / expected);
             } else if (observed > Real(0.0)) {
-                coloc_matrix[pair_idx] = Real(10.0);
+                coloc_matrix[static_cast<Index>(pair_idx)] = Real(10.0);
             } else {
-                coloc_matrix[pair_idx] = Real(-10.0);
+                coloc_matrix[static_cast<Index>(pair_idx)] = Real(-10.0);
             }
         }
     }
@@ -823,11 +858,13 @@ void niche_similarity(
     SCL_CHECK_DIM(similarity_output.len >= n_query * n_query, "Similarity output size mismatch");
     SCL_CHECK_ARG(n_cell_types > 0, "Number of cell types must be positive");
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // First, compute compositions for all query cells
-    Real* compositions = scl::memory::aligned_alloc<Real>(
+    auto compositions_ptr = scl::memory::aligned_alloc<Real>(
         n_query * n_types_sz, SCL_ALIGNMENT);
+
+    Real* compositions = compositions_ptr.release();
     
     scl::threading::WorkspacePool<Index> count_pool;
     count_pool.init(n_threads, n_types_sz);
@@ -879,8 +916,8 @@ void niche_similarity(
             // Convert to similarity (1 - sqrt(JSD))
             Real similarity = Real(1.0) - std::sqrt(scl::algo::max2(jsd, Real(0.0)));
             
-            similarity_output[i * n_query + j] = similarity;
-            similarity_output[j * n_query + i] = similarity;
+            similarity_output[static_cast<Index>(i * n_query + j)] = similarity;
+            similarity_output[static_cast<Index>(j * n_query + i)] = similarity;
         }
     });
 
@@ -907,7 +944,7 @@ void niche_diversity(
     SCL_CHECK_DIM(diversity_output.len >= n_cells_sz, "Diversity output size mismatch");
     SCL_CHECK_ARG(n_cell_types > 0, "Number of cell types must be positive");
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     // Workspace pools
     scl::threading::WorkspacePool<Index> count_pool;
@@ -916,12 +953,12 @@ void niche_diversity(
     comp_pool.init(n_threads, n_types_sz);
 
     scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0)) {
-            diversity_output[i] = Real(0.0);
+            diversity_output[static_cast<Index>(i)] = Real(0.0);
             return;
         }
 
@@ -944,7 +981,7 @@ void niche_diversity(
             }
         }
 
-        diversity_output[i] = entropy;
+        diversity_output[static_cast<Index>(i)] = entropy;
     });
 }
 
@@ -967,19 +1004,19 @@ void niche_boundary_score(
     SCL_CHECK_DIM(cell_type_labels.len >= n_cells_sz, "Labels size mismatch");
     SCL_CHECK_DIM(boundary_scores.len >= n_cells_sz, "Boundary scores size mismatch");
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::WorkspacePool<Index> count_pool;
     count_pool.init(n_threads, n_types_sz);
 
     scl::threading::parallel_for(Size(0), n_cells_sz, [&](size_t i, size_t thread_rank) {
-        const Index idx = static_cast<Index>(i);
-        const Index my_type = cell_type_labels[i];
+        const auto idx = static_cast<Index>(i);
+        const Index my_type = cell_type_labels[static_cast<Index>(i)];
         const Index len = spatial_neighbors.primary_length_unsafe(idx);
         const Size len_sz = static_cast<Size>(len);
 
         if (SCL_UNLIKELY(len_sz == 0 || my_type < 0 || my_type >= n_cell_types)) {
-            boundary_scores[i] = Real(0.0);
+            boundary_scores[static_cast<Index>(i)] = Real(0.0);
             return;
         }
 
@@ -994,7 +1031,7 @@ void niche_boundary_score(
 
         // Boundary score = 1 - (fraction of same-type neighbors)
         Real same_type_frac = static_cast<Real>(counts[my_type]) / static_cast<Real>(len_sz);
-        boundary_scores[i] = Real(1.0) - same_type_frac;
+        boundary_scores[static_cast<Index>(i)] = Real(1.0) - same_type_frac;
     });
 }
 

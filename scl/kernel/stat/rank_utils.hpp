@@ -83,7 +83,7 @@ SCL_FORCE_INLINE void merge_with_ties(
         R1 += static_cast<double>(count1) * avg_rank;
 
         if (SCL_UNLIKELY(t > 1)) {
-            double td = static_cast<double>(t);
+            auto td = static_cast<double>(t);
             // t^3 - t = t * (t^2 - 1)
             tie_sum += td * (td * td - 1.0);
         }
@@ -170,7 +170,7 @@ SCL_FORCE_INLINE SCL_HOT void compute_rank_sum_sparse(
         R1 += static_cast<double>(a_zeros) * avg_rank;
 
         if (SCL_UNLIKELY(total_zeros > 1)) {
-            double tz = static_cast<double>(total_zeros);
+            auto tz = static_cast<double>(total_zeros);
             tie_sum += tz * (tz * tz - 1.0);
         }
 
@@ -230,7 +230,7 @@ SCL_FORCE_INLINE void compute_rank_sums_k_groups(
 
         // Update tie correction
         if (tie_count > 1) {
-            double t = static_cast<double>(tie_count);
+            auto t = static_cast<double>(tie_count);
             tie_sum += t * (t * t - 1.0);
         }
 

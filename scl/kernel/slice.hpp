@@ -36,13 +36,14 @@ SCL_FORCE_INLINE Index parallel_reduce_nnz(Size n, F&& get_nnz) {
         return total;
     }
 
-    const Size num_threads = scl::threading::Scheduler::get_num_threads();
+    const Size num_threads = static_cast<Size>(scl::threading::Scheduler::get_num_threads());
     const Size chunk_size = (n + num_threads - 1) / num_threads;
 
-    Index* partial_sums = scl::memory::aligned_alloc<Index>(num_threads, SCL_ALIGNMENT);
+    auto partial_sums_ptr = scl::memory::aligned_alloc<Index>(num_threads, SCL_ALIGNMENT);
+    Index* partial_sums = partial_sums_ptr.get();
     scl::algo::zero(partial_sums, num_threads);
 
-    scl::threading::parallel_for(Size(0), num_threads, [&](size_t tid) {
+    scl::threading::parallel_for(Size(0), num_threads, [&](Size tid) {
         Size start = tid * chunk_size;
         Size end = scl::algo::min2(start + chunk_size, n);
 
@@ -58,7 +59,7 @@ SCL_FORCE_INLINE Index parallel_reduce_nnz(Size n, F&& get_nnz) {
         total += partial_sums[t];
     }
 
-    scl::memory::aligned_free(partial_sums, SCL_ALIGNMENT);
+    // partial_sums_ptr automatically freed
     return total;
 }
 
@@ -130,7 +131,7 @@ void parallel_bulk_copy(
         return;
     }
     
-    scl::threading::parallel_for(Size(0), n_segments, [&](size_t i) {
+    scl::threading::parallel_for(Size(0), n_segments, [&](Size i) {
         Index len = offsets_dst[i + 1] - offsets_dst[i];
         if (len > 0) {
             fast_copy_with_prefetch(
@@ -223,7 +224,7 @@ void materialize_slice_primary(
             );
         }
     } else {
-        scl::threading::parallel_for(Size(0), n_keep, [&](size_t i) {
+        scl::threading::parallel_for(Size(0), n_keep, [&](Size i) {
             Index src_idx = keep_indices[i];
             Index len = matrix.primary_length_unsafe(src_idx);
             if (len == 0) return;
@@ -262,16 +263,17 @@ Sparse<T, IsCSR> slice_primary(
         return Sparse<T, IsCSR>::zeros(new_rows, new_cols);
     }
     
-    T* data_ptr = scl::memory::aligned_alloc<T>(static_cast<size_t>(out_nnz));
-    Index* indices_ptr = scl::memory::aligned_alloc<Index>(static_cast<size_t>(out_nnz));
-    Index* indptr_ptr = scl::memory::aligned_alloc<Index>(n_keep + 1);
+    auto data_ptr_obj = scl::memory::aligned_alloc<T>(static_cast<Size>(out_nnz), SCL_ALIGNMENT);
+    auto indices_ptr_obj = scl::memory::aligned_alloc<Index>(static_cast<Size>(out_nnz), SCL_ALIGNMENT);
+    auto indptr_ptr_obj = scl::memory::aligned_alloc<Index>(n_keep + 1, SCL_ALIGNMENT);
     
-    if (!data_ptr || !indices_ptr || !indptr_ptr) {
-        if (data_ptr) scl::memory::aligned_free(data_ptr);
-        if (indices_ptr) scl::memory::aligned_free(indices_ptr);
-        if (indptr_ptr) scl::memory::aligned_free(indptr_ptr);
+    if (!data_ptr_obj || !indices_ptr_obj || !indptr_ptr_obj) {
         return {};
     }
+    
+    T* data_ptr = data_ptr_obj.release();
+    Index* indices_ptr = indices_ptr_obj.release();
+    Index* indptr_ptr = indptr_ptr_obj.release();
     
     materialize_slice_primary(
         matrix,
@@ -359,7 +361,7 @@ void materialize_filter_secondary(
             }
         }
     } else {
-        scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](size_t p) {
+        scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](Size p) {
             const Index idx = static_cast<Index>(p);
             const Index len = matrix.primary_length_unsafe(idx);
             if (len == 0) return;
@@ -390,7 +392,14 @@ Sparse<T, IsCSR> filter_secondary(
 
     SCL_CHECK_DIM(mask.len >= static_cast<Size>(secondary_dim), "Mask size mismatch");
 
-    Index* new_indices = scl::memory::aligned_alloc<Index>(static_cast<Size>(secondary_dim), SCL_ALIGNMENT);
+    auto new_indices_ptr_obj = scl::memory::aligned_alloc<Index>(static_cast<Size>(secondary_dim), SCL_ALIGNMENT);
+    if (!new_indices_ptr_obj) {
+        Index new_rows = IsCSR ? matrix.rows() : 0;
+        Index new_cols = IsCSR ? 0 : matrix.cols();
+        return Sparse<T, IsCSR>::zeros(new_rows, new_cols);
+    }
+    Index* new_indices = new_indices_ptr_obj.release();
+    
     Index new_secondary = detail::build_index_mapping(
         mask.ptr,
         new_indices,
@@ -406,17 +415,18 @@ Sparse<T, IsCSR> filter_secondary(
         return Sparse<T, IsCSR>::zeros(new_rows, new_cols);
     }
 
-    T* data_ptr = scl::memory::aligned_alloc<T>(static_cast<size_t>(out_nnz));
-    Index* indices_ptr = scl::memory::aligned_alloc<Index>(static_cast<size_t>(out_nnz));
-    Index* indptr_ptr = scl::memory::aligned_alloc<Index>(static_cast<size_t>(primary_dim) + 1);
+    auto data_ptr_obj = scl::memory::aligned_alloc<T>(static_cast<Size>(out_nnz), SCL_ALIGNMENT);
+    auto indices_ptr_obj = scl::memory::aligned_alloc<Index>(static_cast<Size>(out_nnz), SCL_ALIGNMENT);
+    auto indptr_ptr_obj = scl::memory::aligned_alloc<Index>(static_cast<Size>(primary_dim) + 1, SCL_ALIGNMENT);
 
-    if (!data_ptr || !indices_ptr || !indptr_ptr) {
-        if (data_ptr) scl::memory::aligned_free(data_ptr);
-        if (indices_ptr) scl::memory::aligned_free(indices_ptr);
-        if (indptr_ptr) scl::memory::aligned_free(indptr_ptr);
+    if (!data_ptr_obj || !indices_ptr_obj || !indptr_ptr_obj) {
         scl::memory::aligned_free(new_indices, SCL_ALIGNMENT);
         return {};
     }
+
+    T* data_ptr = data_ptr_obj.release();
+    Index* indices_ptr = indices_ptr_obj.release();
+    Index* indptr_ptr = indptr_ptr_obj.release();
 
     materialize_filter_secondary(
         matrix,

@@ -12,6 +12,7 @@
 #include "scl/threading/workspace.hpp"
 #include "scl/threading/scheduler.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 
@@ -62,12 +63,12 @@ public:
 
     explicit FastRNG(uint64_t seed) noexcept {
         uint64_t s = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (unsigned long & i : state_) {
             s += 0x9e3779b97f4a7c15ULL;
             uint64_t z = s;
             z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
             z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-            state_[i] = z ^ (z >> 31);
+            i = z ^ (z >> 31);
         }
     }
 
@@ -94,7 +95,7 @@ public:
     SCL_FORCE_INLINE Size bounded(Size n) noexcept {
         uint64_t x = (*this)();
         __uint128_t m = static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n);
-        uint64_t l = static_cast<uint64_t>(m);
+        auto l = static_cast<uint64_t>(m);
         if (l < n) {
             uint64_t t = -n % n;
             while (l < t) {
@@ -108,15 +109,16 @@ public:
 
     // Jump 2^128 steps - essential for parallel independent streams
     void jump() noexcept {
-        static const uint64_t JUMP[] = {
+        // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+        static const std::array<uint64_t, 4> JUMP = {
             0x180ec6d33cfd0abaULL, 0xd5a61266f0c9392cULL,
             0xa9582618e03fc9aaULL, 0x39abdc4529b1661cULL
         };
 
         uint64_t s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-        for (int i = 0; i < 4; ++i) {
+        for (const uint64_t jump_val : JUMP) {
             for (int b = 0; b < 64; ++b) {
-                if (JUMP[i] & (1ULL << b)) {
+                if (jump_val & (1ULL << b)) {
                     s0 ^= state_[0]; s1 ^= state_[1];
                     s2 ^= state_[2]; s3 ^= state_[3];
                 }
@@ -129,7 +131,8 @@ public:
     }
 
 private:
-    alignas(32) uint64_t state_[4];
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    alignas(32) std::array<uint64_t, 4> state_{};
 
     static SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) noexcept {
         return (x << k) | (x >> (64 - k));
@@ -283,7 +286,7 @@ SCL_FORCE_INLINE Real compute_mean_diff(
     const Index* indices,
     Size n,
     const Index* group_mask,
-    Size n_group1
+    Size /* n_group1 */
 ) noexcept {
     Real sum1 = 0;
     Real sum2 = 0;
@@ -297,24 +300,24 @@ SCL_FORCE_INLINE Real compute_mean_diff(
         Real v2 = static_cast<Real>(values[i+2]);
         Real v3 = static_cast<Real>(values[i+3]);
         
-        int g0 = (group_mask[indices[i]] == 0);
-        int g1 = (group_mask[indices[i+1]] == 0);
-        int g2 = (group_mask[indices[i+2]] == 0);
-        int g3 = (group_mask[indices[i+3]] == 0);
+        Real g0 = static_cast<Real>(group_mask[indices[i]] == 0);
+        Real g1 = static_cast<Real>(group_mask[indices[i+1]] == 0);
+        Real g2 = static_cast<Real>(group_mask[indices[i+2]] == 0);
+        Real g3 = static_cast<Real>(group_mask[indices[i+3]] == 0);
         
         sum1 += g0*v0 + g1*v1 + g2*v2 + g3*v3;
-        sum2 += (1-g0)*v0 + (1-g1)*v1 + (1-g2)*v2 + (1-g3)*v3;
-        count1 += g0 + g1 + g2 + g3;
-        count2 += (1-g0) + (1-g1) + (1-g2) + (1-g3);
+        sum2 += (Real(1)-g0)*v0 + (Real(1)-g1)*v1 + (Real(1)-g2)*v2 + (Real(1)-g3)*v3;
+        count1 += static_cast<Size>(g0) + static_cast<Size>(g1) + static_cast<Size>(g2) + static_cast<Size>(g3);
+        count2 += static_cast<Size>(Real(1)-g0) + static_cast<Size>(Real(1)-g1) + static_cast<Size>(Real(1)-g2) + static_cast<Size>(Real(1)-g3);
     }
 
     for (; i < n; ++i) {
         Real v = static_cast<Real>(values[i]);
-        int g = (group_mask[indices[i]] == 0);
+        Real g = static_cast<Real>(group_mask[indices[i]] == 0);
         sum1 += g * v;
-        sum2 += (1 - g) * v;
-        count1 += g;
-        count2 += (1 - g);
+        sum2 += (Real(1) - g) * v;
+        count1 += static_cast<Size>(g);
+        count2 += static_cast<Size>(Real(1) - g);
     }
     
     Real mean1 = (count1 > 0) ? sum1 / static_cast<Real>(count1) : Real(0);
@@ -387,11 +390,16 @@ Real permutation_test(
     n_permutations = scl::algo::max2(n_permutations, config::MIN_PERMUTATIONS);
     n_permutations = scl::algo::min2(n_permutations, config::MAX_PERMUTATIONS);
 
-    Real* null_dist = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
-    Index* perm = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+    auto null_dist_ptr = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
+
+
+    Real* null_dist = null_dist_ptr.release();
+    auto perm_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+    Index* perm = perm_ptr.release();
 
     for (Size i = 0; i < n; ++i) {
-        perm[i] = labels[i];
+        perm[i] = labels[static_cast<Index>(i)];
     }
 
     detail::FastRNG rng(seed);
@@ -450,17 +458,20 @@ inline Real permutation_correlation_test(
     Real sum_x = 0;
     Real sum_x2 = 0;
     for (Size i = 0; i < n; ++i) {
-        sum_x += x[i];
-        sum_x2 += x[i] * x[i];
+        const auto idx = static_cast<Index>(i);
+        sum_x += x[idx];
+        sum_x2 += x[idx] * x[idx];
     }
     Real mean_x = sum_x / static_cast<Real>(n);
     Real std_x = std::sqrt(sum_x2 / static_cast<Real>(n) - mean_x * mean_x);
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     
     // Parallel path for large n_permutations
     if (n_permutations >= config::PARALLEL_THRESHOLD && n_threads > 1) {
-        Real* null_dist = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
+        auto null_dist_ptr = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
+
+        Real* null_dist = null_dist_ptr.release();
         const Size perms_per_thread = (n_permutations + n_threads - 1) / n_threads;
         
         scl::threading::WorkspacePool<Index> perm_pool;
@@ -476,7 +487,7 @@ inline Real permutation_correlation_test(
             }
             
             detail::FastRNG rng(seed);
-            for (size_t j = 0; j < t; ++j) {
+            for (Size j = 0; j < t; ++j) {
                 rng.jump();
             }
             
@@ -498,9 +509,15 @@ inline Real permutation_correlation_test(
     }
     
     // Sequential path
-    Real* null_dist = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
-    Index* perm = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    Real* y_perm = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+    auto null_dist_ptr = scl::memory::aligned_alloc<Real>(n_permutations, SCL_ALIGNMENT);
+
+    Real* null_dist = null_dist_ptr.release();
+    auto perm_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+    Index* perm = perm_ptr.release();
+    auto y_perm_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
+
+    Real* y_perm = y_perm_ptr.release();
 
     for (Size i = 0; i < n; ++i) {
         perm[i] = static_cast<Index>(i);
@@ -538,12 +555,15 @@ inline void fdr_correction_bh(
 
     if (n == 0) return;
 
-    Index* order = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    scl::argsort::argsort(p_values, Array<Index>(order, n));
+    auto order_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+
+    Index* order = order_ptr.release();
+    scl::sort::argsort_inplace(p_values, Array<Index>(order, n));
 
     Real cummin = Real(1);
     for (Size i = n; i > 0; --i) {
-        Size idx = static_cast<Size>(order[i - 1]);
+        const auto idx = static_cast<Index>(order[static_cast<Index>(i - 1)]);
         Real adj = scl::algo::min2(p_values[idx] * static_cast<Real>(n) / static_cast<Real>(i), Real(1));
         cummin = scl::algo::min2(cummin, adj);
         q_values[idx] = cummin;
@@ -571,13 +591,16 @@ inline void fdr_correction_by(
         cn = t;
     }
 
-    Index* order = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    scl::argsort::argsort(p_values, Array<Index>(order, n));
+    auto order_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+
+    Index* order = order_ptr.release();
+    scl::sort::argsort_inplace(p_values, Array<Index>(order, n));
 
     Real cn_n = cn * static_cast<Real>(n);
     Real cummin = Real(1);
     for (Size i = n; i > 0; --i) {
-        Size idx = static_cast<Size>(order[i - 1]);
+        const auto idx = static_cast<Index>(order[static_cast<Index>(i - 1)]);
         Real adj = scl::algo::min2(p_values[idx] * cn_n / static_cast<Real>(i), Real(1));
         cummin = scl::algo::min2(cummin, adj);
         q_values[idx] = cummin;
@@ -610,11 +633,11 @@ inline void bonferroni_correction(
     }
 
     for (; i < n; ++i) {
-        adjusted[i] = scl::algo::min2(p_values[i] * n_real, Real(1));
+        adjusted[static_cast<Index>(i)] = scl::algo::min2(p_values[static_cast<Index>(i)] * n_real, Real(1));
     }
 #else
     for (Size i = 0; i < n; ++i) {
-        adjusted[i] = scl::algo::min2(p_values[i] * n_real, Real(1));
+        adjusted[static_cast<Index>(i)] = scl::algo::min2(p_values[static_cast<Index>(i)] * n_real, Real(1));
     }
 #endif
 }
@@ -632,12 +655,15 @@ inline void holm_correction(
 
     if (n == 0) return;
 
-    Index* order = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
-    scl::argsort::argsort(p_values, Array<Index>(order, n));
+    auto order_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
+
+
+    Index* order = order_ptr.release();
+    scl::sort::argsort_inplace(p_values, Array<Index>(order, n));
 
     Real cummax = 0;
     for (Size i = 0; i < n; ++i) {
-        Size idx = static_cast<Size>(order[i]);
+        const auto idx = static_cast<Index>(order[static_cast<Index>(i)]);
         Real adj = scl::algo::min2(p_values[idx] * static_cast<Real>(n - i), Real(1));
         cummax = scl::algo::max2(cummax, adj);
         adjusted[idx] = cummax;
@@ -666,11 +692,11 @@ inline Size count_significant(
     }
 
     for (; i < p_values.len; ++i) {
-        count += (p_values[i] < alpha);
+        count += (p_values[static_cast<Index>(i)] < alpha);
     }
 #else
     for (Size i = 0; i < p_values.len; ++i) {
-        count += (p_values[i] < alpha);
+        count += (p_values[static_cast<Index>(i)] < alpha);
     }
 #endif
 
@@ -685,8 +711,9 @@ inline void get_significant_indices(
 ) {
     n_significant = 0;
     for (Size i = 0; i < p_values.len; ++i) {
-        if (p_values[i] < alpha && n_significant < indices.len) {
-            indices[n_significant++] = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
+        if (p_values[idx] < alpha && n_significant < indices.len) {
+            indices[static_cast<Index>(n_significant++)] = idx;
         }
     }
 }
@@ -714,7 +741,7 @@ void batch_permutation_test(
     n_permutations = scl::algo::max2(n_permutations, config::MIN_PERMUTATIONS);
     n_permutations = scl::algo::min2(n_permutations, config::MAX_PERMUTATIONS);
 
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
 
     scl::threading::WorkspacePool<Real> null_pool;
     scl::threading::WorkspacePool<Index> perm_pool;
@@ -723,15 +750,15 @@ void batch_permutation_test(
 
     Size total_group0 = 0;
     for (Size j = 0; j < static_cast<Size>(n_cols); ++j) {
-        total_group0 += (group_labels[j] == 0);
+        total_group0 += (group_labels[static_cast<Index>(j)] == 0);
     }
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_rows), [&](size_t i, size_t rank) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = matrix.row_length_unsafe(idx);
 
         if (len == 0) {
-            p_values[i] = Real(1);
+            p_values[static_cast<Index>(i)] = Real(1);
             return;
         }
 
@@ -739,7 +766,7 @@ void batch_permutation_test(
         Index* perm = perm_pool.get(rank);
 
         for (Size j = 0; j < static_cast<Size>(n_cols); ++j) {
-            perm[j] = group_labels[j];
+            perm[j] = group_labels[static_cast<Index>(j)];
         }
 
         auto indices = matrix.row_indices_unsafe(idx);
@@ -751,10 +778,10 @@ void batch_permutation_test(
         );
 
         detail::FastRNG rng(seed);
-        for (size_t j = 0; j < rank; ++j) {
+        for (Size j = 0; j < rank; ++j) {
             rng.jump();
         }
-        for (size_t j = 0; j < (i % 16); ++j) {
+        for (Size j = 0; j < (i % 16); ++j) {
             rng();
         }
 
@@ -766,7 +793,7 @@ void batch_permutation_test(
             );
         }
 
-        p_values[i] = detail::compute_two_sided_pvalue(obs, null_dist, n_permutations);
+        p_values[static_cast<Index>(i)] = detail::compute_two_sided_pvalue(obs, null_dist, n_permutations);
     });
 }
 

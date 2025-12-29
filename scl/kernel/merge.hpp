@@ -36,7 +36,7 @@ SCL_FORCE_INLINE void add_offset_simd(
 
     namespace s = scl::simd;
     const s::IndexTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     const auto v_offset = s::Set(d, offset);
 
@@ -107,7 +107,10 @@ Sparse<T, IsCSR> vstack(
     const Index total_primary = primary1 + primary2;
     const Index total_secondary = scl::algo::max2(secondary1, secondary2);
 
-    Index* nnzs = scl::memory::aligned_alloc<Index>(total_primary, SCL_ALIGNMENT);
+    auto nnzs_ptr = scl::memory::aligned_alloc<Index>(total_primary, SCL_ALIGNMENT);
+
+
+    Index* nnzs = nnzs_ptr.release();
     for (Index i = 0; i < primary1; ++i) {
         nnzs[i] = matrix1.primary_length_unsafe(i);
     }
@@ -125,7 +128,7 @@ Sparse<T, IsCSR> vstack(
     scl::memory::aligned_free(nnzs, SCL_ALIGNMENT);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary1), [&](size_t i) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = matrix1.primary_length_unsafe(idx);
         if (len == 0) return;
 
@@ -139,7 +142,7 @@ Sparse<T, IsCSR> vstack(
     });
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary2), [&](size_t i) {
-        const Index src_idx = static_cast<Index>(i);
+        const auto src_idx = static_cast<Index>(i);
         const Index dst_idx = primary1 + src_idx;
         const Index len = matrix2.primary_length_unsafe(src_idx);
         if (len == 0) return;
@@ -172,7 +175,10 @@ Sparse<T, IsCSR> hstack(
     const Index primary_dim = primary1;
     const Index total_secondary = secondary1 + secondary2;
 
-    Index* nnzs = scl::memory::aligned_alloc<Index>(primary_dim, SCL_ALIGNMENT);
+    auto nnzs_ptr = scl::memory::aligned_alloc<Index>(primary_dim, SCL_ALIGNMENT);
+
+
+    Index* nnzs = nnzs_ptr.release();
     for (Index i = 0; i < primary_dim; ++i) {
         nnzs[i] = matrix1.primary_length_unsafe(i) + matrix2.primary_length_unsafe(i);
     }
@@ -187,7 +193,7 @@ Sparse<T, IsCSR> hstack(
     scl::memory::aligned_free(nnzs, SCL_ALIGNMENT);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
 
         const Index len1 = matrix1.primary_length_unsafe(idx);
         const Index len2 = matrix2.primary_length_unsafe(idx);

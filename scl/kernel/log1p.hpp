@@ -3,7 +3,6 @@
 #include "scl/core/type.hpp"
 #include "scl/core/simd.hpp"
 #include "scl/core/sparse.hpp"
-#include "scl/core/error.hpp"
 #include "scl/threading/parallel_for.hpp"
 
 #include <cmath>
@@ -34,8 +33,8 @@ namespace detail {
 template <typename T>
 SCL_FORCE_INLINE void apply_log1p_simd(T* SCL_RESTRICT vals, Index len) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const auto lanes = s::Lanes(d);
 
     Index k = 0;
 
@@ -68,8 +67,8 @@ SCL_FORCE_INLINE void apply_log1p_simd(T* SCL_RESTRICT vals, Index len) {
 template <typename T>
 SCL_FORCE_INLINE void apply_log2p1_simd(T* SCL_RESTRICT vals, Index len) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const auto lanes = s::Lanes(d);
     const auto v_inv_ln2 = s::Set(d, config::INV_LN2);
 
     Index k = 0;
@@ -103,8 +102,8 @@ SCL_FORCE_INLINE void apply_log2p1_simd(T* SCL_RESTRICT vals, Index len) {
 template <typename T>
 SCL_FORCE_INLINE void apply_expm1_simd(T* SCL_RESTRICT vals, Index len) {
     namespace s = scl::simd;
-    const s::Tag d;
-    const size_t lanes = s::lanes();
+    auto d = s::SimdTagFor<T>::d;
+    const auto lanes = s::Lanes(d);
 
     Index k = 0;
 
@@ -145,7 +144,7 @@ void log1p_inplace(Sparse<T, IsCSR>& matrix) {
     const Index primary_dim = matrix.primary_dim();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
 
         if (len > 0) {
@@ -160,7 +159,7 @@ void log2p1_inplace(Sparse<T, IsCSR>& matrix) {
     const Index primary_dim = matrix.primary_dim();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
 
         if (len > 0) {
@@ -175,7 +174,7 @@ void expm1_inplace(Sparse<T, IsCSR>& matrix) {
     const Index primary_dim = matrix.primary_dim();
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
 
         if (len > 0) {

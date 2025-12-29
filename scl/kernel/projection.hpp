@@ -8,9 +8,8 @@
 #include "scl/core/memory.hpp"
 #include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
-#include "scl/threading/workspace.hpp"
-#include "scl/threading/scheduler.hpp"
 
+#include <array>
 #include <cmath>
 
 // =============================================================================
@@ -42,7 +41,7 @@ namespace config {
     constexpr Size MIN_PARALLEL_ROWS = 64;
     
     // Memory thresholds for algorithm selection
-    constexpr Size MAX_PRECOMPUTE_BYTES = 256 * 1024 * 1024;  // 256 MB
+    constexpr Size MAX_PRECOMPUTE_BYTES = static_cast<Size>(256) * static_cast<Size>(1024) * static_cast<Size>(1024);  // 256 MB
 }
 
 // =============================================================================
@@ -65,20 +64,21 @@ namespace detail {
 
 // Xoshiro256** - faster than Splitmix64 for bulk generation
 struct alignas(32) Xoshiro256 {
-    uint64_t s[4];
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::array<uint64_t, 4> s{};
 
     SCL_FORCE_INLINE explicit Xoshiro256(uint64_t seed) noexcept {
         // Initialize with splitmix64
         uint64_t z = seed;
-        for (int i = 0; i < 4; ++i) {
+        for (uint64_t& si : s) {
             z += 0x9e3779b97f4a7c15ULL;
             z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
             z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-            s[i] = z ^ (z >> 31);
+            si = z ^ (z >> 31);
         }
     }
 
-    SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE uint64_t rotl(uint64_t x, int k) const noexcept {
         return (x << k) | (x >> (64 - k));
     }
 
@@ -149,7 +149,7 @@ SCL_HOT SCL_FORCE_INLINE void accumulate_simd(
     namespace s = scl::simd;
     using SimdTag = s::SimdTagFor<T>;
     const SimdTag d;
-    const size_t lanes = s::Lanes(d);
+    const Size lanes = s::Lanes(d);
 
     const auto v_val = s::Set(d, value);
 
@@ -246,7 +246,8 @@ SCL_HOT void project_row_gaussian_blocked(
     constexpr Size BLOCK = config::BLOCK_SIZE;
     
     // Temporary buffer for Gaussian values (on stack for small blocks)
-    T local_gauss[BLOCK];
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    std::array<T, BLOCK> local_gauss{};
     
     for (Size block_start = 0; block_start < output_dim; block_start += BLOCK) {
         Size block_end = scl::algo::min2(block_start + BLOCK, output_dim);
@@ -268,7 +269,8 @@ SCL_HOT void project_row_gaussian_blocked(
                 rng.gaussian2(local_gauss[k], local_gauss[k + 1]);
             }
             if (k < block_len) {
-                Real g1, g2;
+                Real g1 = Real(0);
+                Real g2 = Real(0);
                 rng.gaussian2(g1, g2);
                 local_gauss[k] = g1;
             }
@@ -316,7 +318,7 @@ SCL_HOT void project_row_sparse_sign(
             
             // Each byte controls one output dimension
             for (Size b = 0; b < 8; ++b) {
-                uint8_t byte = static_cast<uint8_t>(h >> (b * 8));
+                auto byte = static_cast<uint8_t>(h >> (b * 8));
                 
                 // Check sparsity (lower bits)
                 if ((byte & sparsity_mask) == 0) {
@@ -331,7 +333,7 @@ SCL_HOT void project_row_sparse_sign(
         if (k < output_dim) {
             uint64_t h = fast_hash(col_seed, static_cast<Index>(k >> 3));
             for (Size b = 0; k + b < output_dim; ++b) {
-                uint8_t byte = static_cast<uint8_t>(h >> (b * 8));
+                auto byte = static_cast<uint8_t>(h >> (b * 8));
                 if ((byte & sparsity_mask) == 0) {
                     T sign = (byte & 0x80) ? val : -val;
                     output[k + b] += sign;
@@ -366,16 +368,17 @@ SCL_HOT void project_row_achlioptas(
         Size k = 0;
         
         // Process 4 at a time using batch random generation
-        uint64_t rand_buf[4];
+        // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+        std::array<uint64_t, 4> rand_buf{};
         for (; k + 16 <= output_dim; k += 16) {
-            rng.next4(rand_buf);
+            rng.next4(rand_buf.data());
             
             for (Size i = 0; i < 4; ++i) {
                 uint64_t r = rand_buf[i];
                 for (Size b = 0; b < 4; ++b) {
                     // Use 16 bits per decision: mod 6 approximation
-                    uint16_t v = static_cast<uint16_t>(r >> (b * 16));
-                    uint32_t mod6 = (static_cast<uint32_t>(v) * 6) >> 16;
+                    auto v = static_cast<uint16_t>(r >> (b * 16));
+                    auto mod6 = (static_cast<uint32_t>(v) * 6) >> 16;
                     
                     if (mod6 == 0) {
                         output[k + i * 4 + b] += val;
@@ -389,7 +392,7 @@ SCL_HOT void project_row_achlioptas(
         // Cleanup
         for (; k < output_dim; ++k) {
             uint64_t r = rng.next();
-            uint32_t v = static_cast<uint32_t>(r % 6);
+            auto v = static_cast<uint32_t>(r % 6);
             if (v == 0) {
                 output[k] += val;
             } else if (v == 5) {
@@ -411,7 +414,7 @@ SCL_HOT void project_row_countsketch(
     const T* SCL_RESTRICT values,
     Index len,
     uint64_t hash_seed,
-    uint64_t sign_seed
+    uint64_t /* sign_seed */
 ) noexcept {
     scl::algo::zero(output, output_dim);
     
@@ -433,7 +436,14 @@ SCL_HOT void project_row_countsketch(
         T val3 = values[j + 3];
         
         // Compute hashes in parallel
-        uint32_t h0, s0, h1, s1, h2, s2, h3, s3;
+        uint32_t h0 = 0;
+        uint32_t s0 = 0;
+        uint32_t h1 = 0;
+        uint32_t s1 = 0;
+        uint32_t h2 = 0;
+        uint32_t s2 = 0;
+        uint32_t h3 = 0;
+        uint32_t s3 = 0;
         dual_hash(hash_seed, col0, h0, s0);
         dual_hash(hash_seed, col1, h1, s1);
         dual_hash(hash_seed, col2, h2, s2);
@@ -461,7 +471,8 @@ SCL_HOT void project_row_countsketch(
         Index col = indices[j];
         T val = values[j];
         
-        uint32_t h, s;
+        uint32_t h = 0;
+        uint32_t s = 0;
         dual_hash(hash_seed, col, h, s);
         
         Size bucket = static_cast<Size>(h) % k;
@@ -500,7 +511,8 @@ SCL_HOT void project_row_feature_hash(
         for (Size h = 0; h < n_hashes; ++h) {
             uint64_t h_seed = seed ^ (h * 0xc4ceb9fe1a85ec53ULL);
             
-            uint32_t bucket_hash, sign_hash;
+            uint32_t bucket_hash = 0;
+            uint32_t sign_hash = 0;
             dual_hash(h_seed, col, bucket_hash, sign_hash);
             
             Size bucket = static_cast<Size>(bucket_hash) % k;
@@ -519,14 +531,13 @@ SCL_HOT void project_row_feature_hash(
 
 template <typename T>
 struct alignas(64) ProjectionMatrix {
-    T* data;
-    Size input_dim;
-    Size output_dim;
-    Size stride;  // Row stride for alignment
-    bool owns_data;
+    T* data = nullptr;
+    Size input_dim = 0;
+    Size output_dim = 0;
+    Size stride = 0;  // Row stride for alignment
+    bool owns_data = false;
 
-    ProjectionMatrix() noexcept 
-        : data(nullptr), input_dim(0), output_dim(0), stride(0), owns_data(false) {}
+    ProjectionMatrix() noexcept = default;
 
     ~ProjectionMatrix() {
         if (owns_data && data) {
@@ -565,11 +576,11 @@ struct alignas(64) ProjectionMatrix {
         return data + col_idx * stride;
     }
 
-    SCL_FORCE_INLINE bool valid() const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE bool valid() const noexcept {
         return data != nullptr && input_dim > 0 && output_dim > 0;
     }
     
-    Size memory_bytes() const noexcept {
+    [[nodiscard]] Size memory_bytes() const noexcept {
         return input_dim * stride * sizeof(T);
     }
 };
@@ -581,19 +592,17 @@ struct alignas(64) ProjectionMatrix {
 template <typename T>
 struct SparseProjectionMatrix {
     // For each input dimension: list of (output_idx, sign)
-    Index* output_indices;
-    int8_t* signs;
-    Size* offsets;  // offsets[i+1] - offsets[i] = nnz for input dim i
+    Index* output_indices = nullptr;
+    int8_t* signs = nullptr;
+    Size* offsets = nullptr;  // offsets[i+1] - offsets[i] = nnz for input dim i
     
-    Size input_dim;
-    Size output_dim;
-    Size total_nnz;
-    T scale;
-    bool owns_data;
+    Size input_dim = 0;
+    Size output_dim = 0;
+    Size total_nnz = 0;
+    T scale = T(1);
+    bool owns_data = false;
 
-    SparseProjectionMatrix() noexcept 
-        : output_indices(nullptr), signs(nullptr), offsets(nullptr),
-          input_dim(0), output_dim(0), total_nnz(0), scale(1), owns_data(false) {}
+    SparseProjectionMatrix() noexcept = default;
 
     ~SparseProjectionMatrix() {
         if (owns_data) {
@@ -640,11 +649,11 @@ struct SparseProjectionMatrix {
     SparseProjectionMatrix(const SparseProjectionMatrix&) = delete;
     SparseProjectionMatrix& operator=(const SparseProjectionMatrix&) = delete;
 
-    SCL_FORCE_INLINE bool valid() const noexcept {
+    [[nodiscard]] SCL_FORCE_INLINE bool valid() const noexcept {
         return offsets != nullptr && input_dim > 0 && output_dim > 0;
     }
     
-    Size memory_bytes() const noexcept {
+    [[nodiscard]] Size memory_bytes() const noexcept {
         return total_nnz * (sizeof(Index) + sizeof(int8_t)) + (input_dim + 1) * sizeof(Size);
     }
 };
@@ -676,8 +685,6 @@ ProjectionMatrix<T> create_gaussian_matrix(
 
     T scale = T(1) / std::sqrt(static_cast<T>(output_dim));
     
-    const size_t n_threads = scl::threading::Scheduler::get_num_threads();
-    
     scl::threading::parallel_for(Size(0), input_dim, [&](size_t i) {
         detail::Xoshiro256 rng(seed ^ (i * 0x9e3779b97f4a7c15ULL));
         T* row = result.data + i * result.stride;
@@ -689,7 +696,8 @@ ProjectionMatrix<T> create_gaussian_matrix(
             row[k + 1] *= scale;
         }
         if (k < output_dim) {
-            Real g1, g2;
+            Real g1 = Real(0);
+            Real g2 = Real(0);
             rng.gaussian2(g1, g2);
             row[k] = g1 * scale;
         }
@@ -724,7 +732,7 @@ ProjectionMatrix<T> create_achlioptas_matrix(
 
         for (Size k = 0; k < output_dim; ++k) {
             uint64_t r = rng.next();
-            uint32_t v = static_cast<uint32_t>(r % 6);
+            auto v = static_cast<uint32_t>(r % 6);
             if (v == 0) {
                 row[k] = scale;
             } else if (v == 5) {
@@ -749,10 +757,6 @@ SparseProjectionMatrix<T> create_sparse_matrix(
     result.output_dim = output_dim;
     result.owns_data = true;
 
-    // Estimate total nnz
-    Size expected_nnz_per_row = scl::algo::max2(Size(1), static_cast<Size>(output_dim * density + 0.5));
-    Size estimated_total = input_dim * expected_nnz_per_row;
-    
     result.offsets = scl::memory::aligned_alloc<Size>(input_dim + 1, SCL_ALIGNMENT);
     
     // First pass: count nnz per input dimension
@@ -824,7 +828,7 @@ void project_with_dense_matrix(
                   "Projection: output buffer too small");
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
@@ -879,7 +883,7 @@ void project_with_sparse_matrix(
     const T scale = proj.scale;
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
@@ -939,7 +943,7 @@ void project_gaussian_otf(
     T scale = T(1) / std::sqrt(static_cast<T>(output_dim));
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
@@ -981,7 +985,7 @@ void project_achlioptas_otf(
     T scale = std::sqrt(T(3) / static_cast<T>(output_dim));
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
@@ -1027,7 +1031,7 @@ void project_sparse_otf(
     // density = 1/2 -> mask = 0x1 (1 bit check)
     // density = 1/4 -> mask = 0x3 (2 bit check)
     // density = 1/8 -> mask = 0x7 (3 bit check)
-    uint32_t sparsity_mask;
+    uint32_t sparsity_mask = 0;
     if (density >= 0.5) {
         sparsity_mask = 0x1;
     } else if (density >= 0.25) {
@@ -1039,7 +1043,7 @@ void project_sparse_otf(
     }
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
@@ -1082,7 +1086,7 @@ void project_countsketch(
     uint64_t sign_seed = seed ^ 0xdeadbeefcafebabeULL;
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
@@ -1121,7 +1125,7 @@ void project_feature_hash(
                   "Projection: output buffer too small");
 
     scl::threading::parallel_for(Size(0), N, [&](size_t i) {
-        const Index idx = static_cast<Index>(i);
+        const auto idx = static_cast<Index>(i);
         const Index len = matrix.row_length_unsafe(idx);
 
         T* out_row = output.ptr + i * output_dim;
@@ -1186,7 +1190,6 @@ void project_auto(
     uint64_t seed = 42
 ) {
     const Size input_dim = static_cast<Size>(matrix.cols());
-    const Size n_rows = static_cast<Size>(matrix.rows());
     
     // Heuristic selection based on dimensions
     if (output_dim <= 64) {
@@ -1224,7 +1227,7 @@ inline Size compute_jl_dimension(Size n_samples, Real epsilon = config::DEFAULT_
 inline ProjectionType recommend_projection(
     Size input_dim,
     Size output_dim,
-    Size n_rows,
+    Size /* n_rows */,
     bool preserve_distances
 ) {
     if (!preserve_distances) {
@@ -1249,7 +1252,7 @@ inline Size estimate_dense_matrix_memory(Size input_dim, Size output_dim) {
 }
 
 inline Size estimate_sparse_matrix_memory(Size input_dim, Size output_dim, Real density) {
-    Size expected_nnz = static_cast<Size>(input_dim * output_dim * density);
+    Size expected_nnz = static_cast<Size>(static_cast<Real>(input_dim) * static_cast<Real>(output_dim) * density);
     return expected_nnz * (sizeof(Index) + sizeof(int8_t)) + (input_dim + 1) * sizeof(Size);
 }
 
