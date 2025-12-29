@@ -77,3 +77,4 @@ scl_v*/
 python/scl/libs/*
 python/scl/_bindings/*
 
+package-lock.json

@@ -16,6 +16,7 @@
 
 #include "test.hpp"
 #include "precision.hpp"
+#include "scl/binding/c_api/neighbors.h"
 
 using namespace scl::test;
 using precision::Tolerance;
@@ -39,10 +40,10 @@ inline double squared_distance(const Eigen::SparseVector<scl_real_t>& x,
     
     // Compute dot product
     double dot = 0.0;
-    auto x_it = x.begin();
-    auto y_it = y.begin();
+    Eigen::SparseVector<scl_real_t>::InnerIterator x_it(x);
+    Eigen::SparseVector<scl_real_t>::InnerIterator y_it(y);
     
-    while (x_it != x.end() && y_it != y.end()) {
+    while (x_it && y_it) {
         if (x_it.index() < y_it.index()) {
             ++x_it;
         } else if (y_it.index() < x_it.index()) {

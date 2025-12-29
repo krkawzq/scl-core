@@ -18,6 +18,7 @@
 
 #include "test.hpp"
 #include "precision.hpp"
+#include "scl/binding/c_api/niche.h"
 
 using namespace scl::test;
 using precision::Tolerance;
@@ -341,7 +342,7 @@ SCL_TEST_CASE(colocalization_basic) {
         labels[i] = i % n_types;
     }
     
-    scl_real_t score, p_value;
+    scl_real_t score = 0.0, p_value = 0.0;
     
     scl_error_t err = scl_niche_colocalization_score(
         neighbors, labels.data(), n_types,
@@ -356,7 +357,7 @@ SCL_TEST_CASE(colocalization_basic) {
 
 SCL_TEST_CASE(colocalization_null_neighbors) {
     std::vector<scl_index_t> labels(10, 0);
-    scl_real_t score, p_value;
+    scl_real_t score = 0.0, p_value = 0.0;
     
     scl_error_t err = scl_niche_colocalization_score(
         nullptr, labels.data(), 3,
@@ -369,7 +370,7 @@ SCL_TEST_CASE(colocalization_null_neighbors) {
 SCL_TEST_CASE(colocalization_invalid_types) {
     Sparse neighbors = create_ring_graph(10);
     std::vector<scl_index_t> labels(10, 0);
-    scl_real_t score, p_value;
+    scl_real_t score = 0.0, p_value = 0.0;
     
     // type_a >= n_types
     scl_error_t err1 = scl_niche_colocalization_score(

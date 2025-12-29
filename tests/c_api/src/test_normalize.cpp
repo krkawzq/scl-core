@@ -15,6 +15,7 @@
 #include "test.hpp"
 #include "precision.hpp"
 #include "oracle.hpp"
+#include "scl/binding/c_api/normalize.h"
 
 using namespace scl::test;
 using precision::Tolerance;
@@ -117,8 +118,9 @@ SCL_TEST_RETRY(row_sums_random, 3)
     // Compare with Eigen reference
     Eigen::VectorXd eigen_sums = mat_eigen * Eigen::VectorXd::Ones(cols);
     
+    auto tol = Tolerance::normal();
     for (scl_index_t i = 0; i < rows; ++i) {
-        SCL_ASSERT_NEAR(row_sums[i], eigen_sums[i], Tolerance::normal().atol());
+        SCL_ASSERT_NEAR(row_sums[i], eigen_sums[i], tol.atol);
     }
 }
 
@@ -146,20 +148,29 @@ SCL_TEST_CASE(scale_primary_basic) {
     
     SCL_ASSERT_EQ(err, SCL_OK);
     
-    // Extract and verify
-    scl_sparse_raw_t raw;
-    scl_error_t raw_err = scl_sparse_unsafe_get_raw(mat, &raw);
-    SCL_ASSERT_EQ(raw_err, SCL_OK);
+    // Export and verify
+    std::vector<scl_index_t> out_indptr(4);
+    std::vector<scl_index_t> out_indices(6);
+    std::vector<scl_real_t> out_data(6);
+    scl_error_t export_err = scl_sparse_export(mat, out_indptr.data(), out_indices.data(), out_data.data());
+    SCL_ASSERT_EQ(export_err, SCL_OK);
     
     // Row 0: [1.0, 2.0] * 2.0 = [2.0, 4.0]
-    SCL_ASSERT_NEAR(raw.data[0], 2.0, 1e-10);
-    SCL_ASSERT_NEAR(raw.data[1], 4.0, 1e-10);
+    // Find elements in row 0
+    for (scl_index_t k = out_indptr[0]; k < out_indptr[1]; ++k) {
+        if (out_indices[k] == 0) SCL_ASSERT_NEAR(out_data[k], 2.0, 1e-10);
+        if (out_indices[k] == 1) SCL_ASSERT_NEAR(out_data[k], 4.0, 1e-10);
+    }
     // Row 1: [3.0, 4.0] * 3.0 = [9.0, 12.0]
-    SCL_ASSERT_NEAR(raw.data[2], 9.0, 1e-10);
-    SCL_ASSERT_NEAR(raw.data[3], 12.0, 1e-10);
+    for (scl_index_t k = out_indptr[1]; k < out_indptr[2]; ++k) {
+        if (out_indices[k] == 0) SCL_ASSERT_NEAR(out_data[k], 9.0, 1e-10);
+        if (out_indices[k] == 1) SCL_ASSERT_NEAR(out_data[k], 12.0, 1e-10);
+    }
     // Row 2: [5.0, 6.0] * 4.0 = [20.0, 24.0]
-    SCL_ASSERT_NEAR(raw.data[4], 20.0, 1e-10);
-    SCL_ASSERT_NEAR(raw.data[5], 24.0, 1e-10);
+    for (scl_index_t k = out_indptr[2]; k < out_indptr[3]; ++k) {
+        if (out_indices[k] == 0) SCL_ASSERT_NEAR(out_data[k], 20.0, 1e-10);
+        if (out_indices[k] == 1) SCL_ASSERT_NEAR(out_data[k], 24.0, 1e-10);
+    }
 }
 
 SCL_TEST_CASE(scale_primary_null_matrix) {
@@ -198,12 +209,25 @@ SCL_TEST_CASE(scale_primary_identity) {
     
     SCL_ASSERT_EQ(err, SCL_OK);
     
-    // Verify diagonal is still 1.0
+    // Verify diagonal is still 1.0 by exporting
+    std::vector<scl_index_t> indptr(6);
+    std::vector<scl_index_t> indices(5);
+    std::vector<scl_real_t> data(5);
+    scl_error_t export_err = scl_sparse_export(mat, indptr.data(), indices.data(), data.data());
+    SCL_ASSERT_EQ(export_err, SCL_OK);
+    
+    // Check diagonal elements
     for (scl_index_t i = 0; i < 5; ++i) {
-        scl_real_t val;
-        scl_error_t get_err = scl_sparse_get(mat, i, i, &val);
-        SCL_ASSERT_EQ(get_err, SCL_OK);
-        SCL_ASSERT_NEAR(val, 1.0, 1e-10);
+        // Find element at (i, i)
+        bool found = false;
+        for (scl_index_t k = indptr[i]; k < indptr[i + 1]; ++k) {
+            if (indices[k] == i) {
+                SCL_ASSERT_NEAR(data[k], 1.0, 1e-10);
+                found = true;
+                break;
+            }
+        }
+        SCL_ASSERT_TRUE(found);
     }
 }
 
@@ -222,11 +246,17 @@ SCL_TEST_CASE(scale_primary_zero_scale) {
     
     SCL_ASSERT_EQ(err, SCL_OK);
     
-    // All values should be zero
-    scl_sparse_raw_t raw;
-    scl_sparse_unsafe_get_raw(mat, &raw);
-    for (scl_index_t i = 0; i < raw.nnz; ++i) {
-        SCL_ASSERT_NEAR(raw.data[i], 0.0, 1e-10);
+    // All values should be zero - verify by exporting
+    scl_index_t nnz;
+    scl_sparse_nnz(mat, &nnz);
+    std::vector<scl_index_t> out_indptr(csr.rows + 1);
+    std::vector<scl_index_t> out_indices(nnz);
+    std::vector<scl_real_t> out_data(nnz);
+    scl_error_t export_err = scl_sparse_export(mat, out_indptr.data(), out_indices.data(), out_data.data());
+    SCL_ASSERT_EQ(export_err, SCL_OK);
+    
+    for (scl_index_t i = 0; i < nnz; ++i) {
+        SCL_ASSERT_NEAR(out_data[i], 0.0, 1e-10);
     }
 }
 
@@ -263,7 +293,7 @@ SCL_TEST_RETRY(scale_primary_random, 3)
     
     // Compare matrices
     EigenCSR mat_scaled = to_eigen_csr(mat);
-    SCL_ASSERT_TRUE(matrices_equal(mat_scaled, scaled_ref, Tolerance::normal()));
+    SCL_ASSERT_TRUE(precision::sparse_matrices_equal(mat_scaled, scaled_ref, Tolerance::normal()));
 }
 
 SCL_TEST_SUITE_END

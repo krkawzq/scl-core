@@ -14,6 +14,7 @@
 
 #include "test.hpp"
 #include "precision.hpp"
+#include "scl/binding/c_api/group.h"
 
 using namespace scl::test;
 using precision::Tolerance;
@@ -32,7 +33,7 @@ void group_stats(
     bool include_zeros
 ) {
     scl_index_t rows = matrix.rows();
-    scl_index_t cols = matrix.cols();
+    (void)matrix.cols();  // Unused but kept for clarity
     
     out_means.assign(rows * n_groups, 0.0);
     out_vars.assign(rows * n_groups, 0.0);
@@ -144,12 +145,10 @@ SCL_TEST_CASE(group_stats_single_group) {
     // Should match row means
     for (scl_index_t i = 0; i < 10; ++i) {
         scl_real_t row_sum = 0.0;
-        scl_real_t row_sum_sq = 0.0;
         int count = 0;
         
         for (EigenCSR::InnerIterator it(A_eigen, i); it; ++it) {
             row_sum += it.value();
-            row_sum_sq += it.value() * it.value();
             count++;
         }
         
@@ -172,14 +171,14 @@ SCL_TEST_RETRY(group_stats_random_matrices, 5)
     );
     
     // Random group assignment
-    size_t n_groups = rng.uniform_int(2, 5);
-    std::vector<int32_t> group_ids(cols);
+    size_t n_groups = static_cast<size_t>(rng.uniform_int(2, 5));
+    std::vector<int32_t> group_ids(static_cast<size_t>(cols));
     std::vector<size_t> group_sizes(n_groups, 0);
     
-    for (size_t j = 0; j < cols; ++j) {
-        int32_t g = rng.uniform_int(0, static_cast<int32_t>(n_groups - 1));
-        group_ids[j] = g;
-        group_sizes[g]++;
+    for (scl_index_t j = 0; j < cols; ++j) {
+        int32_t g = static_cast<int32_t>(rng.uniform_int(0, static_cast<int64_t>(n_groups - 1)));
+        group_ids[static_cast<size_t>(j)] = g;
+        group_sizes[static_cast<size_t>(g)]++;
     }
     
     std::vector<scl_real_t> means(rows * n_groups);

@@ -18,6 +18,7 @@
 
 #include "test.hpp"
 #include "precision.hpp"
+#include "scl/binding/c_api/hotspot.h"
 
 using namespace scl::test;
 using precision::Tolerance;
