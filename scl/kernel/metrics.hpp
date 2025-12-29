@@ -266,8 +266,9 @@ void silhouette_samples(
 
     const Index n_clusters = detail::find_max_label(labels) + 1;
 
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clusters, SCL_ALIGNMENT);
-    Size* cluster_sizes = cluster_sizes_ptr.release();
+    Size* cluster_sizes = cluster_sizes_ptr.get();
     detail::count_per_cluster(labels, n_clusters, cluster_sizes);
 
     if (n_cells >= config::PARALLEL_THRESHOLD) {
@@ -399,12 +400,11 @@ Real adjusted_rand_index(
     detail::build_contingency_table(labels1, labels2, n_clusters1, n_clusters2, contingency);
 
     // Compute row and column sums
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto row_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
-
-    Size* row_sums = row_sums_ptr.release();
     auto col_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
-
-    Size* col_sums = col_sums_ptr.release();
+    Size* row_sums = row_sums_ptr.get();
+    Size* col_sums = col_sums_ptr.get();
 
     for (Index i = 0; i < n_clusters1; ++i) row_sums[i] = 0;
     for (Index j = 0; j < n_clusters2; ++j) col_sums[j] = 0;
@@ -470,12 +470,11 @@ Real normalized_mutual_information(
     detail::build_contingency_table(labels1, labels2, n_clusters1, n_clusters2, contingency);
 
     // Compute row and column sums
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto row_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
-
-    Size* row_sums = row_sums_ptr.release();
     auto col_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
-
-    Size* col_sums = col_sums_ptr.release();
+    Size* row_sums = row_sums_ptr.get();
+    Size* col_sums = col_sums_ptr.get();
 
     for (Index i = 0; i < n_clusters1; ++i) row_sums[i] = 0;
     for (Index j = 0; j < n_clusters2; ++j) col_sums[j] = 0;
@@ -771,18 +770,16 @@ Real fowlkes_mallows_index(
     Index n_clusters1 = detail::find_max_label(labels1) + 1;
     Index n_clusters2 = detail::find_max_label(labels2) + 1;
 
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto contingency_ptr = scl::memory::aligned_alloc<Size>(
         static_cast<Size>(n_clusters1) * static_cast<Size>(n_clusters2), SCL_ALIGNMENT);
-    Size* contingency = contingency_ptr.release();
+    Size* contingency = contingency_ptr.get();
     detail::build_contingency_table(labels1, labels2, n_clusters1, n_clusters2, contingency);
 
     auto row_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters1, SCL_ALIGNMENT);
-
-
-    Size* row_sums = row_sums_ptr.release();
     auto col_sums_ptr = scl::memory::aligned_alloc<Size>(n_clusters2, SCL_ALIGNMENT);
-
-    Size* col_sums = col_sums_ptr.release();
+    Size* row_sums = row_sums_ptr.get();
+    Size* col_sums = col_sums_ptr.get();
 
     for (Index i = 0; i < n_clusters1; ++i) row_sums[i] = 0;
     for (Index j = 0; j < n_clusters2; ++j) col_sums[j] = 0;

@@ -582,7 +582,7 @@ SCL_HOT bool parallel_local_moving(
         state.sigma_tot[i] = static_cast<Real>(atomic_sigma[i].load()) / SCALE;
     }
 
-    scl::memory::aligned_free(reinterpret_cast<int64_t*>(atomic_sigma), SCL_ALIGNMENT);
+    // atomic_sigma_ptr will automatically free memory via unique_ptr destructor
     return any_move;
 }
 

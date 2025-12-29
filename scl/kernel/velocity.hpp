@@ -9,7 +9,6 @@
 #include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
 #include "scl/threading/workspace.hpp"
-#include "scl/threading/scheduler.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -394,7 +393,7 @@ void fit_gene_kinetics(
     const Size n_cells_sz = static_cast<Size>(n_cells);
     const Size n_genes_sz = static_cast<Size>(n_genes);
     const bool use_parallel = (n_genes_sz >= config::PARALLEL_THRESHOLD);
-    const Size n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::get_num_threads_runtime();
 
     // Per-thread workspace
     scl::threading::DualWorkspacePool<Real> workspace;
@@ -701,7 +700,7 @@ void velocity_graph(
     const Size n_genes_sz = static_cast<Size>(n_genes);
     const Size k_sz = static_cast<Size>(k_neighbors);
     const bool use_parallel = (n_cells_sz >= config::PARALLEL_THRESHOLD);
-    const Size n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::get_num_threads_runtime();
 
     // Per-thread delta buffer
     scl::threading::WorkspacePool<Real> delta_pool;
@@ -823,7 +822,7 @@ inline void velocity_embedding(
     const Size n_cells_sz = static_cast<Size>(n_cells);
     const Size n_dims_sz = static_cast<Size>(n_dims);
     const bool use_parallel = (n_cells_sz >= config::PARALLEL_THRESHOLD);
-    const Size n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::get_num_threads_runtime();
 
     scl::threading::WorkspacePool<Real> delta_pool;
     if (use_parallel) {
@@ -849,7 +848,11 @@ inline void velocity_embedding(
             detail::vec_diff(emb_j, emb_i, delta_emb, n_dims);
 
             // Weight from velocity (use norm as proxy for direction confidence)
-            Real cos_weight = detail::cosine_similarity(vel_i, vel_i, n_genes);
+            Real vel_norm_sq = Real(0);
+            for (Index g = 0; g < n_genes; ++g) {
+                vel_norm_sq += vel_i[g] * vel_i[g];
+            }
+            Real cos_weight = std::sqrt(vel_norm_sq);
             cos_weight = scl::algo::max2(cos_weight, Real(0));
 
             // Accumulate weighted direction

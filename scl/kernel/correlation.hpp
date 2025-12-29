@@ -359,16 +359,16 @@ void pearson(
     const Index primary_dim = matrix.primary_dim();
     const Size N = static_cast<Size>(primary_dim);
 
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto means_ptr = scl::memory::aligned_alloc<T>(N, SCL_ALIGNMENT);
     auto inv_stds_ptr = scl::memory::aligned_alloc<T>(N, SCL_ALIGNMENT);
-    T* means = means_ptr.release();
-    T* inv_stds = inv_stds_ptr.release();
+    T* means = means_ptr.get();
+    T* inv_stds = inv_stds_ptr.get();
 
     compute_stats(matrix, Array<T>(means, N), Array<T>(inv_stds, N));
     pearson(matrix, Array<const T>(means, N), Array<const T>(inv_stds, N), output);
 
-    scl::memory::aligned_free(means, SCL_ALIGNMENT);
-    scl::memory::aligned_free(inv_stds, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 } // namespace scl::kernel::correlation

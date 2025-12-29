@@ -43,8 +43,9 @@ SCL_FORCE_INLINE void sort_indices_by_pvalue(
     if (n == 0) return;
 
     // Copy p-values to temporary array for sorting
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto pvals_copy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* pvals_copy = pvals_copy_ptr.release();
+    Real* pvals_copy = pvals_copy_ptr.get();
     scl::memory::copy_fast(p_values, Array<Real>(pvals_copy, n));
 
     // Initialize indices
@@ -60,7 +61,7 @@ SCL_FORCE_INLINE void sort_indices_by_pvalue(
         Array<Index>(indices, n)
     );
 
-    scl::memory::aligned_free(pvals_copy);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // Clamp p-value to valid range
@@ -101,8 +102,9 @@ SCL_FORCE_INLINE Real estimate_pi0_bootstrap(
     }
 
     // Compute pi0 estimates at each lambda
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto pi0_estimates_ptr = scl::memory::aligned_alloc<Real>(n_lambda, SCL_ALIGNMENT);
-    Real* pi0_estimates = pi0_estimates_ptr.release();
+    Real* pi0_estimates = pi0_estimates_ptr.get();
 
     for (Size l = 0; l < n_lambda; ++l) {
         Size count_above = 0;
@@ -127,7 +129,7 @@ SCL_FORCE_INLINE Real estimate_pi0_bootstrap(
         }
     }
 
-    scl::memory::aligned_free(pi0_estimates);
+    // unique_ptr automatically frees memory when going out of scope
 
     Real clamped = scl::algo::max2(min_pi0, Real(0.0));
     return scl::algo::min2(clamped, Real(1.0));
@@ -224,12 +226,13 @@ void benjamini_hochberg(
     if (n == 0) return;
 
     // Allocate working memory
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto sorted_indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
     auto sorted_pvalues_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
     auto adjusted_sorted_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Index* sorted_indices = sorted_indices_ptr.release();
-    Real* sorted_pvalues = sorted_pvalues_ptr.release();
-    Real* adjusted_sorted = adjusted_sorted_ptr.release();
+    Index* sorted_indices = sorted_indices_ptr.get();
+    Real* sorted_pvalues = sorted_pvalues_ptr.get();
+    Real* adjusted_sorted = adjusted_sorted_ptr.get();
 
     // Sort indices by p-value
     detail::sort_indices_by_pvalue(p_values, sorted_indices);
@@ -269,9 +272,7 @@ void benjamini_hochberg(
         adjusted_p_values.ptr[sorted_indices[static_cast<Index>(i)]] = adjusted_sorted[static_cast<Index>(i)];
     }
 
-    scl::memory::aligned_free(sorted_indices);
-    scl::memory::aligned_free(sorted_pvalues);
-    scl::memory::aligned_free(adjusted_sorted);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -334,12 +335,13 @@ void storey_qvalue(
     }
 
     // Allocate working memory
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto sorted_indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
     auto sorted_pvalues_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
     auto q_sorted_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Index* sorted_indices = sorted_indices_ptr.release();
-    Real* sorted_pvalues = sorted_pvalues_ptr.release();
-    Real* q_sorted = q_sorted_ptr.release();
+    Index* sorted_indices = sorted_indices_ptr.get();
+    Real* sorted_pvalues = sorted_pvalues_ptr.get();
+    Real* q_sorted = q_sorted_ptr.get();
 
     // Sort indices by p-value
     detail::sort_indices_by_pvalue(p_values, sorted_indices);
@@ -376,9 +378,7 @@ void storey_qvalue(
         q_values.ptr[sorted_indices[static_cast<Index>(i)]] = q_sorted[static_cast<Index>(i)];
     }
 
-    scl::memory::aligned_free(sorted_indices);
-    scl::memory::aligned_free(sorted_pvalues);
-    scl::memory::aligned_free(q_sorted);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -396,8 +396,9 @@ void local_fdr(
     if (n == 0) return;
 
     // Transform p-values to z-scores
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto z_scores_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* z_scores = z_scores_ptr.release();
+    Real* z_scores = z_scores_ptr.get();
     for (Size i = 0; i < n; ++i) {
         // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
         z_scores[static_cast<Index>(i)] = detail::pvalue_to_zscore(p_values.ptr[i]);
@@ -418,13 +419,14 @@ void local_fdr(
     bandwidth = scl::algo::max2(bandwidth, Real(0.1));
 
     // Create evaluation grid
+    // PERFORMANCE: RAII memory management with unique_ptr
     constexpr Size n_grid = 200;
     auto grid_ptr = scl::memory::aligned_alloc<Real>(n_grid, SCL_ALIGNMENT);
     auto f_density_ptr = scl::memory::aligned_alloc<Real>(n_grid, SCL_ALIGNMENT);
     auto f0_density_ptr = scl::memory::aligned_alloc<Real>(n_grid, SCL_ALIGNMENT);
-    Real* grid = grid_ptr.release();
-    Real* f_density = f_density_ptr.release();
-    Real* f0_density = f0_density_ptr.release();
+    Real* grid = grid_ptr.get();
+    Real* f_density = f_density_ptr.get();
+    Real* f0_density = f0_density_ptr.get();
 
     Real grid_step = (z_max - z_min + Real(2.0) * bandwidth) / static_cast<Real>(n_grid - 1);
     for (Size g = 0; g < n_grid; ++g) {
@@ -479,10 +481,7 @@ void local_fdr(
         }
     }
 
-    scl::memory::aligned_free(z_scores);
-    scl::memory::aligned_free(grid);
-    scl::memory::aligned_free(f_density);
-    scl::memory::aligned_free(f0_density);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -503,10 +502,11 @@ void empirical_fdr(
     if (n == 0 || n_perms == 0) return;
 
     // Sort observed scores (descending, assuming higher = more significant)
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto sorted_obs_indices_ptr = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
     auto scores_copy_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Index* sorted_obs_indices = sorted_obs_indices_ptr.release();
-    Real* scores_copy = scores_copy_ptr.release();
+    Index* sorted_obs_indices = sorted_obs_indices_ptr.get();
+    Real* scores_copy = scores_copy_ptr.get();
 
     // Copy scores and initialize indices
     scl::memory::copy_fast(observed_scores, Array<Real>(scores_copy, n));
@@ -522,8 +522,9 @@ void empirical_fdr(
     );
 
     // Count permutation discoveries at each threshold
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto fdr_at_rank_ptr = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Real* fdr_at_rank = fdr_at_rank_ptr.release();
+    Real* fdr_at_rank = fdr_at_rank_ptr.get();
 
     for (Size r = 0; r < n; ++r) {
         // NOLINTNEXTLINE(cppcoreguidelines-narrowing-conversions)
@@ -565,9 +566,7 @@ void empirical_fdr(
         fdr.ptr[sorted_obs_indices[static_cast<Index>(r)]] = fdr_at_rank[static_cast<Index>(r)];
     }
 
-    scl::memory::aligned_free(sorted_obs_indices);
-    scl::memory::aligned_free(scores_copy);
-    scl::memory::aligned_free(fdr_at_rank);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -631,9 +630,7 @@ void benjamini_yekutieli(
         adjusted_p_values.ptr[sorted_indices[static_cast<Index>(i)]] = adjusted_sorted[static_cast<Index>(i)];
     }
 
-    scl::memory::aligned_free(sorted_indices);
-    scl::memory::aligned_free(sorted_pvalues);
-    scl::memory::aligned_free(adjusted_sorted);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // Holm-Bonferroni step-down procedure
@@ -647,12 +644,13 @@ void holm_bonferroni(
     const Size n = p_values.len;
     if (n == 0) return;
 
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto sorted_indices_ptr2 = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
     auto sorted_pvalues_ptr2 = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
     auto adjusted_sorted_ptr2 = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Index* sorted_indices = sorted_indices_ptr2.release();
-    Real* sorted_pvalues = sorted_pvalues_ptr2.release();
-    Real* adjusted_sorted = adjusted_sorted_ptr2.release();
+    Index* sorted_indices = sorted_indices_ptr2.get();
+    Real* sorted_pvalues = sorted_pvalues_ptr2.get();
+    Real* adjusted_sorted = adjusted_sorted_ptr2.get();
 
     detail::sort_indices_by_pvalue(p_values, sorted_indices);
 
@@ -690,9 +688,7 @@ void holm_bonferroni(
         adjusted_p_values.ptr[sorted_indices[static_cast<Index>(i)]] = adjusted_sorted[static_cast<Index>(i)];
     }
 
-    scl::memory::aligned_free(sorted_indices);
-    scl::memory::aligned_free(sorted_pvalues);
-    scl::memory::aligned_free(adjusted_sorted);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // Hochberg step-up procedure
@@ -706,12 +702,13 @@ void hochberg(
     const Size n = p_values.len;
     if (n == 0) return;
 
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto sorted_indices_ptr3 = scl::memory::aligned_alloc<Index>(n, SCL_ALIGNMENT);
     auto sorted_pvalues_ptr3 = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
     auto adjusted_sorted_ptr3 = scl::memory::aligned_alloc<Real>(n, SCL_ALIGNMENT);
-    Index* sorted_indices = sorted_indices_ptr3.release();
-    Real* sorted_pvalues = sorted_pvalues_ptr3.release();
-    Real* adjusted_sorted = adjusted_sorted_ptr3.release();
+    Index* sorted_indices = sorted_indices_ptr3.get();
+    Real* sorted_pvalues = sorted_pvalues_ptr3.get();
+    Real* adjusted_sorted = adjusted_sorted_ptr3.get();
 
     detail::sort_indices_by_pvalue(p_values, sorted_indices);
 
@@ -746,9 +743,7 @@ void hochberg(
         adjusted_p_values.ptr[sorted_indices[static_cast<Index>(i)]] = adjusted_sorted[static_cast<Index>(i)];
     }
 
-    scl::memory::aligned_free(sorted_indices);
-    scl::memory::aligned_free(sorted_pvalues);
-    scl::memory::aligned_free(adjusted_sorted);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // Count significant tests at given threshold

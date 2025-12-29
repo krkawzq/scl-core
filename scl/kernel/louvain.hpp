@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <atomic>
+#include <span>
 
 // =============================================================================
 // FILE: scl/kernel/louvain.hpp
@@ -574,9 +575,10 @@ void cluster(
             if (agg_nnz == 0) break;
 
             // Create sparse wrapper for aggregated graph
-            Sparse<T, IsCSR> agg_adj(
-                agg_indptr, agg_indices, agg_values,
-                current_n, current_n, agg_nnz
+            std::span<const Index> indptr_span(agg_indptr, static_cast<Size>(current_n + 1));
+            Sparse<T, IsCSR> agg_adj = Sparse<T, IsCSR>::wrap_traditional_unsafe(
+                current_n, current_n,
+                agg_values, agg_indices, indptr_span
             );
 
             // Compute degrees for aggregated graph

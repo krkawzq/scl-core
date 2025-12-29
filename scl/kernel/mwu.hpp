@@ -10,6 +10,7 @@
 #include "scl/core/macros.hpp"
 #include "scl/threading/parallel_for.hpp"
 #include "scl/threading/workspace.hpp"
+#include "scl/threading/scheduler.hpp"
 
 #include <cmath>
 #include <limits>
@@ -272,7 +273,7 @@ void mwu_test(
     }
 
     // Pre-allocate dual buffer pool for all threads
-    const Size n_threads = scl::threading::get_num_threads_runtime();
+    const Size n_threads = scl::threading::Scheduler::get_num_threads();
     scl::threading::DualWorkspacePool<T> buf_pool;
     buf_pool.init(n_threads, max_len);
 
@@ -358,9 +359,13 @@ void mwu_test(
         detail::compute_u_and_pvalue(R1, tie_sum, c, out_u_stats[static_cast<Index>(p)], out_p_values[static_cast<Index>(p)]);
 
         // Optionally compute AUROC
+        // AUROC = (U + n1*n2/2) / (n1*n2) = U/(n1*n2) + 0.5
+        // This ensures AUROC is in [0, 1] range
         if (out_auroc.ptr != nullptr) {
             auto U = static_cast<double>(out_u_stats[static_cast<Index>(p)]);
-            double auroc_val = (c.n1d * c.n2d > 0.0) ? (U / (c.n1d * c.n2d)) : 0.5;
+            double auroc_val = (c.n1d * c.n2d > 0.0) 
+                ? (U / (c.n1d * c.n2d) + 0.5) 
+                : 0.5;
             out_auroc[static_cast<Index>(p)] = static_cast<Real>(auroc_val);
         }
     });

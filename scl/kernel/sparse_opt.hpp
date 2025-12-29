@@ -135,7 +135,7 @@ SCL_FORCE_INLINE SCL_HOT T sparse_dot_dense(
                 indices.ptr, indices.ptr + len, col_idx);
             
             if (pos != indices.ptr + len && *pos == col_idx) {
-                Index k = static_cast<Index>(pos - indices.ptr);
+                auto k = static_cast<Index>(pos - indices.ptr);
                 result += values[k] * static_cast<T>(dense_vec[i]);
             }
         }
@@ -200,7 +200,7 @@ SCL_FORCE_INLINE SCL_HOT T column_squared_norm(
                 indices.ptr, indices.ptr + len, col_idx);
             
             if (pos != indices.ptr + len && *pos == col_idx) {
-                Index k = static_cast<Index>(pos - indices.ptr);
+                auto k = static_cast<Index>(pos - indices.ptr);
                 result += values[k] * values[k];
             }
         }
@@ -251,7 +251,7 @@ SCL_FORCE_INLINE void update_residuals_column(
                 indices.ptr, indices.ptr + len, col_idx);
             
             if (pos != indices.ptr + len && *pos == col_idx) {
-                Index k = static_cast<Index>(pos - indices.ptr);
+                auto k = static_cast<Index>(pos - indices.ptr);
                 residuals[i] -= static_cast<Real>(delta * values[k]);
             }
         }
@@ -273,7 +273,7 @@ void sparse_matvec(
         const Index n_rows = X.rows();
         
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_rows), [&](Size i) {
-            const Index idx = static_cast<Index>(i);
+            const auto idx = static_cast<Index>(i);
             const Index len = X.primary_length_unsafe(idx);
             if (len == 0) return;
             
@@ -353,12 +353,13 @@ Real estimate_lipschitz_constant(
     const Size n_rows_sz = static_cast<Size>(n_rows);
     
     // Power iteration to estimate largest singular value
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto v_ptr = scl::memory::aligned_alloc<Real>(n_cols_sz, SCL_ALIGNMENT);
     auto u_ptr = scl::memory::aligned_alloc<Real>(n_rows_sz, SCL_ALIGNMENT);
     auto Xv_ptr = scl::memory::aligned_alloc<Real>(n_rows_sz, SCL_ALIGNMENT);
-    Real* v = v_ptr.release();
-    Real* u = u_ptr.release();
-    Real* Xv = Xv_ptr.release();
+    Real* v = v_ptr.get();
+    Real* u = u_ptr.get();
+    Real* Xv = Xv_ptr.get();
     
     // Initialize v randomly
     for (Size i = 0; i < n_cols_sz; ++i) {
@@ -415,10 +416,7 @@ Real estimate_lipschitz_constant(
         }
     }
     
-    scl::memory::aligned_free(v, SCL_ALIGNMENT);
-    scl::memory::aligned_free(u, SCL_ALIGNMENT);
-    scl::memory::aligned_free(Xv, SCL_ALIGNMENT);
-    
+    // unique_ptr automatically frees memory when going out of scope
     return sigma * sigma * config::LIPSCHITZ_SCALING;
 }
 
@@ -459,7 +457,7 @@ void prox_l1(Array<Real> x, Real lambda) {
     }
     
     for (; i < n; ++i) {
-        x[i] = detail::soft_threshold(x[i], lambda);
+        x[static_cast<Index>(i)] = detail::soft_threshold(x[static_cast<Index>(i)], lambda);
     }
 }
 
@@ -498,8 +496,8 @@ void prox_elastic_net(Array<Real> x, Real lambda, Real l1_ratio) {
     }
     
     for (; i < n; ++i) {
-        Real soft = detail::soft_threshold(x[i], l1_lambda);
-        x[i] = soft * l2_scale;
+        Real soft = detail::soft_threshold(x[static_cast<Index>(i)], l1_lambda);
+        x[static_cast<Index>(i)] = soft * l2_scale;
     }
 }
 
@@ -532,12 +530,13 @@ void lasso_coordinate_descent(
     scl::algo::zero(coefficients.ptr, n_features_sz);
     
     // Allocate residuals: r = y - X * coef (initially r = y)
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
     auto col_norms_sq_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
     auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* residuals = residuals_ptr.release();
-    Real* col_norms_sq = col_norms_sq_ptr.release();
-    Real* coef_old = coef_old_ptr.release();
+    Real* residuals = residuals_ptr.get();
+    Real* col_norms_sq = col_norms_sq_ptr.get();
+    Real* coef_old = coef_old_ptr.get();
     
     scl::algo::copy(y.ptr, residuals, n_samples_sz);
     
@@ -578,9 +577,7 @@ void lasso_coordinate_descent(
         }
     }
     
-    scl::memory::aligned_free(residuals, SCL_ALIGNMENT);
-    scl::memory::aligned_free(col_norms_sq, SCL_ALIGNMENT);
-    scl::memory::aligned_free(coef_old, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -654,9 +651,7 @@ void elastic_net_coordinate_descent(
         }
     }
     
-    scl::memory::aligned_free(residuals, SCL_ALIGNMENT);
-    scl::memory::aligned_free(col_norms_sq, SCL_ALIGNMENT);
-    scl::memory::aligned_free(coef_old, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -688,12 +683,13 @@ void proximal_gradient(
     Real L = detail::estimate_lipschitz_constant(X);
     Real step_size = Real(1.0) / L;
     
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
     auto gradient_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
     auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* residuals = residuals_ptr.release();
-    Real* gradient = gradient_ptr.release();
-    Real* coef_old = coef_old_ptr.release();
+    Real* residuals = residuals_ptr.get();
+    Real* gradient = gradient_ptr.get();
+    Real* coef_old = coef_old_ptr.get();
     
     for (Index iter = 0; iter < max_iter; ++iter) {
         scl::algo::copy(coefficients.ptr, coef_old, n_features_sz);
@@ -701,7 +697,7 @@ void proximal_gradient(
         // Compute residuals: r = X * coef - y
         detail::sparse_matvec(X, coefficients.ptr, residuals, n_samples_sz);
         for (Size i = 0; i < n_samples_sz; ++i) {
-            residuals[i] -= y[i];
+            residuals[i] -= y[static_cast<Index>(i)];
         }
         
         // Compute gradient: grad = X^T * residuals
@@ -726,7 +722,7 @@ void proximal_gradient(
         
         // Gradient step
         for (Size j = 0; j < n_features_sz; ++j) {
-            coefficients[j] -= step_size * gradient[j];
+            coefficients[static_cast<Index>(j)] -= step_size * gradient[static_cast<Index>(j)];
         }
         
         // Proximal step
@@ -741,12 +737,12 @@ void proximal_gradient(
                 break;
             case RegularizationType::SCAD:
                 for (Size j = 0; j < n_features_sz; ++j) {
-                    coefficients[j] = detail::prox_scad(coefficients[j], prox_lambda);
+                    coefficients[static_cast<Index>(j)] = detail::prox_scad(coefficients[static_cast<Index>(j)], prox_lambda);
                 }
                 break;
             case RegularizationType::MCP:
                 for (Size j = 0; j < n_features_sz; ++j) {
-                    coefficients[j] = detail::prox_mcp(coefficients[j], prox_lambda);
+                    coefficients[static_cast<Index>(j)] = detail::prox_mcp(coefficients[static_cast<Index>(j)], prox_lambda);
                 }
                 break;
             case RegularizationType::L2:
@@ -754,7 +750,7 @@ void proximal_gradient(
                 {
                     Real scale = Real(1.0) / (Real(1.0) + prox_lambda);
                     for (Size j = 0; j < n_features_sz; ++j) {
-                        coefficients[j] *= scale;
+                        coefficients[static_cast<Index>(j)] *= scale;
                     }
                 }
                 break;
@@ -765,9 +761,7 @@ void proximal_gradient(
         }
     }
     
-    scl::memory::aligned_free(residuals, SCL_ALIGNMENT);
-    scl::memory::aligned_free(gradient, SCL_ALIGNMENT);
-    scl::memory::aligned_free(coef_old, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -797,14 +791,15 @@ void fista(
     Real L = detail::estimate_lipschitz_constant(X);
     Real step_size = Real(1.0) / L;
     
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
     auto gradient_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
     auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
     auto z_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* residuals = residuals_ptr.release();
-    Real* gradient = gradient_ptr.release();
-    Real* coef_old = coef_old_ptr.release();
-    Real* z = z_ptr.release();  // Momentum term
+    Real* residuals = residuals_ptr.get();
+    Real* gradient = gradient_ptr.get();
+    Real* coef_old = coef_old_ptr.get();
+    Real* z = z_ptr.get();  // Momentum term
     
     scl::algo::zero(z, n_features_sz);
     
@@ -816,7 +811,7 @@ void fista(
         // Compute residuals: r = X * z - y
         detail::sparse_matvec(X, z, residuals, n_samples_sz);
         for (Size i = 0; i < n_samples_sz; ++i) {
-            residuals[i] -= y[i];
+            residuals[i] -= y[static_cast<Index>(i)];
         }
         
         // Compute gradient: grad = X^T * residuals
@@ -841,7 +836,7 @@ void fista(
         
         // Gradient step on z
         for (Size j = 0; j < n_features_sz; ++j) {
-            coefficients[j] = z[j] - step_size * gradient[j];
+            coefficients[static_cast<Index>(j)] = z[static_cast<Index>(j)] - step_size * gradient[static_cast<Index>(j)];
         }
         
         // Proximal step (soft thresholding)
@@ -852,7 +847,7 @@ void fista(
         Real momentum = (t - Real(1.0)) / t_new;
         
         for (Size j = 0; j < n_features_sz; ++j) {
-            z[j] = coefficients[j] + momentum * (coefficients[j] - coef_old[j]);
+            z[static_cast<Index>(j)] = coefficients[static_cast<Index>(j)] + momentum * (coefficients[static_cast<Index>(j)] - coef_old[static_cast<Index>(j)]);
         }
         
         t = t_new;
@@ -862,10 +857,7 @@ void fista(
         }
     }
     
-    scl::memory::aligned_free(residuals, SCL_ALIGNMENT);
-    scl::memory::aligned_free(gradient, SCL_ALIGNMENT);
-    scl::memory::aligned_free(coef_old, SCL_ALIGNMENT);
-    scl::memory::aligned_free(z, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -896,20 +888,21 @@ void iht(
     Real L = detail::estimate_lipschitz_constant(X);
     Real step_size = Real(1.0) / L;
     
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
     auto gradient_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
     auto abs_coef_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
     auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(n_features_sz, SCL_ALIGNMENT);
-    Real* residuals = residuals_ptr.release();
-    Real* gradient = gradient_ptr.release();
-    Real* abs_coef = abs_coef_ptr.release();
-    Index* sorted_idx = sorted_idx_ptr.release();
+    Real* residuals = residuals_ptr.get();
+    Real* gradient = gradient_ptr.get();
+    Real* abs_coef = abs_coef_ptr.get();
+    Index* sorted_idx = sorted_idx_ptr.get();
     
     for (Index iter = 0; iter < max_iter; ++iter) {
         // Compute residuals: r = X * coef - y
         detail::sparse_matvec(X, coefficients.ptr, residuals, n_samples_sz);
         for (Size i = 0; i < n_samples_sz; ++i) {
-            residuals[i] -= y[i];
+            residuals[i] -= y[static_cast<Index>(i)];
         }
         
         // Compute gradient
@@ -934,12 +927,12 @@ void iht(
         
         // Gradient step
         for (Size j = 0; j < n_features_sz; ++j) {
-            coefficients[j] -= step_size * gradient[j];
+            coefficients[static_cast<Index>(j)] -= step_size * gradient[static_cast<Index>(j)];
         }
         
         // Hard thresholding: keep only top-k by absolute value
         for (Size j = 0; j < n_features_sz; ++j) {
-            abs_coef[j] = (coefficients[j] >= Real(0)) ? coefficients[j] : -coefficients[j];
+            abs_coef[static_cast<Index>(j)] = (coefficients[static_cast<Index>(j)] >= Real(0)) ? coefficients[static_cast<Index>(j)] : -coefficients[static_cast<Index>(j)];
             sorted_idx[j] = static_cast<Index>(j);
         }
         
@@ -950,17 +943,14 @@ void iht(
         
         // Zero out elements below threshold
         for (Size j = 0; j < n_features_sz; ++j) {
-            Real abs_val = (coefficients[j] >= Real(0)) ? coefficients[j] : -coefficients[j];
+            Real abs_val = (coefficients[static_cast<Index>(j)] >= Real(0)) ? coefficients[static_cast<Index>(j)] : -coefficients[static_cast<Index>(j)];
             if (abs_val < threshold) {
-                coefficients[j] = Real(0);
+                coefficients[static_cast<Index>(j)] = Real(0);
             }
         }
     }
     
-    scl::memory::aligned_free(residuals, SCL_ALIGNMENT);
-    scl::memory::aligned_free(gradient, SCL_ALIGNMENT);
-    scl::memory::aligned_free(abs_coef, SCL_ALIGNMENT);
-    scl::memory::aligned_free(sorted_idx, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -976,13 +966,14 @@ void lasso_path(
     Real* coefficient_paths,
     Index max_iter
 ) {
-    const Index n_alphas = static_cast<Index>(alphas.len);
+    const auto n_alphas = static_cast<Index>(alphas.len);
     const Index n_features = X.cols();
     const Size n_features_sz = static_cast<Size>(n_features);
     
     // Warm start from previous solution
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto current_coef_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* current_coef = current_coef_ptr.release();
+    Real* current_coef = current_coef_ptr.get();
     scl::algo::zero(current_coef, n_features_sz);
     
     for (Index a = 0; a < n_alphas; ++a) {
@@ -996,7 +987,7 @@ void lasso_path(
         scl::algo::copy(coef_out.ptr, current_coef, n_features_sz);
     }
     
-    scl::memory::aligned_free(current_coef, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -1025,10 +1016,11 @@ void group_lasso(
     
     scl::algo::zero(coefficients.ptr, n_features_sz);
     
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto residuals_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
     auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* residuals = residuals_ptr.release();
-    Real* coef_old = coef_old_ptr.release();
+    Real* residuals = residuals_ptr.get();
+    Real* coef_old = coef_old_ptr.get();
     
     scl::algo::copy(y.ptr, residuals, n_samples_sz);
     
@@ -1043,10 +1035,11 @@ void group_lasso(
             if (group_size == 0) continue;
             
             // Compute group gradient
+            // PERFORMANCE: RAII memory management with unique_ptr
             auto group_grad_ptr = scl::memory::aligned_alloc<Real>(group_size, SCL_ALIGNMENT);
             auto group_coef_ptr = scl::memory::aligned_alloc<Real>(group_size, SCL_ALIGNMENT);
-            Real* group_grad = group_grad_ptr.release();
-            Real* group_coef = group_coef_ptr.release();
+            Real* group_grad = group_grad_ptr.get();
+            Real* group_coef = group_coef_ptr.get();
             
             for (Size j = 0; j < group_size; ++j) {
                 Index feat_idx = group_indices[group_start + j];
@@ -1091,8 +1084,7 @@ void group_lasso(
                 }
             }
             
-            scl::memory::aligned_free(group_grad, SCL_ALIGNMENT);
-            scl::memory::aligned_free(group_coef, SCL_ALIGNMENT);
+            // unique_ptr automatically frees memory when going out of scope
         }
         
         if (detail::check_convergence(coef_old, coefficients.ptr, n_features_sz, config::DEFAULT_TOL)) {
@@ -1100,8 +1092,7 @@ void group_lasso(
         }
     }
     
-    scl::memory::aligned_free(residuals, SCL_ALIGNMENT);
-    scl::memory::aligned_free(coef_old, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -1131,16 +1122,17 @@ void sparse_logistic_regression(
     Real intercept = Real(0);
     
     // Working response and weights
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto linear_pred_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
     auto prob_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
     auto weights_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
     auto working_response_ptr = scl::memory::aligned_alloc<Real>(n_samples_sz, SCL_ALIGNMENT);
     auto coef_old_ptr = scl::memory::aligned_alloc<Real>(n_features_sz, SCL_ALIGNMENT);
-    Real* linear_pred = linear_pred_ptr.release();
-    Real* prob = prob_ptr.release();
-    Real* weights = weights_ptr.release();
-    Real* working_response = working_response_ptr.release();
-    Real* coef_old = coef_old_ptr.release();
+    Real* linear_pred = linear_pred_ptr.get();
+    Real* prob = prob_ptr.get();
+    Real* weights = weights_ptr.get();
+    Real* working_response = working_response_ptr.get();
+    Real* coef_old = coef_old_ptr.get();
     
     scl::algo::zero(linear_pred, n_samples_sz);
     
@@ -1163,7 +1155,7 @@ void sparse_logistic_regression(
             weights[i] = scl::algo::max2(prob[i] * (Real(1.0) - prob[i]), config::EPS);
             
             // Working response
-            Real y_val = static_cast<Real>(y_binary[i]);
+            Real y_val = static_cast<Real>(y_binary[static_cast<Index>(i)]);
             working_response[i] = z + (y_val - prob[i]) / weights[i];
         }
         
@@ -1206,7 +1198,7 @@ void sparse_logistic_regression(
                         indices.ptr, indices.ptr + len, j);
                     
                     if (pos != indices.ptr + len && *pos == j) {
-                        Index k = static_cast<Index>(pos - indices.ptr);
+                        auto k = static_cast<Index>(pos - indices.ptr);
                         Real x_ij = static_cast<Real>(values[k]);
                         weighted_norm_sq += weights[i] * x_ij * x_ij;
                         rho += weights[i] * x_ij * (working_response[i] - intercept);
@@ -1244,7 +1236,7 @@ void sparse_logistic_regression(
                             indices.ptr, indices.ptr + len, j);
                         
                         if (pos != indices.ptr + len && *pos == j) {
-                            Index k = static_cast<Index>(pos - indices.ptr);
+                            auto k = static_cast<Index>(pos - indices.ptr);
                             linear_pred[i] += delta * static_cast<Real>(values[k]);
                         }
                     }
@@ -1259,11 +1251,7 @@ void sparse_logistic_regression(
         }
     }
     
-    scl::memory::aligned_free(linear_pred, SCL_ALIGNMENT);
-    scl::memory::aligned_free(prob, SCL_ALIGNMENT);
-    scl::memory::aligned_free(weights, SCL_ALIGNMENT);
-    scl::memory::aligned_free(working_response, SCL_ALIGNMENT);
-    scl::memory::aligned_free(coef_old, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 } // namespace scl::kernel::sparse_opt

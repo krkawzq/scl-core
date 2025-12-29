@@ -170,7 +170,7 @@ void auroc_with_fc(
         // Compute log2 fold change
         double mean1 = sum1 * c.inv_n1;
         double mean2 = sum2 * c.inv_n2;
-        out_log2_fc[static_cast<Index>(p)] = compute_log2_fc(mean1, mean2);
+        out_log2_fc[static_cast<Index>(p)] = scl::kernel::stat::compute_log2_fc(mean1, mean2);
 
         if (SCL_UNLIKELY(n1 == 0 && n2 == 0)) {
             out_auroc[static_cast<Index>(p)] = Real(0.5);

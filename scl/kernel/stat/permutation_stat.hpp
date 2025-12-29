@@ -467,6 +467,7 @@ Real permutation_test_single(
     }
     Real p_value = static_cast<Real>(count + 1) / static_cast<Real>(n_permutations + 1);
 
+    // Memory will be automatically freed by unique_ptr destructors
     return p_value;
 }
 

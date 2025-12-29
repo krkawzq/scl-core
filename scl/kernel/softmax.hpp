@@ -49,7 +49,8 @@ namespace detail {
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T simd_max(const T* SCL_RESTRICT vals, Size len) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const size_t lanes = s::Lanes(d);
 
     auto v_max0 = s::Set(d, -std::numeric_limits<T>::infinity());
@@ -127,7 +128,8 @@ SCL_FORCE_INLINE SCL_HOT T exp_sum_short(T* SCL_RESTRICT vals, Size len, T max_v
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T exp_sum_medium(T* SCL_RESTRICT vals, Size len, T max_val) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const size_t lanes = s::Lanes(d);
 
     const auto v_max = s::Set(d, max_val);
@@ -190,7 +192,8 @@ SCL_FORCE_INLINE SCL_HOT T exp_sum_medium(T* SCL_RESTRICT vals, Size len, T max_
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T exp_sum_long(T* SCL_RESTRICT vals, Size len, T max_val) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const size_t lanes = s::Lanes(d);
 
     const auto v_max = s::Set(d, max_val);
@@ -323,7 +326,8 @@ SCL_FORCE_INLINE SCL_HOT T log_exp_sum_short(const T* SCL_RESTRICT vals, Size le
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T log_exp_sum_medium(const T* SCL_RESTRICT vals, Size len, T max_val) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const size_t lanes = s::Lanes(d);
 
     const auto v_max = s::Set(d, max_val);
@@ -369,7 +373,8 @@ SCL_FORCE_INLINE SCL_HOT T log_exp_sum_medium(const T* SCL_RESTRICT vals, Size l
 template <typename T>
 SCL_FORCE_INLINE SCL_HOT T log_exp_sum_long(const T* SCL_RESTRICT vals, Size len, T max_val) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const size_t lanes = s::Lanes(d);
 
     const auto v_max = s::Set(d, max_val);
@@ -458,7 +463,8 @@ SCL_FORCE_INLINE T log_exp_sum_adaptive(const T* SCL_RESTRICT vals, Size len, T 
 template <typename T>
 SCL_FORCE_INLINE void normalize_simd(T* SCL_RESTRICT vals, Size len, T inv_sum) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const size_t lanes = s::Lanes(d);
 
     const auto v_inv_sum = s::Set(d, inv_sum);
@@ -498,7 +504,8 @@ SCL_FORCE_INLINE void normalize_scalar(T* SCL_RESTRICT vals, Size len, T inv_sum
 template <typename T>
 SCL_FORCE_INLINE void subtract_offset_simd(T* SCL_RESTRICT vals, Size len, T offset) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const size_t lanes = s::Lanes(d);
 
     const auto v_offset = s::Set(d, offset);
@@ -577,7 +584,8 @@ SCL_FORCE_INLINE void softmax_with_temperature(T* SCL_RESTRICT vals, Size len, T
 
     // Scale by inverse temperature
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const size_t lanes = s::Lanes(d);
 
     if (len >= config::SHORT_THRESHOLD) {
@@ -639,7 +647,8 @@ SCL_FORCE_INLINE void log_softmax_with_temperature(T* SCL_RESTRICT vals, Size le
 
     // Scale by inverse temperature
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const size_t lanes = s::Lanes(d);
 
     if (len >= config::SHORT_THRESHOLD) {

@@ -828,7 +828,7 @@ inline void alra_impute(
                 }
                 scl::memory::aligned_free(partials[t], SCL_ALIGNMENT);
             }
-            scl::memory::aligned_free(partials, SCL_ALIGNMENT);
+            // Note: partials_ptr (unique_ptr) will automatically free partials array when it goes out of scope
 
             // Orthogonalize v
             for (Index p = 0; p < comp; ++p) {
@@ -934,9 +934,12 @@ void impute_selected_genes(
 
         for (Index gi = 0; gi < n_impute_genes; ++gi) {
             Index g = genes_to_impute[gi];
+            
+            // Boundary check
+            if (SCL_UNLIKELY(g < 0 || g >= n_genes)) continue;
 
             // Check original value
-            Real orig = detail::get_expression(X, static_cast<Index>(c), g, n_cells, n_genes);
+            Real orig = detail::get_expression(X, static_cast<Index>(c), g);
 
             if (orig > config::DISTANCE_EPSILON) {
                 out_row[gi] = orig;

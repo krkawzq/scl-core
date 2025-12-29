@@ -126,7 +126,8 @@ void oneway_anova(
         double grand_mean = grand_sum * inv_N;
 
         // Compute group means (including zeros)
-        auto group_means = scl::memory::aligned_alloc<double>(n_groups, SCL_ALIGNMENT);
+        auto group_means_ptr = scl::memory::aligned_alloc<double>(n_groups, SCL_ALIGNMENT);
+        double* group_means = group_means_ptr.get();
         for (Size g = 0; g < n_groups; ++g) {
             group_means[g] = sums[g] * inv_group_sizes[g];
         }

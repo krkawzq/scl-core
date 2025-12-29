@@ -176,7 +176,7 @@ Index inspect_slice_primary(
     if (n_keep == 0) return 0;
     
     return detail::parallel_reduce_nnz(n_keep, [&](Size i) -> Index {
-        Index idx = keep_indices[i];
+        Index idx = keep_indices[static_cast<Index>(i)];
         SCL_CHECK_ARG(idx >= 0 && idx < n_primary, "Slice: Index out of bounds");
         return matrix.primary_length_unsafe(idx);
     });
@@ -196,18 +196,18 @@ void materialize_slice_primary(
     
     out_indptr[0] = 0;
     for (Size i = 0; i < n_keep; ++i) {
-        Index src_idx = keep_indices[i];
+        Index src_idx = keep_indices[static_cast<Index>(i)];
         Index len = matrix.primary_length_unsafe(src_idx);
-        out_indptr[i + 1] = out_indptr[i] + len;
+        out_indptr[static_cast<Index>(i) + 1] = out_indptr[static_cast<Index>(i)] + len;
     }
     
     if (n_keep < PARALLEL_THRESHOLD_ROWS) {
         for (Size i = 0; i < n_keep; ++i) {
-            Index src_idx = keep_indices[i];
+            Index src_idx = keep_indices[static_cast<Index>(i)];
             Index len = matrix.primary_length_unsafe(src_idx);
             if (len == 0) continue;
             
-            Index dst_start = out_indptr[i];
+            Index dst_start = out_indptr[static_cast<Index>(i)];
             auto src_values = matrix.primary_values_unsafe(src_idx);
             auto src_indices = matrix.primary_indices_unsafe(src_idx);
             
@@ -225,11 +225,11 @@ void materialize_slice_primary(
         }
     } else {
         scl::threading::parallel_for(Size(0), n_keep, [&](Size i) {
-            Index src_idx = keep_indices[i];
+            Index src_idx = keep_indices[static_cast<Index>(i)];
             Index len = matrix.primary_length_unsafe(src_idx);
             if (len == 0) return;
             
-            Index dst_start = out_indptr[i];
+            Index dst_start = out_indptr[static_cast<Index>(i)];
             auto src_values = matrix.primary_values_unsafe(src_idx);
             auto src_indices = matrix.primary_indices_unsafe(src_idx);
             
@@ -288,7 +288,7 @@ Sparse<T, IsCSR> slice_primary(
     
     // Use from_contiguous_arrays with take_ownership to properly register
     // memory with registry for automatic lifecycle management
-    return from_contiguous_arrays<T, IsCSR>(
+    return scl::kernel::sparse::from_contiguous_arrays<T, IsCSR>(
         data_ptr, indices_ptr, indptr_ptr,
         new_rows, new_cols, out_nnz,
         true  // take_ownership - register with registry
@@ -304,7 +304,7 @@ Index inspect_filter_secondary(
     const uint8_t* mask_ptr = mask.ptr;
     
     return detail::parallel_reduce_nnz(static_cast<Size>(n_primary), [&](Size p) -> Index {
-        const Index idx = static_cast<Index>(p);
+        const auto idx = static_cast<Index>(p);
         const Index len = matrix.primary_length_unsafe(idx);
         if (len == 0) return 0;
         
@@ -362,13 +362,13 @@ void materialize_filter_secondary(
         }
     } else {
         scl::threading::parallel_for(Size(0), static_cast<Size>(n_primary), [&](Size p) {
-            const Index idx = static_cast<Index>(p);
+            const auto idx = static_cast<Index>(p);
             const Index len = matrix.primary_length_unsafe(idx);
             if (len == 0) return;
             
             auto values = matrix.primary_values_unsafe(idx);
             auto indices = matrix.primary_indices_unsafe(idx);
-            Index dst_pos = out_indptr[p];
+            Index dst_pos = out_indptr[static_cast<Index>(p)];
             
             for (Index k = 0; k < len; ++k) {
                 Index old_idx = indices[k];
@@ -444,7 +444,7 @@ Sparse<T, IsCSR> filter_secondary(
 
     // Use from_contiguous_arrays with take_ownership to properly register
     // memory with registry for automatic lifecycle management
-    return from_contiguous_arrays<T, IsCSR>(
+    return scl::kernel::sparse::from_contiguous_arrays<T, IsCSR>(
         data_ptr, indices_ptr, indptr_ptr,
         new_rows, new_cols, out_nnz,
         true  // take_ownership - register with registry

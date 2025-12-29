@@ -99,19 +99,30 @@ public:
 
     // Lemire's nearly divisionless method (compatible implementation)
     SCL_FORCE_INLINE Size bounded(Size n) noexcept {
+        if (SCL_UNLIKELY(n == 0)) return 0;
+        
         uint64_t x = next();
         uint64_t m = 0;
         
         #if defined(__SIZEOF_INT128__) && defined(__GNUC__)
-        m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
+        // Lemire's algorithm: compute m = floor((x * n) / 2^64)
+        // Then check if we need to reject and resample
+        const auto n_u64 = static_cast<uint64_t>(n);
         // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
-        const uint64_t threshold = static_cast<uint64_t>(-static_cast<int64_t>(n)) % n;
-        while (static_cast<__uint128_t>(m) * static_cast<__uint128_t>(n) < static_cast<__uint128_t>(x)) {
+        const uint64_t threshold = static_cast<uint64_t>(-static_cast<int64_t>(n_u64)) % n_u64;
+        
+        while (true) {
+            m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n_u64)) >> 64);
+            // Reject if m * n < x (bias correction)
+            if (SCL_LIKELY(static_cast<__uint128_t>(m) * static_cast<__uint128_t>(n_u64) >= static_cast<__uint128_t>(x))) {
+                break;
+            }
+            // Fast rejection using threshold (optimization)
+            if (SCL_LIKELY(x >= threshold)) {
+                break;
+            }
             x = next();
-            m = static_cast<uint64_t>((static_cast<__uint128_t>(x) * static_cast<__uint128_t>(n)) >> 64);
         }
-        // Use threshold to suppress unused warning
-        (void)threshold;
         #else
         // Fallback: use modulo (slightly slower but more compatible)
         m = x % static_cast<uint64_t>(n);

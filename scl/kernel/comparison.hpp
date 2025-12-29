@@ -186,9 +186,9 @@ SCL_FORCE_INLINE Real wilcoxon_pvalue(
     Real p = Real(2.0) * (Real(1.0) - Real(0.5) * (Real(1.0) +
         std::erf(abs_z / std::sqrt(Real(2.0)))));
 
-    scl::memory::aligned_free(combined);
-    scl::memory::aligned_free(indices);
-    scl::memory::aligned_free(ranks);
+    scl::memory::aligned_free(combined, SCL_ALIGNMENT);
+    scl::memory::aligned_free(indices, SCL_ALIGNMENT);
+    scl::memory::aligned_free(ranks, SCL_ALIGNMENT);
 
     return p;
 }
@@ -289,11 +289,11 @@ void composition_analysis(
             p_values[static_cast<Index>(t)] = Real(1.0);
         }
 
-        scl::memory::aligned_free(expected);
+        scl::memory::aligned_free(expected, SCL_ALIGNMENT);
     });
 
-    scl::memory::aligned_free(counts);
-    scl::memory::aligned_free(total_per_condition);
+    scl::memory::aligned_free(counts, SCL_ALIGNMENT);
+    scl::memory::aligned_free(total_per_condition, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -383,8 +383,8 @@ void abundance_test(
         p_values.ptr[c_idx] = detail::fisher_pvalue_approx(a, b, c_val, d);
     });
 
-    scl::memory::aligned_free(counts);
-    scl::memory::aligned_free(total_per_cond);
+    scl::memory::aligned_free(counts, SCL_ALIGNMENT);
+    scl::memory::aligned_free(total_per_cond, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -480,8 +480,8 @@ void differential_abundance(
     // Wilcoxon test for each cluster (parallel with WorkspacePool)
     scl::threading::WorkspacePool<Real> pool0;
     scl::threading::WorkspacePool<Real> pool1;
-    pool0.init(scl::threading::Scheduler::get_num_threads(), n_cond0);
-    pool1.init(scl::threading::Scheduler::get_num_threads(), n_cond1);
+    pool0.init(scl::threading::get_num_threads_runtime(), n_cond0);
+    pool1.init(scl::threading::get_num_threads_runtime(), n_cond1);
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(n_clusters), [&](Size c, size_t thread_rank) {
         Real* group0 = pool0.get(thread_rank);
@@ -522,10 +522,10 @@ void differential_abundance(
         p_values.ptr[c_idx] = detail::wilcoxon_pvalue(group0, idx0, group1, idx1);
     });
 
-    scl::memory::aligned_free(sample_to_cond);
-    scl::memory::aligned_free(counts);
-    scl::memory::aligned_free(total_per_sample);
-    scl::memory::aligned_free(props);
+    scl::memory::aligned_free(sample_to_cond, SCL_ALIGNMENT);
+    scl::memory::aligned_free(counts, SCL_ALIGNMENT);
+    scl::memory::aligned_free(total_per_sample, SCL_ALIGNMENT);
+    scl::memory::aligned_free(props, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -571,8 +571,8 @@ void condition_response(
     // Parallel over genes with WorkspacePool
     scl::threading::WorkspacePool<Real> pool0;
     scl::threading::WorkspacePool<Real> pool1;
-    pool0.init(scl::threading::Scheduler::get_num_threads(), n_cond0);
-    pool1.init(scl::threading::Scheduler::get_num_threads(), n_cond1);
+    pool0.init(scl::threading::get_num_threads_runtime(), n_cond0);
+    pool1.init(scl::threading::get_num_threads_runtime(), n_cond1);
 
     scl::threading::parallel_for(Size(0), n_genes, [&](Size g, size_t thread_rank) {
         Real* group0 = pool0.get(thread_rank);
@@ -638,7 +638,7 @@ void condition_response(
                 }
             }
 
-            scl::memory::aligned_free(gene_expr);
+            scl::memory::aligned_free(gene_expr, SCL_ALIGNMENT);
         }
 
         // Response score: log2 fold change

@@ -107,10 +107,9 @@ Sparse<T, IsCSR> vstack(
     const Index total_primary = primary1 + primary2;
     const Index total_secondary = scl::algo::max2(secondary1, secondary2);
 
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto nnzs_ptr = scl::memory::aligned_alloc<Index>(total_primary, SCL_ALIGNMENT);
-
-
-    Index* nnzs = nnzs_ptr.release();
+    Index* nnzs = nnzs_ptr.get();
     for (Index i = 0; i < primary1; ++i) {
         nnzs[i] = matrix1.primary_length_unsafe(i);
     }
@@ -125,7 +124,7 @@ Sparse<T, IsCSR> vstack(
         strategy
     );
 
-    scl::memory::aligned_free(nnzs, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary1), [&](size_t i) {
         const auto idx = static_cast<Index>(i);
@@ -175,10 +174,9 @@ Sparse<T, IsCSR> hstack(
     const Index primary_dim = primary1;
     const Index total_secondary = secondary1 + secondary2;
 
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto nnzs_ptr = scl::memory::aligned_alloc<Index>(primary_dim, SCL_ALIGNMENT);
-
-
-    Index* nnzs = nnzs_ptr.release();
+    Index* nnzs = nnzs_ptr.get();
     for (Index i = 0; i < primary_dim; ++i) {
         nnzs[i] = matrix1.primary_length_unsafe(i) + matrix2.primary_length_unsafe(i);
     }
@@ -190,7 +188,7 @@ Sparse<T, IsCSR> hstack(
         strategy
     );
 
-    scl::memory::aligned_free(nnzs, SCL_ALIGNMENT);
+    // unique_ptr automatically frees memory when going out of scope
 
     scl::threading::parallel_for(Size(0), static_cast<Size>(primary_dim), [&](size_t p) {
         const auto idx = static_cast<Index>(p);

@@ -244,21 +244,18 @@ void spatial_variability(
     Real bandwidth = detail::estimate_bandwidth(coordinates, n_cells, n_dims);
 
     // Compute spatial weights matrix
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto weights_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
-
-    Real* weights = weights_ptr.release();
+    Real* weights = weights_ptr.get();
     detail::compute_spatial_weights(coordinates, n_cells, n_dims, bandwidth, weights);
 
     // Extract gene expression values
     auto gene_values_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-
-    Real* gene_values = gene_values_ptr.release();
+    Real* gene_values = gene_values_ptr.get();
     auto permuted_values_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-
-    Real* permuted_values = permuted_values_ptr.release();
+    Real* permuted_values = permuted_values_ptr.get();
     auto perm_indices_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
-
-    Index* perm_indices = perm_indices_ptr.release();
+    Index* perm_indices = perm_indices_ptr.get();
 
     detail::LCG rng(seed);
 
@@ -311,10 +308,7 @@ void spatial_variability(
                      (static_cast<Real>(n_permutations) + Real(1.0));
     }
 
-    scl::memory::aligned_free(weights);
-    scl::memory::aligned_free(gene_values);
-    scl::memory::aligned_free(permuted_values);
-    scl::memory::aligned_free(perm_indices);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -338,10 +332,10 @@ void spatial_gradient(
     // expression ~ a + b1*x1 + b2*x2 + ...
 
     // Compute means
+    // PERFORMANCE: RAII memory management with unique_ptr
     Real expr_mean = Real(0.0);
     auto coord_means_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
-
-    Real* coord_means = coord_means_ptr.release();
+    Real* coord_means = coord_means_ptr.get();
 
     for (Size d = 0; d < n_dims; ++d) {
         coord_means[d] = Real(0.0);
@@ -360,12 +354,11 @@ void spatial_gradient(
     }
 
     // Compute covariance and variance
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto cov_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
-
-    Real* cov = cov_ptr.release();
     auto var_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
-
-    Real* var = var_ptr.release();
+    Real* cov = cov_ptr.get();
+    Real* var = var_ptr.get();
 
     for (Size d = 0; d < n_dims; ++d) {
         cov[d] = Real(0.0);
@@ -403,9 +396,7 @@ void spatial_gradient(
         }
     }
 
-    scl::memory::aligned_free(coord_means);
-    scl::memory::aligned_free(cov);
-    scl::memory::aligned_free(var);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -427,16 +418,13 @@ void periodic_pattern(
 
     if (n_cells == 0 || n_genes == 0 || n_wavelengths == 0) return;
 
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto gene_values_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-
-
-    Real* gene_values = gene_values_ptr.release();
     auto cos_basis_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-
-    Real* cos_basis = cos_basis_ptr.release();
     auto sin_basis_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-
-    Real* sin_basis = sin_basis_ptr.release();
+    Real* gene_values = gene_values_ptr.get();
+    Real* cos_basis = cos_basis_ptr.get();
+    Real* sin_basis = sin_basis_ptr.get();
 
     for (Size g = 0; g < n_genes; ++g) {
         // Extract gene expression
@@ -527,9 +515,7 @@ void periodic_pattern(
         dominant_wavelengths[g] = best_wavelength;
     }
 
-    scl::memory::aligned_free(gene_values);
-    scl::memory::aligned_free(cos_basis);
-    scl::memory::aligned_free(sin_basis);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -553,15 +539,13 @@ void boundary_detection(
     n_neighbors = scl::algo::min2(n_neighbors, n_cells - 1);
 
     // Find k-nearest neighbors for each cell
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto neighbors_ptr = scl::memory::aligned_alloc<Index>(n_cells * n_neighbors, SCL_ALIGNMENT);
-
-    Index* neighbors = neighbors_ptr.release();
     auto distances_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-
-    Real* distances = distances_ptr.release();
     auto sorted_idx_ptr = scl::memory::aligned_alloc<Index>(n_cells, SCL_ALIGNMENT);
-
-    Index* sorted_idx = sorted_idx_ptr.release();
+    Index* neighbors = neighbors_ptr.get();
+    Real* distances = distances_ptr.get();
+    Index* sorted_idx = sorted_idx_ptr.get();
 
     for (Size i = 0; i < n_cells; ++i) {
         // Compute distances to all other cells
@@ -584,12 +568,11 @@ void boundary_detection(
     }
 
     // Compute boundary score based on expression heterogeneity
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto expr_i_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-
-    Real* expr_i = expr_i_ptr.release();
     auto expr_j_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-
-    Real* expr_j = expr_j_ptr.release();
+    Real* expr_i = expr_i_ptr.get();
+    Real* expr_j = expr_j_ptr.get();
 
     for (Size i = 0; i < n_cells; ++i) {
         // Extract expression for cell i
@@ -648,11 +631,7 @@ void boundary_detection(
         }
     }
 
-    scl::memory::aligned_free(neighbors);
-    scl::memory::aligned_free(distances);
-    scl::memory::aligned_free(sorted_idx);
-    scl::memory::aligned_free(expr_i);
-    scl::memory::aligned_free(expr_j);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -677,20 +656,16 @@ void spatial_domain(
     n_domains = scl::algo::min2(static_cast<Size>(n_domains), n_cells);
 
     // Combined feature space: spatial + expression (PCA-reduced)
+    // PERFORMANCE: RAII memory management with unique_ptr
     Size n_features = n_dims + scl::algo::min2(n_genes, Size(10));
-
     auto features_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_features, SCL_ALIGNMENT);
-
-
-    Real* features = features_ptr.release();
+    Real* features = features_ptr.get();
 
     // Copy spatial coordinates (normalized)
     auto coord_min_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
-
-    Real* coord_min = coord_min_ptr.release();
     auto coord_max_ptr = scl::memory::aligned_alloc<Real>(n_dims, SCL_ALIGNMENT);
-
-    Real* coord_max = coord_max_ptr.release();
+    Real* coord_min = coord_min_ptr.get();
+    Real* coord_max = coord_max_ptr.get();
 
     for (Size d = 0; d < n_dims; ++d) {
         coord_min[d] = std::numeric_limits<Real>::max();
@@ -718,12 +693,11 @@ void spatial_domain(
     }
 
     // Add expression features (top variable genes)
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto gene_var_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-
-    Real* gene_var = gene_var_ptr.release();
     auto gene_mean_ptr = scl::memory::aligned_alloc<Real>(n_genes, SCL_ALIGNMENT);
-
-    Real* gene_mean = gene_mean_ptr.release();
+    Real* gene_var = gene_var_ptr.get();
+    Real* gene_mean = gene_mean_ptr.get();
 
     for (Size g = 0; g < n_genes; ++g) {
         gene_mean[g] = Real(0.0);
@@ -758,10 +732,10 @@ void spatial_domain(
     }
 
     // Select top variable genes
+    // PERFORMANCE: RAII memory management with unique_ptr
     Size n_expr_features = n_features - n_dims;
     auto top_genes_ptr = scl::memory::aligned_alloc<Index>(n_genes, SCL_ALIGNMENT);
-
-    Index* top_genes = top_genes_ptr.release();
+    Index* top_genes = top_genes_ptr.get();
     for (Size g = 0; g < n_genes; ++g) {
         top_genes[g] = static_cast<Index>(g);
     }
@@ -796,12 +770,11 @@ void spatial_domain(
     }
 
     // K-means clustering on combined features
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto centroids_ptr = scl::memory::aligned_alloc<Real>(n_domains * n_features, SCL_ALIGNMENT);
-
-    Real* centroids = centroids_ptr.release();
     auto cluster_sizes_ptr = scl::memory::aligned_alloc<Size>(n_domains, SCL_ALIGNMENT);
-
-    Size* cluster_sizes = cluster_sizes_ptr.release();
+    Real* centroids = centroids_ptr.get();
+    Size* cluster_sizes = cluster_sizes_ptr.get();
 
     detail::LCG rng(seed);
 
@@ -869,14 +842,7 @@ void spatial_domain(
         }
     }
 
-    scl::memory::aligned_free(features);
-    scl::memory::aligned_free(coord_min);
-    scl::memory::aligned_free(coord_max);
-    scl::memory::aligned_free(gene_var);
-    scl::memory::aligned_free(gene_mean);
-    scl::memory::aligned_free(top_genes);
-    scl::memory::aligned_free(centroids);
-    scl::memory::aligned_free(cluster_sizes);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -966,18 +932,14 @@ void spatial_autocorrelation(
     if (n_cells == 0 || n_genes == 0) return;
 
     // Estimate bandwidth and compute weights
+    // PERFORMANCE: RAII memory management with unique_ptr
     Real bandwidth = detail::estimate_bandwidth(coordinates, n_cells, n_dims);
-
     auto weights_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
-
-
-    Real* weights = weights_ptr.release();
+    Real* weights = weights_ptr.get();
     detail::compute_spatial_weights(coordinates, n_cells, n_dims, bandwidth, weights);
 
     auto gene_values_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-
-
-    Real* gene_values = gene_values_ptr.release();
+    Real* gene_values = gene_values_ptr.get();
 
     for (Size g = 0; g < n_genes; ++g) {
         // Extract gene expression
@@ -1001,8 +963,7 @@ void spatial_autocorrelation(
         gearys_c[g] = detail::gearys_c(gene_values, weights, n_cells);
     }
 
-    scl::memory::aligned_free(weights);
-    scl::memory::aligned_free(gene_values);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -1023,9 +984,9 @@ void spatial_smoothing(
     if (n_cells == 0 || n_genes == 0) return;
 
     // Compute spatial weights
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto weights_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
-
-    Real* weights = weights_ptr.release();
+    Real* weights = weights_ptr.get();
     detail::compute_spatial_weights(coordinates, n_cells, n_dims, bandwidth, weights);
 
     // Initialize smoothed expression
@@ -1050,7 +1011,7 @@ void spatial_smoothing(
         }
     }
 
-    scl::memory::aligned_free(weights);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -1071,19 +1032,16 @@ void spatial_coexpression(
     if (n_cells == 0 || n_pairs == 0) return;
 
     // Compute spatial weights
+    // PERFORMANCE: RAII memory management with unique_ptr
     Real bandwidth = detail::estimate_bandwidth(coordinates, n_cells, n_dims);
     auto weights_ptr = scl::memory::aligned_alloc<Real>(n_cells * n_cells, SCL_ALIGNMENT);
-
-    Real* weights = weights_ptr.release();
+    Real* weights = weights_ptr.get();
     detail::compute_spatial_weights(coordinates, n_cells, n_dims, bandwidth, weights);
 
     auto expr1_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-
-
-    Real* expr1 = expr1_ptr.release();
     auto expr2_ptr = scl::memory::aligned_alloc<Real>(n_cells, SCL_ALIGNMENT);
-
-    Real* expr2 = expr2_ptr.release();
+    Real* expr1 = expr1_ptr.get();
+    Real* expr2 = expr2_ptr.get();
 
     for (Size p = 0; p < n_pairs; ++p) {
         Index gene1 = gene_pairs[p * 2];
@@ -1148,9 +1106,7 @@ void spatial_coexpression(
         }
     }
 
-    scl::memory::aligned_free(weights);
-    scl::memory::aligned_free(expr1);
-    scl::memory::aligned_free(expr2);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 // =============================================================================
@@ -1217,10 +1173,9 @@ void spatial_entropy(
         }
     }
 
+    // PERFORMANCE: RAII memory management with unique_ptr
     auto local_counts_ptr = scl::memory::aligned_alloc<Real>(n_labels, SCL_ALIGNMENT);
-
-
-    Real* local_counts = local_counts_ptr.release();
+    Real* local_counts = local_counts_ptr.get();
 
     for (Size i = 0; i < n_cells; ++i) {
         // Compute local label distribution
@@ -1261,7 +1216,7 @@ void spatial_entropy(
         }
     }
 
-    scl::memory::aligned_free(local_counts);
+    // unique_ptr automatically frees memory when going out of scope
 }
 
 } // namespace scl::kernel::spatial_pattern

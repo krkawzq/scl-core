@@ -1411,7 +1411,7 @@ void current_flow_betweenness_approx(
         Array<Size> local_visits = thread_visits.subspan(thread_rank * N, N);
 
         // Random start
-        const auto current = static_cast<Index>(rng.bounded(static_cast<Index>(n)));
+        auto current = static_cast<Index>(rng.bounded(static_cast<Index>(n)));
 
         for (Index step = 0; step < walk_length; ++step) {
             ++local_visits[static_cast<Index>(current)];

@@ -87,12 +87,13 @@ void kmeans_cluster(
             centroids[c * n_features + f] = Real(0.0);
         }
 
-        const Index row_start = data.row_indices_unsafe()[cell];
-        const Index row_end = data.row_indices_unsafe()[cell + 1];
+        auto row_indices = data.primary_indices_unsafe(cell);
+        auto row_values = data.primary_values_unsafe(cell);
+        const Size row_len = static_cast<Size>(data.primary_length_unsafe(cell));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index feature = data.col_indices_unsafe()[j];
-            centroids[c * n_features + feature] = static_cast<Real>(data.values()[j]);
+        for (Size j = 0; j < row_len; ++j) {
+            Index feature = row_indices.ptr[j];
+            centroids[c * n_features + feature] = static_cast<Real>(row_values.ptr[j]);
         }
     }
 
@@ -109,15 +110,16 @@ void kmeans_cluster(
             for (Size c = 0; c < k; ++c) {
                 Real dist = Real(0.0);
 
-                const Index row_start = data.row_indices_unsafe()[cell];
-                const Index row_end = data.row_indices_unsafe()[cell + 1];
+                auto row_indices = data.primary_indices_unsafe(cell);
+                auto row_values = data.primary_values_unsafe(cell);
+                const Size row_len = static_cast<Size>(data.primary_length_unsafe(cell));
 
                 // Compute squared distance to centroid
                 for (Size f = 0; f < n_features; ++f) {
                     Real val = Real(0.0);
-                    for (Index j = row_start; j < row_end; ++j) {
-                        if (data.col_indices_unsafe()[j] == static_cast<Index>(f)) {
-                            val = static_cast<Real>(data.values()[j]);
+                    for (Size j = 0; j < row_len; ++j) {
+                        if (row_indices.ptr[j] == static_cast<Index>(f)) {
+                            val = static_cast<Real>(row_values.ptr[j]);
                             break;
                         }
                     }
@@ -152,13 +154,14 @@ void kmeans_cluster(
             Index cluster = assignments[i];
             ++cluster_sizes[cluster];
 
-            const Index row_start = data.row_indices_unsafe()[cell];
-            const Index row_end = data.row_indices_unsafe()[cell + 1];
+            auto row_indices = data.primary_indices_unsafe(cell);
+            auto row_values = data.primary_values_unsafe(cell);
+            const Size row_len = static_cast<Size>(data.primary_length_unsafe(cell));
 
-            for (Index j = row_start; j < row_end; ++j) {
-                Index feature = data.col_indices_unsafe()[j];
+            for (Size j = 0; j < row_len; ++j) {
+                Index feature = row_indices.ptr[j];
                 new_centroids[cluster * n_features + feature] +=
-                    static_cast<Real>(data.values()[j]);
+                    static_cast<Real>(row_values.ptr[j]);
             }
         }
 
@@ -186,37 +189,40 @@ SCL_FORCE_INLINE Real sparse_distance_squared(
 ) {
     Real dist = Real(0.0);
 
-    const Index start1 = data.row_indices_unsafe()[row1];
-    const Index end1 = data.row_indices_unsafe()[row1 + 1];
-    const Index start2 = data.row_indices_unsafe()[row2];
-    const Index end2 = data.row_indices_unsafe()[row2 + 1];
+    auto indices1 = data.primary_indices_unsafe(row1);
+    auto values1 = data.primary_values_unsafe(row1);
+    const Size len1 = static_cast<Size>(data.primary_length_unsafe(row1));
+    
+    auto indices2 = data.primary_indices_unsafe(row2);
+    auto values2 = data.primary_values_unsafe(row2);
+    const Size len2 = static_cast<Size>(data.primary_length_unsafe(row2));
 
-    Index i1 = start1, i2 = start2;
-    while (i1 < end1 && i2 < end2) {
-        Index col1 = data.col_indices_unsafe()[i1];
-        Index col2 = data.col_indices_unsafe()[i2];
+    Size i1 = 0, i2 = 0;
+    while (i1 < len1 && i2 < len2) {
+        Index col1 = indices1.ptr[i1];
+        Index col2 = indices2.ptr[i2];
 
         if (col1 == col2) {
-            Real diff = static_cast<Real>(data.values()[i1]) -
-                       static_cast<Real>(data.values()[i2]);
+            Real diff = static_cast<Real>(values1.ptr[i1]) -
+                       static_cast<Real>(values2.ptr[i2]);
             dist += diff * diff;
             ++i1; ++i2;
         } else if (col1 < col2) {
-            Real val = static_cast<Real>(data.values()[i1]);
+            Real val = static_cast<Real>(values1.ptr[i1]);
             dist += val * val;
             ++i1;
         } else {
-            Real val = static_cast<Real>(data.values()[i2]);
+            Real val = static_cast<Real>(values2.ptr[i2]);
             dist += val * val;
             ++i2;
         }
     }
-    while (i1 < end1) {
-        Real val = static_cast<Real>(data.values()[i1++]);
+    while (i1 < len1) {
+        Real val = static_cast<Real>(values1.ptr[i1++]);
         dist += val * val;
     }
-    while (i2 < end2) {
-        Real val = static_cast<Real>(data.values()[i2++]);
+    while (i2 < len2) {
+        Real val = static_cast<Real>(values2.ptr[i2++]);
         dist += val * val;
     }
 
@@ -493,9 +499,8 @@ void rare_cell_detection(
     Real* avg_distances = avg_distances_ptr.release();
 
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = neighbors.row_indices_unsafe()[i];
-        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
-        Size n_neighbors = static_cast<Size>(row_end - row_start);
+        auto neighbor_indices = neighbors.primary_indices_unsafe(static_cast<Index>(i));
+        const Size n_neighbors = neighbor_indices.size();
 
         if (n_neighbors == 0) {
             avg_distances[i] = std::numeric_limits<Real>::max();
@@ -503,8 +508,8 @@ void rare_cell_detection(
         }
 
         Real dist_sum = Real(0.0);
-        for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = neighbors.col_indices_unsafe()[j];
+        for (Size j = 0; j < n_neighbors; ++j) {
+            Index neighbor = neighbor_indices.ptr[j];
             Real dist = std::sqrt(detail::sparse_distance_squared(
                 expression, static_cast<Index>(i), neighbor));
             dist_sum += dist;
@@ -515,9 +520,8 @@ void rare_cell_detection(
 
     // Compute local outlier factor (simplified LOF)
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = neighbors.row_indices_unsafe()[i];
-        const Index row_end = neighbors.row_indices_unsafe()[i + 1];
-        Size n_neighbors = static_cast<Size>(row_end - row_start);
+        auto neighbor_indices = neighbors.primary_indices_unsafe(static_cast<Index>(i));
+        const Size n_neighbors = neighbor_indices.size();
 
         if (n_neighbors == 0) {
             rarity_scores.ptr[i] = Real(1.0);
@@ -525,8 +529,8 @@ void rare_cell_detection(
         }
 
         Real neighbor_avg_dist = Real(0.0);
-        for (Index j = row_start; j < row_end; ++j) {
-            Index neighbor = neighbors.col_indices_unsafe()[j];
+        for (Size j = 0; j < n_neighbors; ++j) {
+            Index neighbor = neighbor_indices.ptr[j];
             neighbor_avg_dist += avg_distances[neighbor];
         }
         neighbor_avg_dist /= static_cast<Real>(n_neighbors);
@@ -697,13 +701,14 @@ void cluster_separation(
         Index cluster = labels.ptr[i];
         ++cluster_sizes[cluster];
 
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index feature = expression.col_indices_unsafe()[j];
+        for (Size j = 0; j < row_len; ++j) {
+            Index feature = row_indices.ptr[j];
             centroids[cluster * n_features + feature] +=
-                static_cast<Real>(expression.values()[j]);
+                static_cast<Real>(row_values.ptr[j]);
         }
     }
 
@@ -787,13 +792,14 @@ void identify_heterogeneous_clusters(
         Index cluster = labels.ptr[i];
         ++cluster_sizes[cluster];
 
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index feature = expression.col_indices_unsafe()[j];
+        for (Size j = 0; j < row_len; ++j) {
+            Index feature = row_indices.ptr[j];
             cluster_mean[cluster * n_features + feature] +=
-                static_cast<Real>(expression.values()[j]);
+                static_cast<Real>(row_values.ptr[j]);
         }
     }
 
@@ -809,13 +815,14 @@ void identify_heterogeneous_clusters(
     for (Size i = 0; i < n_cells; ++i) {
         Index cluster = labels.ptr[i];
 
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
         Real cell_variance = Real(0.0);
-        for (Index j = row_start; j < row_end; ++j) {
-            Index feature = expression.col_indices_unsafe()[j];
-            Real diff = static_cast<Real>(expression.values()[j]) -
+        for (Size j = 0; j < row_len; ++j) {
+            Index feature = row_indices.ptr[j];
+            Real diff = static_cast<Real>(row_values.ptr[j]) -
                        cluster_mean[cluster * n_features + feature];
             cell_variance += diff * diff;
         }
@@ -869,16 +876,17 @@ void marker_based_subpopulation(
     for (Size i = 0; i < n_cells; ++i) {
         Index pattern = 0;
 
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
         for (Size m = 0; m < n_markers; ++m) {
             Index marker = marker_genes.ptr[m];
             Real val = Real(0.0);
 
-            for (Index j = row_start; j < row_end; ++j) {
-                if (expression.col_indices_unsafe()[j] == marker) {
-                    val = static_cast<Real>(expression.values()[j]);
+            for (Size j = 0; j < row_len; ++j) {
+                if (row_indices.ptr[j] == marker) {
+                    val = static_cast<Real>(row_values.ptr[j]);
                     break;
                 }
             }

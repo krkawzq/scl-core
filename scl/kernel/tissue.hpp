@@ -424,11 +424,11 @@ void zonation_score(
 
     for (Size i = 0; i < n_cells; ++i) {
         total_expr[i] = Real(0.0);
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            total_expr[i] += static_cast<Real>(expression.values()[j]);
+        for (Size j = 0; j < row_len; ++j) {
+            total_expr[i] += static_cast<Real>(row_values.ptr[j]);
         }
     }
 
@@ -663,12 +663,13 @@ void tissue_module(
     }
 
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            gene_mean[expression.col_indices_unsafe()[j]] +=
-                static_cast<Real>(expression.values()[j]);
+        for (Size j = 0; j < row_len; ++j) {
+            gene_mean[row_indices.ptr[j]] +=
+                static_cast<Real>(row_values.ptr[j]);
         }
     }
 
@@ -677,13 +678,14 @@ void tissue_module(
     }
 
     for (Size i = 0; i < n_cells; ++i) {
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Real diff = static_cast<Real>(expression.values()[j]) -
-                       gene_mean[expression.col_indices_unsafe()[j]];
-            gene_var[expression.col_indices_unsafe()[j]] += diff * diff;
+        for (Size j = 0; j < row_len; ++j) {
+            Real diff = static_cast<Real>(row_values.ptr[j]) -
+                       gene_mean[row_indices.ptr[j]];
+            gene_var[row_indices.ptr[j]] += diff * diff;
         }
     }
 
@@ -703,15 +705,16 @@ void tissue_module(
             features[i * n_features + n_dims + f] = Real(0.0);
         }
 
-        const Index row_start = expression.row_indices_unsafe()[i];
-        const Index row_end = expression.row_indices_unsafe()[i + 1];
+        auto row_indices = expression.primary_indices_unsafe(static_cast<Index>(i));
+        auto row_values = expression.primary_values_unsafe(static_cast<Index>(i));
+        const Size row_len = static_cast<Size>(expression.primary_length_unsafe(static_cast<Index>(i)));
 
-        for (Index j = row_start; j < row_end; ++j) {
-            Index gene = expression.col_indices_unsafe()[j];
+        for (Size j = 0; j < row_len; ++j) {
+            Index gene = row_indices.ptr[j];
 
             for (Size f = 0; f < n_expr_features; ++f) {
                 if (top_genes[f] == gene) {
-                    Real val = static_cast<Real>(expression.values()[j]);
+                    Real val = static_cast<Real>(row_values.ptr[j]);
                     Real std_dev = std::sqrt(gene_var[gene] / static_cast<Real>(n_cells));
                     if (std_dev > config::EPSILON) {
                         features[i * n_features + n_dims + f] =

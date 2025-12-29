@@ -890,11 +890,7 @@ void random_walk_with_restart(
         std::swap(scores.ptr, scores_new);
     }
 
-    // Ensure final result is in scores
-    if (scores.ptr != scores_new) {
-        // Already in correct place
-    }
-
+    // Final result is already in scores.ptr after loop or swap
     // unique_ptr automatically frees memory when going out of scope
 }
 
@@ -1112,8 +1108,8 @@ void diffusion_distance(
             std::swap(T_power, T_new);
         }
 
-    // Compute pairwise distances
-    scl::threading::parallel_for(Size(0), N, [&](size_t i) {
+        // Compute pairwise distances
+        scl::threading::parallel_for(Size(0), N, [&](size_t i) {
             distances[i * N + i] = Real(0);
 
             for (Size j = i + 1; j < N; ++j) {

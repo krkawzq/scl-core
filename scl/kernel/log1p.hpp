@@ -33,7 +33,8 @@ namespace detail {
 template <typename T>
 SCL_FORCE_INLINE void apply_log1p_simd(T* SCL_RESTRICT vals, Index len) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const auto lanes = s::Lanes(d);
 
     Index k = 0;
@@ -67,7 +68,8 @@ SCL_FORCE_INLINE void apply_log1p_simd(T* SCL_RESTRICT vals, Index len) {
 template <typename T>
 SCL_FORCE_INLINE void apply_log2p1_simd(T* SCL_RESTRICT vals, Index len) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const auto lanes = s::Lanes(d);
     const auto v_inv_ln2 = s::Set(d, config::INV_LN2);
 
@@ -102,7 +104,8 @@ SCL_FORCE_INLINE void apply_log2p1_simd(T* SCL_RESTRICT vals, Index len) {
 template <typename T>
 SCL_FORCE_INLINE void apply_expm1_simd(T* SCL_RESTRICT vals, Index len) {
     namespace s = scl::simd;
-    auto d = s::SimdTagFor<T>::d;
+    using SimdTag = s::SimdTagFor<T>;
+    const SimdTag d;
     const auto lanes = s::Lanes(d);
 
     Index k = 0;

@@ -8,6 +8,7 @@
 #include "scl/core/algo.hpp"
 #include "scl/core/vectorize.hpp"
 #include "scl/core/registry.hpp"
+#include "scl/core/memory.hpp"
 #include "scl/threading/parallel_for.hpp"
 #include <cstring>
 #include <cmath>
@@ -379,8 +380,10 @@ COOArraysT<T> to_coo_arrays(const Sparse<T, IsCSR>& matrix) {
 }
 
 /// @brief Create Sparse matrix from contiguous arrays
-/// @param take_ownership If true, data arrays are registered with registry and
-///        will be freed when matrix is destroyed. If false, caller manages lifetime.
+/// @param take_ownership If true, this function takes ownership of ALL three arrays:
+///        - data and indices are registered with registry for lifecycle management
+///        - indptr is freed immediately after use (only needed for offset calculation)
+///        Caller MUST NOT use or free any of the arrays after this call.
 /// @note When take_ownership=true, arrays are registered as buffer+aliases so
 ///       they participate in reference counting for slicing operations.
 template <typename T, bool IsCSR>
@@ -420,7 +423,11 @@ Sparse<T, IsCSR> from_contiguous_arrays(
                     static_cast<std::size_t>(nnz) * sizeof(T),
                     data_aliases, 
                     AllocType::AlignedAlloc)) {
-                // Data registration failed - caller still owns memory
+                // Registration failed - free all memory and return empty
+                // (acceptable leak in OOM scenarios per design)
+                scl::memory::aligned_free(data);
+                scl::memory::aligned_free(indices);
+                scl::memory::aligned_free(indptr);
                 return Sparse<T, IsCSR>{};
             }
         }
@@ -432,22 +439,30 @@ Sparse<T, IsCSR> from_contiguous_arrays(
                     static_cast<std::size_t>(nnz) * sizeof(Index),
                     indices_aliases,
                     AllocType::AlignedAlloc)) {
-                // Indices registration failed - data already registered, will be cleaned
-                // up when aliases are released via sparse destructor
+                // data already registered - will be managed by registry
+                // free indptr and return empty
+                scl::memory::aligned_free(indptr);
                 return Sparse<T, IsCSR>{};
             }
         }
         
-        // Register indptr as simple pointer (not sliced)
-        reg.register_ptr(indptr, 
-                        static_cast<std::size_t>(primary_dim + 1) * sizeof(Index),
-                        AllocType::AlignedAlloc);
+        // Note: indptr is NOT registered with registry
+        // It's only used to compute offsets for wrap_traditional_unsafe
+        // Will be freed after Sparse creation below
     }
     
     // Create Sparse using wrap_traditional (unsafe variant for performance since
     // we've already validated the arrays above or caller guarantees validity)
     std::span<const Index> indptr_span(indptr, static_cast<size_t>(primary_dim + 1));
-    return Sparse<T, IsCSR>::wrap_traditional_unsafe(rows, cols, data, indices, indptr_span);
+    auto result = Sparse<T, IsCSR>::wrap_traditional_unsafe(rows, cols, data, indices, indptr_span);
+    
+    if (take_ownership) {
+        // indptr is no longer needed - Sparse only stores dp/ip/len pointers
+        // Free it now to prevent memory leak
+        scl::memory::aligned_free(indptr);
+    }
+    
+    return result;
 }
 
 // =============================================================================

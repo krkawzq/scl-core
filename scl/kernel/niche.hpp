@@ -194,7 +194,7 @@ SCL_FORCE_INLINE void compute_global_type_frequencies(
             }
         }
 
-        scl::memory::aligned_free(partial_counts, SCL_ALIGNMENT);
+        // Memory automatically freed by unique_ptr
     } else {
         // Sequential counting for small inputs
         for (Size i = 0; i < n_cells; ++i) {
@@ -412,8 +412,10 @@ void neighborhood_enrichment(
     // Thread-local permuted labels and accumulators
     scl::threading::WorkspacePool<Index> perm_label_pool;
     scl::threading::WorkspacePool<Real> perm_contact_pool;
+    scl::threading::WorkspacePool<Real> perm_type_counts_pool;
     perm_label_pool.init(n_threads, n_cells_sz);
     perm_contact_pool.init(n_threads, n_pairs);
+    perm_type_counts_pool.init(n_threads, n_types_sz);
 
     // Initialize permuted labels
     for (Size tid = 0; tid < n_threads; ++tid) {
@@ -444,9 +446,7 @@ void neighborhood_enrichment(
         detail::fisher_yates_shuffle(perm_labels, n_cells_sz, rng_state);
 
         // Compute contact counts for this permutation
-        auto perm_type_counts_ptr = scl::memory::aligned_alloc<Real>(n_types_sz, SCL_ALIGNMENT);
-
-        Real* perm_type_counts = perm_type_counts_ptr.release();
+        Real* perm_type_counts = perm_type_counts_pool.get(thread_rank);
         scl::algo::zero(perm_type_counts, n_types_sz);
 
         for (Size i = 0; i < n_cells_sz; ++i) {
@@ -482,8 +482,6 @@ void neighborhood_enrichment(
                 }
             }
         }
-
-        scl::memory::aligned_free(perm_type_counts, SCL_ALIGNMENT);
     });
 
     // Compute enrichment z-scores
@@ -506,7 +504,7 @@ void neighborhood_enrichment(
             
             // Approximate p-value from z-score (two-tailed)
             Real z = std::abs(enrichment_scores[static_cast<Index>(pair_idx)]);
-            p_values[static_cast<Index>(pair_idx)] = Real(2.0) * std::erfc(z / std::sqrt(Real(2.0))) / Real(2.0);
+            p_values[static_cast<Index>(pair_idx)] = Real(2.0) * std::erfc(z / std::sqrt(Real(2.0)));
         }
     }
 

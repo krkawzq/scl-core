@@ -9,7 +9,6 @@
 #include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
 #include "scl/threading/workspace.hpp"
-#include "scl/threading/scheduler.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -80,7 +79,7 @@ SCL_FORCE_INLINE bool check_convergence(
     namespace s = scl::simd;
     using IndexTag = s::IndexTag;
     const IndexTag di;
-    const size_t lanes = Lanes(di);
+    const size_t lanes = s::Lanes(di);
     Size i = 0;
 
     // SIMD path with 4-way unrolling
@@ -390,7 +389,7 @@ void label_propagation(
     }
 
     // Per-thread workspace for class votes
-    const Size n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::get_num_threads_runtime();
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
 
     scl::threading::WorkspacePool<Real> vote_pool;
@@ -519,10 +518,7 @@ void label_propagation(
     }
 
     // Cleanup
-    if (class_votes_st) {
-        scl::memory::aligned_free(class_votes_st, SCL_ALIGNMENT);
-    }
-
+    // class_votes_st_ptr automatically freed via unique_ptr destructor
     scl::memory::aligned_free(order, SCL_ALIGNMENT);
     scl::memory::aligned_free(labels_new, SCL_ALIGNMENT);
 }
@@ -718,7 +714,7 @@ void inductive_transfer(
     if (SCL_UNLIKELY(n_query == 0 || n_classes == 0)) return;
 
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
-    const Size n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::get_num_threads_runtime();
 
     scl::threading::WorkspacePool<Real> score_pool;
     if (use_parallel) {
@@ -813,7 +809,7 @@ void confidence_propagation(
     if (SCL_UNLIKELY(n == 0 || n_classes == 0)) return;
 
     const bool use_parallel = (N >= config::PARALLEL_THRESHOLD);
-    const Size n_threads = scl::threading::Scheduler::get_num_threads();
+    const Size n_threads = scl::threading::get_num_threads_runtime();
 
     auto labels_new_ptr = scl::memory::aligned_alloc<Index>(N, SCL_ALIGNMENT);
 

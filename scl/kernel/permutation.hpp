@@ -429,8 +429,8 @@ Real permutation_test(
         ? detail::compute_two_sided_pvalue(observed_statistic, null_dist, actual_perms)
         : detail::compute_one_sided_pvalue(observed_statistic, null_dist, actual_perms, true);
 
-    scl::memory::aligned_free(perm, SCL_ALIGNMENT);
-    scl::memory::aligned_free(null_dist, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Index>(perm, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Real>(null_dist, SCL_ALIGNMENT);
 
     return p_value;
 }
@@ -504,7 +504,7 @@ inline Real permutation_correlation_test(
         });
         
         Real p_value = detail::compute_two_sided_pvalue(observed_correlation, null_dist, n_permutations);
-        scl::memory::aligned_free(null_dist, SCL_ALIGNMENT);
+        scl::memory::aligned_free<Real>(null_dist, SCL_ALIGNMENT);
         return p_value;
     }
     
@@ -535,9 +535,9 @@ inline Real permutation_correlation_test(
 
     Real p_value = detail::compute_two_sided_pvalue(observed_correlation, null_dist, n_permutations);
 
-    scl::memory::aligned_free(y_perm, SCL_ALIGNMENT);
-    scl::memory::aligned_free(perm, SCL_ALIGNMENT);
-    scl::memory::aligned_free(null_dist, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Real>(y_perm, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Index>(perm, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Real>(null_dist, SCL_ALIGNMENT);
 
     return p_value;
 }
@@ -569,7 +569,7 @@ inline void fdr_correction_bh(
         q_values[idx] = cummin;
     }
 
-    scl::memory::aligned_free(order, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Index>(order, SCL_ALIGNMENT);
 }
 
 inline void fdr_correction_by(
@@ -606,7 +606,7 @@ inline void fdr_correction_by(
         q_values[idx] = cummin;
     }
 
-    scl::memory::aligned_free(order, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Index>(order, SCL_ALIGNMENT);
 }
 
 // =============================================================================
@@ -669,7 +669,7 @@ inline void holm_correction(
         adjusted[idx] = cummax;
     }
 
-    scl::memory::aligned_free(order, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Index>(order, SCL_ALIGNMENT);
 }
 
 // =============================================================================

@@ -295,9 +295,9 @@ void morans_i(
         // Parallel reduction for single feature + large cell count
         if (use_nested_parallel) {
             const Size n_blocks = (static_cast<Size>(n_cells) + config::CELL_BLOCK_SIZE - 1) / config::CELL_BLOCK_SIZE;
+            // PERFORMANCE: RAII memory management with unique_ptr
             auto block_results_ptr = scl::memory::aligned_alloc<Real>(n_blocks, SCL_ALIGNMENT);
-
-            Real* block_results = block_results_ptr.release();
+            Real* block_results = block_results_ptr.get();
 
             scl::threading::parallel_for(Size(0), n_blocks, [&](size_t b) {
                 auto start = static_cast<Index>(b * config::CELL_BLOCK_SIZE);
@@ -306,7 +306,7 @@ void morans_i(
             });
 
             numer = scl::vectorize::sum(Array<const Real>(block_results, n_blocks));
-            scl::memory::aligned_free(block_results, SCL_ALIGNMENT);
+            // unique_ptr automatically frees memory when going out of scope
         } else {
             // Sequential loop for multiple features or small cell count
             numer = detail::compute_moran_numer_block(graph, z, Index(0), n_cells);

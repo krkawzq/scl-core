@@ -902,7 +902,7 @@ void rank_genes_groups(
         GroupWorkspace& ws = workspaces[ws_idx];
 
         one_vs_rest_stats(
-            X, group_labels, n_groups, g,
+            X, group_labels, g,
             Array<Real>(ws.log_fc, n_genes_sz),
             Array<Real>(ws.effect_size, n_genes_sz),
             Array<Real>(ws.pct_in, n_genes_sz),

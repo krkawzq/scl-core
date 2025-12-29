@@ -404,9 +404,10 @@ void clone_phenotype(
 
         ++clone_sizes[clone];
 
-        auto primary_vals = expression.primary_values_unsafe(i);
-        auto primary_idxs = expression.primary_indices_unsafe(i);
-        Index primary_len = expression.primary_length_unsafe(i);
+        const auto cell_idx = static_cast<Index>(i);
+        auto primary_vals = expression.primary_values_unsafe(cell_idx);
+        auto primary_idxs = expression.primary_indices_unsafe(cell_idx);
+        Index primary_len = expression.primary_length_unsafe(cell_idx);
 
         for (Index j = 0; j < primary_len; ++j) {
             Index gene = primary_idxs.ptr[j];
@@ -873,7 +874,7 @@ void detect_expanded_clones(
         }
     }
 
-    scl::memory::aligned_free(sizes, SCL_ALIGNMENT);
+    scl::memory::aligned_free<Size>(sizes, SCL_ALIGNMENT);
 }
 
 // =============================================================================

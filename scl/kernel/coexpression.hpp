@@ -1568,8 +1568,11 @@ Real pick_soft_threshold(
         Real* bin_counts = bin_counts_ptr.release();
         scl::algo::zero(bin_counts, static_cast<Size>(n_bins));
 
+        // Bin calculation: normalize connectivity to [0, 1] then map to bin index
+        // max_k is guaranteed > EPSILON here, and n_bins >= 2, so division is safe
+        const Real bin_width = max_k / static_cast<Real>(n_bins);
         for (Size i = 0; i < G; ++i) {
-            auto bin = static_cast<Index>(connectivity[i] / (max_k * static_cast<double>(n_bins - 1)));
+            auto bin = static_cast<Index>(connectivity[i] / bin_width);
             bin = scl::algo::min2(bin, n_bins - 1);
             bin_counts[bin] += Real(1);
         }
@@ -1582,7 +1585,8 @@ Real pick_soft_threshold(
         Index n_valid = 0;
         for (Index b = 0; b < n_bins; ++b) {
             if (bin_counts[b] > Real(0)) {
-                Real k_val = (static_cast<Real>(b) + Real(0.5)) / static_cast<Real>(n_bins) * max_k;
+                // Convert bin index back to k value: bin center = (b + 0.5) * bin_width
+                Real k_val = (static_cast<Real>(b) + Real(0.5)) * bin_width;
                 if (k_val > config::EPSILON) {
                     log_k[n_valid] = std::log(k_val);
                     log_pk[n_valid] = std::log(bin_counts[b] / static_cast<Real>(n_genes));

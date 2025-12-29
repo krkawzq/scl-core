@@ -175,9 +175,9 @@ void lineage_coupling(
 
     // Count cells per clone per type
     auto counts_ptr = scl::memory::aligned_alloc<Size>(n_clones * n_types, SCL_ALIGNMENT);
-    Size* counts = counts_ptr.get();
+    Size* counts = counts_ptr.release();
     auto clone_sizes_ptr = scl::memory::aligned_alloc<Size>(n_clones, SCL_ALIGNMENT);
-    Size* clone_sizes = clone_sizes_ptr.get();
+    Size* clone_sizes = clone_sizes_ptr.release();
 
     for (Size i = 0; i < n_clones * n_types; ++i) counts[i] = 0;
     for (Size c = 0; c < n_clones; ++c) clone_sizes[c] = 0;

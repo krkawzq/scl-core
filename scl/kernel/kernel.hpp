@@ -855,7 +855,7 @@ void nystrom_approximation(
     Real bandwidth = config::DEFAULT_BANDWIDTH,
     KernelType kernel_type = KernelType::Gaussian
 ) {
-    const Index n = landmark_distances.rows();
+    const Index n = landmark_distances.primary_dim();
     const Size N = static_cast<Size>(n);
     const Size n_comp = static_cast<Size>(n_components);
 

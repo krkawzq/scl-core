@@ -9,6 +9,8 @@
 #include "scl/core/algo.hpp"
 #include "scl/threading/parallel_for.hpp"
 
+#include <algorithm>
+
 // =============================================================================
 // FILE: scl/kernel/gram.hpp
 // BRIEF: Gram matrix computation with adaptive sparse dot product
@@ -238,9 +240,9 @@ SCL_FORCE_INLINE T sparse_dot_adaptive(
 
     // Ensure n1 <= n2 for algorithm selection
     if (n1 > n2) {
-        scl::algo::swap(idx1, idx2);
-        scl::algo::swap(val1, val2);
-        scl::algo::swap(n1, n2);
+        std::swap(idx1, idx2);
+        std::swap(val1, val2);
+        std::swap(n1, n2);
     }
 
     Size ratio = n2 / n1;

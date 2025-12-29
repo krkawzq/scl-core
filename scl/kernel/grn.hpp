@@ -1001,12 +1001,16 @@ void regulon_auc_score(
 
     CellWorkspace* workspaces = nullptr;
     if (use_parallel) {
-        workspaces = scl::memory::aligned_alloc<CellWorkspace>(n_threads, SCL_ALIGNMENT);
+        auto workspaces_ptr = scl::memory::aligned_alloc<CellWorkspace>(n_threads, SCL_ALIGNMENT);
+        workspaces = workspaces_ptr.release();
 
         for (size_t t = 0; t < n_threads; ++t) {
-            workspaces[t].cell_expr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
-            workspaces[t].gene_indices = scl::memory::aligned_alloc<Index>(n_genes_sz, SCL_ALIGNMENT);
-            workspaces[t].in_regulon = scl::memory::aligned_alloc<bool>(n_genes_sz, SCL_ALIGNMENT);
+            auto cell_expr_ptr = scl::memory::aligned_alloc<Real>(n_genes_sz, SCL_ALIGNMENT);
+            auto gene_indices_ptr = scl::memory::aligned_alloc<Index>(n_genes_sz, SCL_ALIGNMENT);
+            auto in_regulon_ptr = scl::memory::aligned_alloc<bool>(n_genes_sz, SCL_ALIGNMENT);
+            workspaces[t].cell_expr = cell_expr_ptr.release();
+            workspaces[t].gene_indices = gene_indices_ptr.release();
+            workspaces[t].in_regulon = in_regulon_ptr.release();
         }
     }
 

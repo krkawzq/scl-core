@@ -986,6 +986,10 @@ inline Real adjusted_mi(
     }
 
     // Compute expected MI (simplified approximation)
+    // NOTE: This uses a simplified approximation for E[MI].
+    // The full calculation requires more complex contingency table analysis
+    // with hypergeometric distribution. For most practical purposes, this
+    // approximation is sufficient and computationally efficient.
     Real E_MI = Real(0);
     for (Index i = 0; i < n_clusters1; ++i) {
         for (Index j = 0; j < n_clusters2; ++j) {

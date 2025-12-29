@@ -196,7 +196,7 @@ struct GeneSetLookup {
         n_genes = n_genes_total;
         n_words = (static_cast<Size>(n_genes) + 63) / 64;
         auto bits_ptr = scl::memory::aligned_alloc<uint64_t>(n_words, SCL_ALIGNMENT);
-        bits = bits_ptr.get();
+        bits = bits_ptr.release();
         std::memset(bits, 0, n_words * sizeof(uint64_t));
     }
 
