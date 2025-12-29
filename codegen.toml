@@ -1,0 +1,41 @@
+# SCL-Core Codegen Configuration
+# ================================
+# This file configures the code generation toolchain.
+# Run with: python -m codegen --config codegen.toml <command>
+
+[paths]
+# C API source directory (relative to project root)
+c_api_dir = "scl/binding/c_api"
+
+# Python bindings output directory
+python_output = "python/scl/_bindings"
+
+# C API documentation output directory
+docs_output = "docs/api/c-api"
+
+# Core header files that define fundamental types
+# These are parsed first to discover scl_sparse_t, scl_error_t, etc.
+core_headers = [
+    "core/core.h",
+    "core/sparse.h",
+    "core/dense.h",
+]
+
+[types]
+# Floating point precision: "float32" or "float64"
+# Must match the compiled library variant
+real_type = "float64"
+
+# Integer index type: "int16", "int32", or "int64"
+# Must match the compiled library variant
+index_type = "int64"
+
+[generation]
+# Overwrite existing generated files
+overwrite = false
+
+# Generate docstrings in Python bindings
+generate_docstrings = true
+
+# Generate type hints in Python bindings
+generate_type_hints = true

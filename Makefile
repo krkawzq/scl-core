@@ -1,11 +1,11 @@
-.PHONY: help build compile compile-cpp compile-cython clean test test-fast test-imports test-types test-download test-download-no-network test-verbose test-coverage test-quick test-models format lint all tree cloc makedoc docs-dev docs-build docs-preview docs-clean
+.PHONY: help build compile compile-cpp clean format lint all tree cloc makedoc docs-dev docs-build docs-preview docs-clean codegen codegen-python codegen-docs
 
 # Config
 
 PYTHON := python3
 PIP := $(PYTHON) -m pip
 CMAKE_BUILD_DIR := build/cmake
-INSTALL_DIR := perturblab/kernels/statistics/backends/cpp
+INSTALL_DIR := python/scl/libs
 
 .DEFAULT_GOAL := help
 
@@ -18,27 +18,14 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  build          Build everything (deps + compile)"
-	@echo "  compile        Compile C++ and Cython"
+	@echo "  compile        Compile C++"
 	@echo "  compile-cpp    Compile C++ only"
-	@echo "  compile-cython Compile Cython only"
 	@echo "  clean          Clean build artifacts"
 	@echo "  format         Format and fix code (all tools)"
 	@echo "  lint           Run linters"
-	@echo "  test                    Run all tests"
-	@echo "  test-fast               Run tests (fail fast)"
-	@echo "  test-imports            Run import tests only"
-	@echo "  test-types              Run type tests only"
-	@echo "  test-metrics            Run metrics tests only"
-	@echo "  test-preprocessing      Run preprocessing tests only"
-	@echo "  test-pp                 Alias for test-preprocessing"
-	@echo "  test-download           Run download & registry tests"
-	@echo "  test-download-no-network Run download tests (skip network)"
-	@echo "  test-verbose            Run tests with verbose output"
-	@echo "  test-coverage           Run tests with coverage report"
-	@echo "  test-quick              Quick sanity test (import check)"
-	@echo "  test-models             Test model registry"
 	@echo "  cloc           Count lines of code"
 	@echo "  tree           Show git-tracked files tree (filtered)"
+	@echo "  info           Show build environment info"
 	@echo ""
 	@echo "Documentation:"
 	@echo "  makedoc        Start documentation dev server"
@@ -46,8 +33,13 @@ help:
 	@echo "  docs-build     Build documentation for production"
 	@echo "  docs-preview   Preview built documentation"
 	@echo "  docs-clean     Clean documentation build artifacts"
+	@echo ""
+	@echo "Code Generation:"
+	@echo "  codegen        Generate all (Python bindings + C API docs)"
+	@echo "  codegen-python Generate Python ctypes bindings from C API"
+	@echo "  codegen-docs   Generate C API documentation skeletons"
 
-all: clean build format lint test
+all: clean build format lint
 
 # =============================================================================
 # Build & Compile
@@ -58,19 +50,13 @@ setup-deps:
 
 compile-cpp: setup-deps
 	@mkdir -p $(CMAKE_BUILD_DIR)
-	@cd $(CMAKE_BUILD_DIR) && cmake ../.. -DCMAKE_BUILD_TYPE=Release
-	@cd $(CMAKE_BUILD_DIR) && cmake --build . --config Release -j$$(nproc 2>/dev/null || echo 4)
+	@cd $(CMAKE_BUILD_DIR) && cmake ../.. -G Ninja -DCMAKE_BUILD_TYPE=Release
+	@cd $(CMAKE_BUILD_DIR) && ninja -j$$(nproc 2>/dev/null || echo 4)
 	@cd $(CMAKE_BUILD_DIR) && cmake --install .
 
-compile-cython:
-	@$(PYTHON) -c "import numpy, Cython" 2>/dev/null || $(PIP) install numpy cython
-	@$(PYTHON) setup.py build_ext --inplace
-
-compile: compile-cpp compile-cython
+compile: compile-cpp
 
 build: compile
-	@echo "Building..."
-	make compile > build.log 2>&1
 	@echo "Build completed"
 
 rebuild: clean build
@@ -80,122 +66,58 @@ rebuild: clean build
 # =============================================================================
 
 format: format-imports format-code fix-lint
-	@echo "✓ Code formatted and fixed"
+	@echo "Code formatted and fixed"
 
 format-imports:
 	@command -v isort >/dev/null 2>&1 || $(PIP) install isort
-	@isort perturblab/ --profile black
+	@isort python/ --profile black
 
 format-code:
 	@command -v black >/dev/null 2>&1 || $(PIP) install black
-	@black perturblab/ --line-length 100
+	@black python/ --line-length 100
 
 fix-lint:
 	@command -v ruff >/dev/null 2>&1 || $(PIP) install ruff
-	@ruff check perturblab/ --fix --select I,F401,F841,UP,C90,N,E,W
-	@ruff format perturblab/
+	@ruff check python/ --fix --select I,F401,F841,UP,C90,N,E,W
+	@ruff format python/
 
 remove-unused-imports:
 	@command -v autoflake >/dev/null 2>&1 || $(PIP) install autoflake
 	@autoflake --in-place --remove-all-unused-imports --remove-unused-variables \
-		--recursive perturblab/
+		--recursive python/
 
 lint: lint-ruff lint-pyright lint-mypy
-	@echo "✓ All linters passed"
+	@echo "All linters passed"
 
 lint-ruff:
 	@command -v ruff >/dev/null 2>&1 || $(PIP) install ruff
-	@ruff check perturblab/
+	@ruff check python/
 
 lint-pyright:
 	@command -v pyright >/dev/null 2>&1 || npm install -g pyright 2>/dev/null || echo "pyright not available"
-	@command -v pyright >/dev/null 2>&1 && pyright perturblab/ || true
+	@command -v pyright >/dev/null 2>&1 && pyright python/ || true
 
 lint-mypy:
 	@command -v mypy >/dev/null 2>&1 || $(PIP) install mypy
-	@mypy perturblab/ --ignore-missing-imports --no-strict-optional || true
+	@mypy python/ --ignore-missing-imports --no-strict-optional || true
 
 lint-flake8:
 	@command -v flake8 >/dev/null 2>&1 || $(PIP) install flake8
-	@flake8 perturblab/ --max-line-length=100 --ignore=E203,W503,E501
+	@flake8 python/ --max-line-length=100 --ignore=E203,W503,E501
 
-check: format lint test
+check: format lint
 
 # =============================================================================
-# Testing & Analysis
+# Analysis
 # =============================================================================
-
-test:
-	@echo "Running tests..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
-	@uv run pytest tests/ -v --tb=short || $(PYTHON) -m pytest tests/ -v --tb=short
-
-test-fast:
-	@echo "Running tests (fail fast)..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
-	@uv run pytest tests/ -x -v || $(PYTHON) -m pytest tests/ -x -v
-
-test-imports:
-	@echo "Running import tests..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
-	@uv run pytest tests/test_imports.py -v || $(PYTHON) -m pytest tests/test_imports.py -v
-
-test-types:
-	@echo "Running type tests..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
-	@uv run pytest tests/test_types.py -v || $(PYTHON) -m pytest tests/test_types.py -v
-
-test-download:
-	@echo "Running download and registry tests..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
-	@uv run pytest tests/test_download.py -v || $(PYTHON) -m pytest tests/test_download.py -v
-
-test-download-no-network:
-	@echo "Running download tests (skipping network tests)..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
-	@uv run pytest tests/test_download.py -v -m "not network" || $(PYTHON) -m pytest tests/test_download.py -v -m "not network"
-
-test-metrics:
-	@echo "Running metrics tests..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
-	@uv run pytest tests/test_metrics.py -v
-
-test-preprocessing:
-	@echo "Running preprocessing tests..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
-	@uv run pytest tests/test_preprocessing.py -v
-
-test-pp: test-preprocessing
-
-test-verbose:
-	@echo "Running tests (verbose)..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest
-	@uv run pytest tests/ -vv -s || $(PYTHON) -m pytest tests/ -vv -s
-
-test-coverage:
-	@echo "Running tests with coverage..."
-	@command -v pytest >/dev/null 2>&1 || $(PIP) install pytest pytest-cov
-	@uv run pytest tests/ --cov=perturblab --cov-report=html --cov-report=term || \
-		$(PYTHON) -m pytest tests/ --cov=perturblab --cov-report=html --cov-report=term
-	@echo "Coverage report generated in htmlcov/index.html"
-
-test-quick:
-	@echo "Running quick sanity test..."
-	@uv run python -c "import perturblab; print(f'✓ PerturbLab v{perturblab.__version__} imported successfully')" || \
-		$(PYTHON) -c "import perturblab; print(f'✓ PerturbLab v{perturblab.__version__} imported successfully')"
-
-test-models:
-	@echo "Testing model imports..."
-	@uv run python -c "from perturblab import MODELS; print(f'✓ Found {len(list(MODELS._child_registries))} model registries: {list(MODELS._child_registries.keys())}')" || \
-		$(PYTHON) -c "from perturblab import MODELS; print(f'✓ Found {len(list(MODELS._child_registries))} model registries: {list(MODELS._child_registries.keys())}')"
 
 cloc:
 	@command -v cloc >/dev/null 2>&1 || { echo "Install: sudo apt install cloc"; exit 1; }
-	@cloc . --exclude-dir=build,dist,__pycache__,.git,.eggs,perturblab.egg-info,external,weights,forks,perturblab_v0.1,perturblab_v0.2,_fast_transformers \
+	@cloc . --exclude-dir=build,dist,__pycache__,.git,.eggs,*.egg-info,external,weights,forks,node_modules \
 		--exclude-ext=.pyc,.pyo,.so,.pyd,.o,.a,.dylib,.dll --vcs=git
 
 tree:
-	@git ls-tree -r --name-only HEAD | grep -v '_fast_transformers' | tree --fromfile .
+	@git ls-tree -r --name-only HEAD | tree --fromfile .
 
 benchmark: compile
 	@[ -f benchmarks/benchmark.py ] && $(PYTHON) benchmarks/benchmark.py || echo "No benchmarks"
@@ -217,24 +139,19 @@ clean-pyc:
 	@find . -type d -name '.ruff_cache' -delete
 
 clean-compiled:
-	@rm -rf $(INSTALL_DIR)/libmwu_kernel.*
-	@find . -name '*.so' -not -path "./external/*" -delete
-	@find . -name '*.pyd' -not -path "./external/*" -delete
-	@find . -name '*.c' -path "*/perturblab/kernels/*" -delete
-	@find . -name '*.cpp' -path "*/perturblab/kernels/*" -path "*/cython/*" -delete
+	@rm -rf $(INSTALL_DIR)/*.so $(INSTALL_DIR)/*.dylib $(INSTALL_DIR)/*.dll
+	@find . -name '*.so' -not -path "./external/*" -not -path "./forks/*" -delete
+	@find . -name '*.pyd' -not -path "./external/*" -not -path "./forks/*" -delete
 
 # =============================================================================
 # Development
 # =============================================================================
 
 dev-install:
-	@$(PIP) install black isort ruff flake8 pytest mypy autoflake autopep8
+	@$(PIP) install black isort ruff flake8 mypy autoflake autopep8
 
 check-cpp:
-	@[ -f $(INSTALL_DIR)/libmwu_kernel.so ] && echo "✓ C++ library installed" || echo "✗ C++ library missing"
-
-check-cython:
-	@find perturblab -name "*.so" -o -name "*.pyd" | head -5
+	@[ -f $(INSTALL_DIR)/libscl_f64_i64.so ] && echo "C++ library installed" || echo "C++ library missing"
 
 git-status:
 	@git status --short | grep -v '\.so$$' | grep -v '\.pyd$$' | grep -v '__pycache__' || echo "Clean"
@@ -242,6 +159,7 @@ git-status:
 info:
 	@echo "Python:  $$($(PYTHON) --version 2>&1)"
 	@echo "CMake:   $$(cmake --version 2>&1 | head -n1)"
+	@echo "Ninja:   $$(ninja --version 2>&1 || echo 'not installed')"
 	@echo "Git:     $$(git --version 2>&1)"
 
 # =============================================================================
@@ -261,7 +179,7 @@ docs-build:
 	@command -v npm >/dev/null 2>&1 || { echo "Error: npm not found. Please install Node.js"; exit 1; }
 	@[ -d node_modules ] || npm install
 	@npm run docs:build
-	@echo "✓ Documentation built in docs/.vitepress/dist/"
+	@echo "Documentation built in docs/.vitepress/dist/"
 
 docs-preview:
 	@echo "Previewing documentation..."
@@ -272,4 +190,21 @@ docs-preview:
 docs-clean:
 	@echo "Cleaning documentation build artifacts..."
 	@rm -rf docs/.vitepress/dist docs/.vitepress/cache
-	@echo "✓ Documentation artifacts cleaned"
+	@echo "Documentation artifacts cleaned"
+
+# =============================================================================
+# Code Generation
+# =============================================================================
+
+codegen: codegen-python codegen-docs
+	@echo "Code generation completed"
+
+codegen-python:
+	@echo "Generating Python ctypes bindings..."
+	@$(PYTHON) -m codegen python-bindings -v
+	@echo "Python bindings generated"
+
+codegen-docs:
+	@echo "Generating C API documentation skeletons..."
+	@$(PYTHON) -m codegen c-api-docs -v
+	@echo "C API documentation skeletons generated"

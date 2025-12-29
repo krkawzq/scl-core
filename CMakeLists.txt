@@ -78,6 +78,7 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 set(HWY_ENABLE_CONTRIB ON CACHE BOOL "" FORCE)
+set(HWY_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(hwy)
 
@@ -232,15 +233,10 @@ endmacro()
 # -----------------------------------------------------------------------------
 # 7. Create Library Variants
 # -----------------------------------------------------------------------------
-# Float32 + Int32
 create_scl_lib(0 0 "f32_i32")
-
-# Float64 + Int64
 create_scl_lib(1 1 "f64_i64")
-
-# Optional: Uncomment to add more variants
-# create_scl_lib(0 1 "f32_i64")  # Float32 + Int64
-# create_scl_lib(1 0 "f64_i32")  # Float64 + Int32
+create_scl_lib(0 1 "f32_i64")
+create_scl_lib(1 0 "f64_i32")
 
 # -----------------------------------------------------------------------------
 # 8. Install Headers
@@ -264,7 +260,7 @@ message(STATUS "  SIMD Scalar:     ${SCL_ONLY_SCALAR}")
 message(STATUS "  HDF5:            ${HDF5_FOUND}")
 message(STATUS "  Source Files:    ${SCL_SOURCES_COUNT}")
 message(STATUS "  Output Dir:      ${SCL_OUTPUT_DIR}")
-message(STATUS "  Targets:         scl_f32_i32, scl_f64_i64")
+message(STATUS "  Targets:         scl_f32_i32, scl_f64_i64, scl_f32_i64, scl_f64_i32")
 message(STATUS "==========================================")
 message(STATUS "")
 

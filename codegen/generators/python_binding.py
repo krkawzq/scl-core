@@ -1,0 +1,346 @@
+"""
+Python ctypes binding generator.
+
+Generates Python modules that wrap C API functions using ctypes.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from .base import Generator, GeneratedFile
+from ..parser.c_types import (
+    ParsedHeader,
+    CFunction,
+    CStruct,
+    CEnum,
+    CTypedef,
+    CType,
+)
+from ..types import TypeRegistry, CtypesMapper
+from ..config import CodegenConfig
+
+
+class PythonBindingGenerator(Generator):
+    """
+    Generator for Python ctypes bindings.
+
+    Produces Python modules that:
+    - Load the shared library via _loader
+    - Define function argtypes and restype
+    - Create Python wrapper functions with docstrings
+    - Define enum classes and struct wrappers
+    """
+
+    def __init__(self, config: CodegenConfig):
+        """
+        Initialize the generator.
+
+        Args:
+            config: Codegen configuration
+        """
+        super().__init__(config)
+
+        # Create type registry with configured precision
+        self.registry = TypeRegistry(
+            real_type=config.types.real_type,
+            index_type=config.types.index_type,
+        )
+        self.mapper = CtypesMapper(self.registry)
+
+    def get_output_path(self, parsed: ParsedHeader) -> Path:
+        """Get output path for Python binding module."""
+        # Determine relative path within c_api directory
+        c_api_dir = self.config.c_api_dir_abs
+        try:
+            rel_path = parsed.path.relative_to(c_api_dir)
+        except ValueError:
+            rel_path = Path(parsed.path.name)
+
+        # Convert .h to .py
+        py_path = rel_path.with_suffix(".py")
+
+        return self.config.python_output_abs / py_path
+
+    def generate(self, parsed: ParsedHeader) -> GeneratedFile:
+        """Generate Python binding module."""
+        output_path = self.get_output_path(parsed)
+
+        # Determine relative import path for _loader
+        # Count directory depth from output to _bindings root
+        try:
+            rel_to_bindings = output_path.relative_to(self.config.python_output_abs)
+            depth = len(rel_to_bindings.parts) - 1
+        except ValueError:
+            depth = 0
+
+        if depth > 0:
+            loader_import = "." * (depth + 1) + "_loader"
+        else:
+            loader_import = "._loader"
+
+        content = self._generate_module(
+            parsed=parsed,
+            loader_import=loader_import,
+        )
+
+        return GeneratedFile(
+            path=output_path,
+            content=content,
+            source=parsed.path,
+        )
+
+    def _generate_module(
+        self,
+        parsed: ParsedHeader,
+        loader_import: str,
+    ) -> str:
+        """Generate complete module content."""
+        lines = []
+
+        # Header comment
+        lines.extend(self._generate_header(parsed))
+        lines.append("")
+
+        # Imports
+        lines.extend(self._generate_imports(loader_import))
+        lines.append("")
+
+        # Library loading
+        lines.append("# Load the native library")
+        lines.append("_lib = get_library()")
+        lines.append("")
+        lines.append("")
+
+        # Enums
+        if parsed.enums:
+            lines.append("# " + "=" * 75)
+            lines.append("# Enums")
+            lines.append("# " + "=" * 75)
+            lines.append("")
+            for enum in parsed.enums:
+                lines.extend(self._generate_enum(enum))
+                lines.append("")
+
+        # Structs (as opaque types or with fields)
+        structs_to_generate = [s for s in parsed.structs if not s.is_opaque]
+        if structs_to_generate:
+            lines.append("# " + "=" * 75)
+            lines.append("# Structures")
+            lines.append("# " + "=" * 75)
+            lines.append("")
+            for struct in structs_to_generate:
+                lines.extend(self._generate_struct(struct))
+                lines.append("")
+
+        # Functions
+        if parsed.functions:
+            lines.append("# " + "=" * 75)
+            lines.append("# Functions")
+            lines.append("# " + "=" * 75)
+            lines.append("")
+            for func in parsed.functions:
+                lines.extend(self._generate_function(func))
+                lines.append("")
+
+        # Exports
+        lines.append("# " + "=" * 75)
+        lines.append("# Exports")
+        lines.append("# " + "=" * 75)
+        lines.append("")
+        lines.extend(self._generate_exports(parsed))
+
+        return "\n".join(lines)
+
+    def _generate_header(self, parsed: ParsedHeader) -> list[str]:
+        """Generate module header comment."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return [
+            '"""',
+            f"Auto-generated Python bindings for {parsed.module_name}",
+            "",
+            f"Source: {parsed.path}",
+            "Generated by: codegen",
+            f"Generated at: {timestamp}",
+            "",
+            "DO NOT EDIT - This file is automatically generated.",
+            '"""',
+        ]
+
+    def _generate_imports(self, loader_import: str) -> list[str]:
+        """Generate import statements."""
+        return [
+            "from __future__ import annotations",
+            "",
+            "from ctypes import (",
+            "    CFUNCTYPE,",
+            "    POINTER,",
+            "    Structure,",
+            "    c_bool,",
+            "    c_char,",
+            "    c_char_p,",
+            "    c_double,",
+            "    c_float,",
+            "    c_int,",
+            "    c_int8,",
+            "    c_int16,",
+            "    c_int32,",
+            "    c_int64,",
+            "    c_long,",
+            "    c_longlong,",
+            "    c_short,",
+            "    c_size_t,",
+            "    c_ssize_t,",
+            "    c_ubyte,",
+            "    c_uint,",
+            "    c_uint8,",
+            "    c_uint16,",
+            "    c_uint32,",
+            "    c_uint64,",
+            "    c_ulong,",
+            "    c_ulonglong,",
+            "    c_ushort,",
+            "    c_void_p,",
+            "    c_wchar_p,",
+            ")",
+            "from typing import Any, Optional",
+            "",
+            f"from {loader_import} import get_library",
+        ]
+
+    def _generate_enum(self, enum: CEnum) -> list[str]:
+        """Generate enum class definition."""
+        lines = []
+
+        class_name = self._to_python_class_name(enum.name)
+
+        lines.append(f"class {class_name}:")
+        if enum.doc:
+            lines.append(f'    """{enum.doc}"""')
+
+        for val in enum.values:
+            if val.value is not None:
+                lines.append(f"    {val.name} = {val.value}")
+            else:
+                lines.append(f"    {val.name} = None")
+
+        if not enum.values:
+            lines.append("    pass")
+
+        return lines
+
+    def _generate_struct(self, struct: CStruct) -> list[str]:
+        """Generate struct class definition."""
+        lines = []
+
+        class_name = self._to_python_class_name(struct.name)
+
+        lines.append(f"class {class_name}(Structure):")
+        if struct.doc:
+            lines.append(f'    """{struct.doc}"""')
+
+        if struct.fields:
+            lines.append("    _fields_ = [")
+            for field in struct.fields:
+                ctypes_type = self.mapper.map_type(str(field.type))
+                lines.append(f'        ("{field.name}", {ctypes_type}),')
+            lines.append("    ]")
+        else:
+            lines.append("    pass")
+
+        return lines
+
+    def _generate_function(self, func: CFunction) -> list[str]:
+        """Generate function binding."""
+        lines = []
+
+        # C signature as comment
+        c_sig = self._format_c_signature(func)
+        lines.append(f"# C: {c_sig}")
+
+        # Set argtypes
+        argtypes = self._get_argtypes(func)
+        lines.append(f"_lib.{func.name}.argtypes = [{', '.join(argtypes)}]")
+
+        # Set restype
+        restype = self.mapper.map_return_type(str(func.return_type))
+        lines.append(f"_lib.{func.name}.restype = {restype}")
+
+        lines.append("")
+
+        # Python wrapper function
+        param_names = [p.name for p in func.parameters]
+        params_str = ", ".join(param_names) if param_names else ""
+
+        lines.append(f"def {func.name}({params_str}):")
+
+        # Docstring
+        lines.append('    """')
+        if func.doc:
+            lines.append(f"    {func.doc}")
+            lines.append("")
+        lines.append("    Args:")
+        for param in func.parameters:
+            lines.append(f"        {param.name}: {param.type}")
+        lines.append("")
+        lines.append("    Returns:")
+        lines.append(f"        {func.return_type}")
+        lines.append('    """')
+
+        # Function body
+        call_args = ", ".join(param_names)
+        lines.append(f"    return _lib.{func.name}({call_args})")
+
+        return lines
+
+    def _generate_exports(self, parsed: ParsedHeader) -> list[str]:
+        """Generate __all__ export list."""
+        exports = []
+
+        for enum in parsed.enums:
+            if enum.name:
+                exports.append(self._to_python_class_name(enum.name))
+
+        for struct in parsed.structs:
+            if not struct.is_opaque:
+                exports.append(self._to_python_class_name(struct.name))
+
+        for func in parsed.functions:
+            exports.append(func.name)
+
+        lines = ["__all__ = ["]
+        for name in sorted(exports):
+            lines.append(f'    "{name}",')
+        lines.append("]")
+
+        return lines
+
+    def _get_argtypes(self, func: CFunction) -> list[str]:
+        """Get ctypes argtypes for function parameters."""
+        return [
+            self.mapper.map_type(str(p.type))
+            for p in func.parameters
+        ]
+
+    def _format_c_signature(self, func: CFunction) -> str:
+        """Format C function signature for comment."""
+        params = ", ".join(
+            f"{p.type} {p.name}" for p in func.parameters
+        )
+        return f"{func.return_type} {func.name}({params})"
+
+    def _to_python_class_name(self, name: str) -> str:
+        """Convert C type name to Python class name."""
+        # Remove common prefixes
+        if name.startswith("scl_"):
+            name = name[4:]
+
+        # Remove _t suffix
+        if name.endswith("_t"):
+            name = name[:-2]
+
+        # Convert to PascalCase
+        parts = name.split("_")
+        return "".join(p.capitalize() for p in parts)

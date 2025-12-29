@@ -87,6 +87,12 @@ build*
 
 compile_commands.json
 
-.venv
+.venv/
 claude.sh
 agent.lock
+
+
+python/scl/libs/*
+
+# auto generate binding files
+python/scl/_bindings/*
