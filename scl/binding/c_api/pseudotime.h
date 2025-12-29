@@ -15,6 +15,7 @@ extern "C" {
 // Pseudotime Methods
 // =============================================================================
 
+// NOLINTNEXTLINE
 typedef enum {
     SCL_PSEUDOTIME_DIFFUSION = 0,
     SCL_PSEUDOTIME_SHORTEST_PATH = 1,
