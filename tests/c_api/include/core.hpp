@@ -2782,6 +2782,25 @@ inline std::string value_to_string(const T& value) {
     }(); \
     static void _scl_test_##name()
 
+/// Define a test with retry on failure (for statistical/randomized tests)
+#define SCL_TEST_RETRY(name, retry_count_value) \
+    static void _scl_test_##name(); \
+    [[maybe_unused]] static bool _scl_reg_##name = []() { \
+        constexpr std::size_t idx = __COUNTER__ - _scl_test_base - 1; \
+        auto& test_info = ::scl::test::detail::get_tests()[idx]; \
+        test_info.func = _scl_test_##name; \
+        test_info.name_str = #name; \
+        test_info.file = __FILE__; \
+        test_info.line = __LINE__; \
+        test_info.suite = ::scl::test::detail::current_suite(); \
+        test_info.retry_count = retry_count_value; \
+        if (idx + 1 > ::scl::test::detail::get_count()) { \
+            ::scl::test::detail::get_count() = idx + 1; \
+        } \
+        return true; \
+    }(); \
+    static void _scl_test_##name()
+
 /// Begin a test suite
 #define SCL_TEST_SUITE(name) \
     namespace _scl_suite_##name { \

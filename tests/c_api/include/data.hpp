@@ -88,6 +88,39 @@ inline void set_seed(uint64_t seed) {
 }
 
 // =============================================================================
+// Random Shape Generation
+// =============================================================================
+
+/// Generate random shape within bounds
+inline std::pair<scl_index_t, scl_index_t> random_shape(
+    scl_index_t min_dim = 1,
+    scl_index_t max_dim = 100,
+    Random& rng = global_rng()
+) {
+    scl_index_t rows = rng.uniform_int(min_dim, max_dim);
+    scl_index_t cols = rng.uniform_int(min_dim, max_dim);
+    return {rows, cols};
+}
+
+/// Generate random square shape
+inline scl_index_t random_square_size(
+    scl_index_t min_size = 1,
+    scl_index_t max_size = 100,
+    Random& rng = global_rng()
+) {
+    return rng.uniform_int(min_size, max_size);
+}
+
+/// Generate random density
+inline double random_density(
+    double min_density = 0.01,
+    double max_density = 0.2,
+    Random& rng = global_rng()
+) {
+    return rng.uniform(min_density, max_density);
+}
+
+// =============================================================================
 // Random Sparse Matrix Generation
 // =============================================================================
 
@@ -653,6 +686,38 @@ inline std::vector<EigenCSR> batch_varying_densities(
     
     for (double density : densities) {
         matrices.push_back(random_sparse_csr(size, size, density, rng));
+    }
+    
+    return matrices;
+}
+
+/// Generate random sparse matrix with random shape
+inline EigenCSR random_sparse_random_shape(
+    scl_index_t min_dim = 10,
+    scl_index_t max_dim = 100,
+    double min_density = 0.01,
+    double max_density = 0.1,
+    Random& rng = global_rng()
+) {
+    auto [rows, cols] = random_shape(min_dim, max_dim, rng);
+    double density = random_density(min_density, max_density, rng);
+    return random_sparse_csr(rows, cols, density, rng);
+}
+
+/// Generate batch of matrices with random shapes
+inline std::vector<EigenCSR> batch_random_shapes(
+    size_t count,
+    scl_index_t min_dim = 10,
+    scl_index_t max_dim = 100,
+    double density = 0.05,
+    Random& rng = global_rng()
+) {
+    std::vector<EigenCSR> matrices;
+    matrices.reserve(count);
+    
+    for (size_t i = 0; i < count; ++i) {
+        auto [rows, cols] = random_shape(min_dim, max_dim, rng);
+        matrices.push_back(random_sparse_csr(rows, cols, density, rng));
     }
     
     return matrices;
