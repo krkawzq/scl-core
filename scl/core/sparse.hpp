@@ -359,6 +359,9 @@ struct SparseBufferStrategy {
 /// @tparam IsCSR true for CSR format, false for CSC format
 template<typename ValueT = Real, typename IndexT = Index, bool IsCSR = true>
 class Sparse {
+    // Friend declaration for transpose type (allows access to private members)
+    friend class Sparse<ValueT, IndexT, !IsCSR>;
+    
 public:
     using ValueType = ValueT;
     using IndexType = IndexT;

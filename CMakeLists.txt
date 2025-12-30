@@ -24,9 +24,9 @@ cmake_minimum_required(VERSION 3.21)
 # -----------------------------------------------------------------------------
 
 project(scl-core
-    VERSION 2.0.0
+    VERSION 0.5.0
     DESCRIPTION "High-performance biological operator library"
-    LANGUAGES CXX
+    LANGUAGES CXX C
 )
 
 # Prevent in-source builds
@@ -262,6 +262,7 @@ endif()
 # Directory structure:
 # - scl/             : Header-only C++ library (core implementation)
 # - scl/api/         : C API (FFI) sources for Python/C bindings
+#   - scl/api/core/  : Core C-API (types, error, sparse handlers)
 # - tests/           : Test files
 # - examples/        : Example files
 # - third_party/     : Third-party dependencies
@@ -269,25 +270,61 @@ endif()
 set(SCL_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(SCL_API_DIR ${CMAKE_CURRENT_SOURCE_DIR}/scl/api)
 
-# Discover C API sources (only .cpp files for FFI exports)
-file(GLOB_RECURSE SCL_API_SOURCES ${SCL_API_DIR}/*.cpp)
+# -----------------------------------------------------------------------------
+# C-API Source Files (Implementation)
+# -----------------------------------------------------------------------------
+
+# Core C-API sources
+set(SCL_API_CORE_SOURCES
+    ${SCL_API_DIR}/core/error.cpp      # Error handling C-API
+    ${SCL_API_DIR}/core/type.cpp       # Type utilities C-API (if needed)
+    ${SCL_API_DIR}/core/handler.cpp    # Sparse matrix handler implementation
+)
+
+# Collect all API sources
+set(SCL_API_SOURCES ${SCL_API_CORE_SOURCES})
 
 # Main source list (C API only, core is header-only)
 set(SCL_ALL_SOURCES ${SCL_API_SOURCES})
 
-# Header files (for IDE support)
-file(GLOB_RECURSE SCL_HEADERS
-    ${CMAKE_CURRENT_SOURCE_DIR}/scl/*.hpp
-    ${SCL_API_DIR}/*.h
+# -----------------------------------------------------------------------------
+# C-API Header Files (Public Interface)
+# -----------------------------------------------------------------------------
+
+# Core C-API public headers (installed to include/scl/api/core/)
+set(SCL_API_CORE_HEADERS
+    ${SCL_API_DIR}/core/type.h         # Opaque handles, precision enums
+    ${SCL_API_DIR}/core/error.h        # Error handling functions
+    ${SCL_API_DIR}/core/sparse.h       # Sparse matrix operations
+    ${SCL_API_DIR}/core/dispatch.h     # C++ dispatch macros (internal use)
+    ${SCL_API_DIR}/core/unsafe.h       # Unsafe direct access (optional)
 )
 
+# All API headers
+set(SCL_API_HEADERS ${SCL_API_CORE_HEADERS})
+
+# C++ core headers (for IDE support and installation)
+file(GLOB_RECURSE SCL_CORE_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/scl/core/*.hpp
+)
+
+# Combined headers (for IDE support)
+set(SCL_HEADERS ${SCL_CORE_HEADERS} ${SCL_API_HEADERS})
+
 # Report configuration
-if(SCL_API_SOURCES)
-    message(STATUS "C API sources: ${SCL_API_SOURCES}")
-    message(STATUS "Building with C FFI exports")
-else()
-    message(STATUS "No C API sources found - header-only configuration")
-endif()
+message(STATUS "")
+message(STATUS "C-API Configuration:")
+message(STATUS "  Core sources:")
+foreach(src ${SCL_API_CORE_SOURCES})
+    get_filename_component(src_name ${src} NAME)
+    message(STATUS "    - ${src_name}")
+endforeach()
+message(STATUS "  Public headers:")
+foreach(hdr ${SCL_API_CORE_HEADERS})
+    get_filename_component(hdr_name ${hdr} NAME)
+    message(STATUS "    - ${hdr_name}")
+endforeach()
+message(STATUS "")
 
 # -----------------------------------------------------------------------------
 # Library Targets
@@ -332,10 +369,18 @@ if(SCL_BUILD_SHARED AND SCL_ALL_SOURCES)
         SOVERSION ${PROJECT_VERSION_MAJOR}
         OUTPUT_NAME "scl"
         EXPORT_NAME "scl"
+        # C-API visibility
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
     )
     
     # Export symbols
-    target_compile_definitions(scl PRIVATE SCL_BUILDING_LIBRARY=1)
+    target_compile_definitions(scl PRIVATE 
+        SCL_BUILDING_LIBRARY=1
+        # Allow unsafe access for internal implementation
+        SCL_UNSAFE_ACCESS=1
+    )
     
     if(WIN32)
         target_compile_definitions(scl PUBLIC SCL_DLL=1)
@@ -354,6 +399,12 @@ if(SCL_BUILD_STATIC AND SCL_ALL_SOURCES)
     set_target_properties(scl_static PROPERTIES
         OUTPUT_NAME "scl_static"
         EXPORT_NAME "scl_static"
+    )
+    
+    # Export symbols for static builds
+    target_compile_definitions(scl_static PRIVATE 
+        SCL_BUILDING_LIBRARY=1
+        SCL_UNSAFE_ACCESS=1
     )
     
     message(STATUS "Building static library: libscl_static.a")
@@ -429,11 +480,16 @@ if(TARGET scl_static)
 endif()
 
 # Install headers
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/scl
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    FILES_MATCHING 
-        PATTERN "*.hpp"
-        PATTERN "*.h"
+# C++ core headers (*.hpp)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/scl/core
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scl
+    FILES_MATCHING PATTERN "*.hpp"
+)
+
+# C-API headers (*.h)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/scl/api
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scl
+    FILES_MATCHING PATTERN "*.h"
 )
 
 # Install CMake config (only if we have targets)
@@ -481,7 +537,10 @@ message(STATUS "")
 message(STATUS "Libraries:")
 message(STATUS "  Shared:         ${SCL_BUILD_SHARED}")
 message(STATUS "  Static:         ${SCL_BUILD_STATIC}")
-message(STATUS "  C API exports:  ${SCL_API_SOURCES}")
+message(STATUS "")
+message(STATUS "C-API Modules:")
+list(LENGTH SCL_API_CORE_SOURCES SCL_API_CORE_COUNT)
+message(STATUS "  core/:          ${SCL_API_CORE_COUNT} sources (error, type, handler)")
 message(STATUS "")
 message(STATUS "Optimizations:")
 message(STATUS "  Native arch:    ${SCL_ENABLE_NATIVE}")

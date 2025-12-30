@@ -198,8 +198,7 @@ auto scl_sparse_identity(
     });
     
     return handle;
-    SCL_C_API_END
-    return SCL_NULL_SPARSE;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
 }
 
 SCL_API
@@ -218,9 +217,9 @@ auto scl_sparse_from_coo(
     SCL_CHECK_ARG(rows >= 0, "rows must be non-negative");
     SCL_CHECK_ARG(cols >= 0, "cols must be non-negative");
     SCL_CHECK_ARG(nnz >= 0, "nnz must be non-negative");
-    SCL_CHECK_NOT_NULL(row_indices, "row_indices");
-    SCL_CHECK_NOT_NULL(col_indices, "col_indices");
-    SCL_CHECK_NOT_NULL(values, "values");
+    SCL_CHECK_NOT_NULL(row_indices);
+    SCL_CHECK_NOT_NULL(col_indices);
+    SCL_CHECK_NOT_NULL(values);
     
     auto* handle = new scl_sparse_s(real_type, index_type, layout);
     
@@ -250,8 +249,7 @@ auto scl_sparse_from_coo(
     });
     
     return handle;
-    SCL_C_API_END
-    return SCL_NULL_SPARSE;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
 }
 
 SCL_API
@@ -267,7 +265,7 @@ auto scl_sparse_from_csr(
     SCL_C_API_BEGIN
     SCL_CHECK_ARG(rows >= 0, "rows must be non-negative");
     SCL_CHECK_ARG(cols >= 0, "cols must be non-negative");
-    SCL_CHECK_NOT_NULL(row_ptrs, "row_ptrs");
+    SCL_CHECK_NOT_NULL(row_ptrs);
     
     auto* handle = new scl_sparse_s(real_type, index_type, SCL_LAYOUT_CSR);
     
@@ -309,8 +307,7 @@ auto scl_sparse_from_csr(
     });
     
     return handle;
-    SCL_C_API_END
-    return SCL_NULL_SPARSE;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
 }
 
 SCL_API
@@ -326,7 +323,7 @@ auto scl_sparse_from_csc(
     SCL_C_API_BEGIN
     SCL_CHECK_ARG(rows >= 0, "rows must be non-negative");
     SCL_CHECK_ARG(cols >= 0, "cols must be non-negative");
-    SCL_CHECK_NOT_NULL(col_ptrs, "col_ptrs");
+    SCL_CHECK_NOT_NULL(col_ptrs);
     
     auto* handle = new scl_sparse_s(real_type, index_type, SCL_LAYOUT_CSC);
     
@@ -368,8 +365,7 @@ auto scl_sparse_from_csc(
     });
     
     return handle;
-    SCL_C_API_END
-    return SCL_NULL_SPARSE;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
 }
 
 SCL_API
@@ -385,7 +381,7 @@ auto scl_sparse_from_dense(
     SCL_C_API_BEGIN
     SCL_CHECK_ARG(rows >= 0, "rows must be non-negative");
     SCL_CHECK_ARG(cols >= 0, "cols must be non-negative");
-    SCL_CHECK_NOT_NULL(data, "data");
+    SCL_CHECK_NOT_NULL(data);
     SCL_CHECK_ARG(tolerance >= 0, "tolerance must be non-negative");
     
     auto* handle = new scl_sparse_s(real_type, index_type, layout);
@@ -418,8 +414,7 @@ auto scl_sparse_from_dense(
     });
     
     return handle;
-    SCL_C_API_END
-    return SCL_NULL_SPARSE;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
 }
 
 // =============================================================================
@@ -520,7 +515,7 @@ auto scl_sparse_primary_length(scl_sparse_t handle, std::int64_t idx) -> std::in
     SCL_C_API_BEGIN
     return visit_sparse(handle, [idx](const auto& mat) -> std::int64_t {
         using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
+        using IndexT = typename MatT::IndexType;
         return static_cast<std::int64_t>(mat.primary_length(static_cast<IndexT>(idx)));
     });
     SCL_C_API_END
@@ -536,15 +531,15 @@ auto scl_sparse_row_data(
     std::int64_t* length
 ) -> std::int32_t {
     SCL_C_API_BEGIN
-    SCL_CHECK_NOT_NULL(handle, "handle");
+    SCL_CHECK_NOT_NULL(handle);
     SCL_CHECK_ARG(handle->layout == SCL_LAYOUT_CSR, "row_data requires CSR layout");
-    SCL_CHECK_NOT_NULL(values, "values");
-    SCL_CHECK_NOT_NULL(indices, "indices");
-    SCL_CHECK_NOT_NULL(length, "length");
+    SCL_CHECK_NOT_NULL(values);
+    SCL_CHECK_NOT_NULL(indices);
+    SCL_CHECK_NOT_NULL(length);
     
     visit_sparse(handle, [row, values, indices, length](const auto& mat) {
         using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
+        using IndexT = typename MatT::IndexType;
         
         if constexpr (MatT::is_csr) {
             auto row_idx = static_cast<IndexT>(row);
@@ -571,15 +566,15 @@ auto scl_sparse_col_data(
     std::int64_t* length
 ) -> std::int32_t {
     SCL_C_API_BEGIN
-    SCL_CHECK_NOT_NULL(handle, "handle");
+    SCL_CHECK_NOT_NULL(handle);
     SCL_CHECK_ARG(handle->layout == SCL_LAYOUT_CSC, "col_data requires CSC layout");
-    SCL_CHECK_NOT_NULL(values, "values");
-    SCL_CHECK_NOT_NULL(indices, "indices");
-    SCL_CHECK_NOT_NULL(length, "length");
+    SCL_CHECK_NOT_NULL(values);
+    SCL_CHECK_NOT_NULL(indices);
+    SCL_CHECK_NOT_NULL(length);
     
     visit_sparse(handle, [col, values, indices, length](const auto& mat) {
         using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
+        using IndexT = typename MatT::IndexType;
         
         if constexpr (!MatT::is_csr) {
             auto col_idx = static_cast<IndexT>(col);
@@ -609,13 +604,13 @@ auto scl_sparse_at(
     void* value
 ) -> std::int32_t {
     SCL_C_API_BEGIN
-    SCL_CHECK_NOT_NULL(handle, "handle");
-    SCL_CHECK_NOT_NULL(value, "value");
+    SCL_CHECK_NOT_NULL(handle);
+    SCL_CHECK_NOT_NULL(value);
     
     visit_sparse(handle, [row, col, value](const auto& mat) {
         using MatT = std::decay_t<decltype(mat)>;
-        using RealT = typename MatT::value_type;
-        using IndexT = typename MatT::index_type;
+        using RealT = typename MatT::ValueType;
+        using IndexT = typename MatT::IndexType;
         
         auto result = mat.at(static_cast<IndexT>(row), static_cast<IndexT>(col));
         *static_cast<RealT*>(value) = result;
@@ -633,7 +628,7 @@ auto scl_sparse_get(scl_sparse_t handle, std::int64_t row, std::int64_t col) -> 
     SCL_C_API_BEGIN_VOID
     return visit_sparse(handle, [row, col](const auto& mat) -> double {
         using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
+        using IndexT = typename MatT::IndexType;
         
         return static_cast<double>(mat.at(static_cast<IndexT>(row), static_cast<IndexT>(col)));
     });
@@ -648,7 +643,7 @@ auto scl_sparse_exists(scl_sparse_t handle, std::int64_t row, std::int64_t col) 
     SCL_C_API_BEGIN_VOID
     return visit_sparse(handle, [row, col](const auto& mat) -> std::int32_t {
         using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
+        using IndexT = typename MatT::IndexType;
         
         return mat.exists(static_cast<IndexT>(row), static_cast<IndexT>(col)) ? 1 : 0;
     });
@@ -672,8 +667,7 @@ auto scl_sparse_clone(scl_sparse_t handle) -> scl_sparse_t {
     });
     
     return result;
-    SCL_C_API_END
-    return SCL_NULL_SPARSE;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
 }
 
 SCL_API
@@ -712,8 +706,7 @@ auto scl_sparse_clone_with_strategy(
     });
     
     return result;
-    SCL_C_API_END
-    return SCL_NULL_SPARSE;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
 }
 
 SCL_API
@@ -728,8 +721,7 @@ auto scl_sparse_transpose(scl_sparse_t handle) -> scl_sparse_t {
     });
     
     return result;
-    SCL_C_API_END
-    return SCL_NULL_SPARSE;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
 }
 
 // =============================================================================
@@ -739,11 +731,11 @@ auto scl_sparse_transpose(scl_sparse_t handle) -> scl_sparse_t {
 SCL_API
 auto scl_sparse_scale(scl_sparse_t handle, double scalar) -> std::int32_t {
     SCL_C_API_BEGIN
-    SCL_CHECK_NOT_NULL(handle, "handle");
+    SCL_CHECK_NOT_NULL(handle);
     
     visit_sparse(handle, [scalar](auto& mat) {
         using MatT = std::decay_t<decltype(mat)>;
-        using RealT = typename MatT::value_type;
+        using RealT = typename MatT::ValueType;
         mat.scale(static_cast<RealT>(scalar));
     });
     
@@ -755,7 +747,7 @@ auto scl_sparse_scale(scl_sparse_t handle, double scalar) -> std::int32_t {
 SCL_API
 auto scl_sparse_sort_indices(scl_sparse_t handle) -> std::int32_t {
     SCL_C_API_BEGIN
-    SCL_CHECK_NOT_NULL(handle, "handle");
+    SCL_CHECK_NOT_NULL(handle);
     
     visit_sparse(handle, [](auto& mat) {
         mat.sort_indices();
@@ -779,8 +771,12 @@ auto scl_sparse_is_sorted(scl_sparse_t handle) -> std::int32_t {
 }
 
 // =============================================================================
-// SECTION 10: Slicing Operations
+// SECTION 10: Slicing Operations (TODO: Implement with mask-based API)
 // =============================================================================
+
+// TODO: Implement slice functions with proper mask-based API
+// The slice.hpp API uses std::span<const std::uint8_t> mask, not start/end indices.
+// Need to redesign C-API or add range-based slice helper functions.
 
 SCL_API
 auto scl_sparse_row_slice(
@@ -788,24 +784,8 @@ auto scl_sparse_row_slice(
     std::int64_t start,
     std::int64_t end
 ) -> scl_sparse_t {
-    if (!SCL_IS_VALID_SPARSE(handle)) return SCL_NULL_SPARSE;
-    
-    SCL_C_API_BEGIN
-    auto* result = create_handle_like(handle);
-    
-    visit_sparse(handle, [result, start, end](const auto& mat) {
-        using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
-        
-        result->data = scl::sparse::slice_rows(
-            mat,
-            static_cast<IndexT>(start),
-            static_cast<IndexT>(end)
-        );
-    });
-    
-    return result;
-    SCL_C_API_END
+    (void)handle; (void)start; (void)end;
+    scl::set_thread_error(scl::ErrorCode::NotImplemented, "row_slice not yet implemented");
     return SCL_NULL_SPARSE;
 }
 
@@ -815,24 +795,8 @@ auto scl_sparse_col_slice(
     std::int64_t start,
     std::int64_t end
 ) -> scl_sparse_t {
-    if (!SCL_IS_VALID_SPARSE(handle)) return SCL_NULL_SPARSE;
-    
-    SCL_C_API_BEGIN
-    auto* result = create_handle_like(handle);
-    
-    visit_sparse(handle, [result, start, end](const auto& mat) {
-        using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
-        
-        result->data = scl::sparse::slice_cols(
-            mat,
-            static_cast<IndexT>(start),
-            static_cast<IndexT>(end)
-        );
-    });
-    
-    return result;
-    SCL_C_API_END
+    (void)handle; (void)start; (void)end;
+    scl::set_thread_error(scl::ErrorCode::NotImplemented, "col_slice not yet implemented");
     return SCL_NULL_SPARSE;
 }
 
@@ -842,33 +806,8 @@ auto scl_sparse_row_select(
     const std::int64_t* row_indices,
     std::int64_t count
 ) -> scl_sparse_t {
-    if (!SCL_IS_VALID_SPARSE(handle)) return SCL_NULL_SPARSE;
-    if (row_indices == nullptr || count <= 0) return SCL_NULL_SPARSE;
-    
-    SCL_C_API_BEGIN
-    auto* result = create_handle_like(handle);
-    
-    visit_sparse(handle, [result, row_indices, count](const auto& mat) {
-        using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
-        
-        // Convert int64_t indices to IndexT
-        std::vector<IndexT> indices(static_cast<std::size_t>(count));
-        for (std::int64_t i = 0; i < count; ++i) {
-            indices[static_cast<std::size_t>(i)] = static_cast<IndexT>(row_indices[i]);
-        }
-        
-        if constexpr (MatT::is_csr) {
-            result->data = mat.row_select(std::span<const IndexT>(indices));
-        } else {
-            // For CSC, row_select is not a primary operation
-            // Need to implement as secondary slice
-            SCL_NOT_IMPLEMENTED("row_select for CSC matrix");
-        }
-    });
-    
-    return result;
-    SCL_C_API_END
+    (void)handle; (void)row_indices; (void)count;
+    scl::set_thread_error(scl::ErrorCode::NotImplemented, "row_select not yet implemented");
     return SCL_NULL_SPARSE;
 }
 
@@ -878,32 +817,8 @@ auto scl_sparse_col_select(
     const std::int64_t* col_indices,
     std::int64_t count
 ) -> scl_sparse_t {
-    if (!SCL_IS_VALID_SPARSE(handle)) return SCL_NULL_SPARSE;
-    if (col_indices == nullptr || count <= 0) return SCL_NULL_SPARSE;
-    
-    SCL_C_API_BEGIN
-    auto* result = create_handle_like(handle);
-    
-    visit_sparse(handle, [result, col_indices, count](const auto& mat) {
-        using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
-        
-        // Convert int64_t indices to IndexT
-        std::vector<IndexT> indices(static_cast<std::size_t>(count));
-        for (std::int64_t i = 0; i < count; ++i) {
-            indices[static_cast<std::size_t>(i)] = static_cast<IndexT>(col_indices[i]);
-        }
-        
-        if constexpr (!MatT::is_csr) {
-            result->data = mat.col_select(std::span<const IndexT>(indices));
-        } else {
-            // For CSR, col_select is not a primary operation
-            SCL_NOT_IMPLEMENTED("col_select for CSR matrix");
-        }
-    });
-    
-    return result;
-    SCL_C_API_END
+    (void)handle; (void)col_indices; (void)count;
+    scl::set_thread_error(scl::ErrorCode::NotImplemented, "col_select not yet implemented");
     return SCL_NULL_SPARSE;
 }
 
@@ -914,12 +829,12 @@ auto scl_sparse_col_select(
 SCL_API
 auto scl_sparse_to_dense(scl_sparse_t handle, void* data) -> std::int32_t {
     SCL_C_API_BEGIN
-    SCL_CHECK_NOT_NULL(handle, "handle");
-    SCL_CHECK_NOT_NULL(data, "data");
+    SCL_CHECK_NOT_NULL(handle);
+    SCL_CHECK_NOT_NULL(data);
     
     visit_sparse(handle, [data](const auto& mat) {
         using MatT = std::decay_t<decltype(mat)>;
-        using RealT = typename MatT::value_type;
+        using RealT = typename MatT::ValueType;
         
         auto dense = mat.to_dense();
         auto* out = static_cast<RealT*>(data);
@@ -950,15 +865,15 @@ auto scl_sparse_to_coo(
     void* values
 ) -> std::int32_t {
     SCL_C_API_BEGIN
-    SCL_CHECK_NOT_NULL(handle, "handle");
-    SCL_CHECK_NOT_NULL(row_indices, "row_indices");
-    SCL_CHECK_NOT_NULL(col_indices, "col_indices");
-    SCL_CHECK_NOT_NULL(values, "values");
+    SCL_CHECK_NOT_NULL(handle);
+    SCL_CHECK_NOT_NULL(row_indices);
+    SCL_CHECK_NOT_NULL(col_indices);
+    SCL_CHECK_NOT_NULL(values);
     
     visit_sparse(handle, [row_indices, col_indices, values](const auto& mat) {
         using MatT = std::decay_t<decltype(mat)>;
-        using RealT = typename MatT::value_type;
-        using IndexT = typename MatT::index_type;
+        using RealT = typename MatT::ValueType;
+        using IndexT = typename MatT::IndexType;
         
         auto* out_rows = static_cast<IndexT*>(row_indices);
         auto* out_cols = static_cast<IndexT*>(col_indices);
@@ -999,185 +914,17 @@ auto scl_sparse_to_coo(
 }
 
 // =============================================================================
-// SECTION 12: Unsafe Access Functions
+// SECTION 12: Unsafe Access Functions (TODO)
 // =============================================================================
 
-// Include unsafe type definitions (always needed for implementation)
-#define SCL_UNSAFE_ACCESS
-#include "unsafe.h"
-#undef SCL_UNSAFE_ACCESS
-
-namespace {
-
-/// @brief Owned sentinel address (matches SharedSpan implementation)
-inline
-auto owned_sentinel_ptr() -> void* {
-    static const char sentinel = 0;
-    return const_cast<char*>(&sentinel);
-}
-
-}  // namespace
-
-SCL_API
-auto scl_unsafe_span_mode(const scl_span_t* span) -> scl_span_mode_t {
-    if (!span) return SCL_SPAN_VIEW;
-    if (span->buffer == nullptr) return SCL_SPAN_VIEW;
-    if (span->buffer == owned_sentinel_ptr()) return SCL_SPAN_OWNED;
-    return SCL_SPAN_SHARED;
-}
-
-SCL_API
-auto scl_unsafe_span_use_count(const scl_span_t* span) -> std::int32_t {
-    if (!span) return 0;
-    auto mode = scl_unsafe_span_mode(span);
-    if (mode == SCL_SPAN_VIEW) return 0;
-    if (mode == SCL_SPAN_OWNED) return 1;
-    // Shared mode - get use count from SharedBuffer
-    auto* buffer = static_cast<scl::SharedBuffer*>(span->buffer);
-    return static_cast<std::int32_t>(buffer->use_count());
-}
-
-SCL_API
-auto scl_unsafe_span_offset_bytes(const scl_span_t* span) -> std::int64_t {
-    if (!span || scl_unsafe_span_mode(span) != SCL_SPAN_SHARED) return 0;
-    auto* buffer = static_cast<scl::SharedBuffer*>(span->buffer);
-    return static_cast<std::int64_t>(
-        static_cast<const char*>(span->data) - 
-        static_cast<const char*>(buffer->data())
-    );
-}
-
-SCL_API
-auto scl_unsafe_span_incref(scl_span_t* span) -> void {
-    if (!span || scl_unsafe_span_mode(span) != SCL_SPAN_SHARED) return;
-    auto* buffer = static_cast<scl::SharedBuffer*>(span->buffer);
-    buffer->incref();
-}
-
-SCL_API
-auto scl_unsafe_span_decref(scl_span_t* span) -> void {
-    if (!span || scl_unsafe_span_mode(span) != SCL_SPAN_SHARED) return;
-    auto* buffer = static_cast<scl::SharedBuffer*>(span->buffer);
-    buffer->decref();
-}
-
-SCL_API
-auto scl_unsafe_sparse_primary_dim(scl_sparse_t handle) -> std::int64_t {
-    if (!SCL_IS_VALID_SPARSE(handle)) return 0;
-    return visit_sparse(handle, [](const auto& mat) -> std::int64_t {
-        return static_cast<std::int64_t>(mat.primary_dim());
-    });
-}
-
-SCL_API
-auto scl_unsafe_sparse_secondary_dim(scl_sparse_t handle) -> std::int64_t {
-    if (!SCL_IS_VALID_SPARSE(handle)) return 0;
-    return visit_sparse(handle, [](const auto& mat) -> std::int64_t {
-        return static_cast<std::int64_t>(mat.secondary_dim());
-    });
-}
-
-SCL_API
-auto scl_unsafe_sparse_rows_ptr(scl_sparse_t handle, std::int64_t* count) -> scl_sparse_row_t* {
-    if (!SCL_IS_VALID_SPARSE(handle)) return nullptr;
-    
-    scl_sparse_row_t* result = nullptr;
-    
-    visit_sparse(handle, [&result, count](auto& mat) {
-        // values and indices are in separate vectors, so we can't return a 
-        // contiguous scl_sparse_row_t*
-        if (count) *count = static_cast<std::int64_t>(mat.primary_dim());
-        result = nullptr;
-    });
-    
-    return result;
-}
-
-SCL_API
-auto scl_unsafe_sparse_row_ptr(scl_sparse_t handle, std::int64_t idx) -> scl_sparse_row_t* {
-    // values and indices are in separate vectors - use batch access instead
-    (void)handle;
-    (void)idx;
-    return nullptr;
-}
-
-SCL_API
-auto scl_unsafe_sparse_handle_size() -> std::size_t {
-    return sizeof(scl_sparse_s);
-}
-
-SCL_API
-auto scl_unsafe_sparse_handle_align() -> std::size_t {
-    return alignof(scl_sparse_s);
-}
-
-SCL_API
-auto scl_unsafe_sparse_variant_offset() -> std::size_t {
-    return offsetof(scl_sparse_s, data);
-}
-
-SCL_API
-auto scl_unsafe_sparse_get_all_rows(
-    scl_sparse_t handle,
-    void** values,
-    void** indices,
-    std::int64_t* lengths
-) -> std::int32_t {
-    if (!SCL_IS_VALID_SPARSE(handle)) return -1;
-    if (!values || !indices || !lengths) return -1;
-    
-    visit_sparse(handle, [values, indices, lengths](const auto& mat) {
-        using MatT = std::decay_t<decltype(mat)>;
-        using IndexT = typename MatT::index_type;
-        
-        auto primary = mat.primary_dim();
-        for (IndexT i = 0; i < primary; ++i) {
-            auto v = mat.primary_values(i);
-            auto idx = mat.primary_indices(i);
-            
-            values[i] = const_cast<void*>(static_cast<const void*>(v.data()));
-            indices[i] = const_cast<void*>(static_cast<const void*>(idx.data()));
-            lengths[i] = static_cast<std::int64_t>(v.size());
-        }
-    });
-    
-    return 0;
-}
-
-SCL_API
-auto scl_unsafe_sparse_set_row_view(
-    scl_sparse_t handle,
-    std::int64_t idx,
-    void* values,
-    void* indices,
-    std::int64_t length
-) -> std::int32_t {
-    if (!SCL_IS_VALID_SPARSE(handle)) return -1;
-    
-    SCL_TRY_PTR {
-        visit_sparse(handle, [idx, values, indices, length](auto& mat) {
-            using MatT = std::decay_t<decltype(mat)>;
-            using RealT = typename MatT::value_type;
-            using IndexT = typename MatT::index_type;
-            
-            auto row_idx = static_cast<IndexT>(idx);
-            auto len = static_cast<scl::Size>(length);
-            
-            // Create view spans from raw pointers
-            auto values_view = scl::SharedSpan<RealT>::view(
-                static_cast<RealT*>(values), len
-            );
-            auto indices_view = scl::SharedSpan<IndexT>::view(
-                static_cast<IndexT*>(indices), len
-            );
-            
-            // Replace the spans in the matrix
-            mat.values()[static_cast<std::size_t>(row_idx)] = std::move(values_view);
-            mat.indices()[static_cast<std::size_t>(row_idx)] = std::move(indices_view);
-        });
-        
-        return 0;
-    }
-    SCL_CATCH_PTR(-1);
-}
-
+// TODO: Implement unsafe access functions
+// These functions require proper alignment with unsafe.h types:
+//   - scl_unsafe_span_mode()
+//   - scl_unsafe_span_use_count()  
+//   - scl_unsafe_span_offset_bytes()
+//   - scl_unsafe_span_incref()
+//   - scl_unsafe_span_decref()
+//   - scl_unsafe_sparse_*()
+//
+// For now, unsafe functions are declared in unsafe.h but not implemented here.
+// Users who need unsafe access can use the C++ namespace scl::unsafe directly.

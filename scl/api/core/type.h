@@ -469,29 +469,31 @@ typedef struct scl_buffer_config_s {
  *       using IndexT = SCL_INDEX_TYPE;
  *       // ... use RealT and IndexT
  *   });
+ *
+ * @note Uses variadic macro to handle code blocks containing commas
  */
-#define SCL_DISPATCH_REAL_INDEX(real_type, index_type, BLOCK) \
+#define SCL_DISPATCH_REAL_INDEX(real_type, index_type, ...) \
     do { \
         switch (SCL_TYPE_INDEX(real_type, index_type)) { \
             case 0: { \
                 using SCL_REAL_TYPE = float; \
                 using SCL_INDEX_TYPE = std::int32_t; \
-                BLOCK \
+                __VA_ARGS__ \
             } break; \
             case 1: { \
                 using SCL_REAL_TYPE = double; \
                 using SCL_INDEX_TYPE = std::int32_t; \
-                BLOCK \
+                __VA_ARGS__ \
             } break; \
             case 2: { \
                 using SCL_REAL_TYPE = float; \
                 using SCL_INDEX_TYPE = std::int64_t; \
-                BLOCK \
+                __VA_ARGS__ \
             } break; \
             case 3: { \
                 using SCL_REAL_TYPE = double; \
                 using SCL_INDEX_TYPE = std::int64_t; \
-                BLOCK \
+                __VA_ARGS__ \
             } break; \
             default: break; \
         } \
@@ -505,15 +507,17 @@ typedef struct scl_buffer_config_s {
  *       constexpr bool IsCSR = SCL_IS_CSR;
  *       // ... use IsCSR
  *   });
+ *
+ * @note Uses variadic macro to handle code blocks containing commas
  */
-#define SCL_DISPATCH_LAYOUT(layout, BLOCK) \
+#define SCL_DISPATCH_LAYOUT(layout, ...) \
     do { \
         if ((layout) == SCL_LAYOUT_CSR) { \
             constexpr bool SCL_IS_CSR = true; \
-            BLOCK \
+            __VA_ARGS__ \
         } else { \
             constexpr bool SCL_IS_CSR = false; \
-            BLOCK \
+            __VA_ARGS__ \
         } \
     } while (0)
 
@@ -527,10 +531,12 @@ typedef struct scl_buffer_config_s {
  *       constexpr bool IsCSR = SCL_IS_CSR;
  *       // ... use types
  *   });
+ *
+ * @note Uses variadic macro to handle code blocks containing commas
  */
-#define SCL_DISPATCH_SPARSE(real_type, index_type, layout, BLOCK) \
+#define SCL_DISPATCH_SPARSE(real_type, index_type, layout, ...) \
     SCL_DISPATCH_LAYOUT(layout, { \
-        SCL_DISPATCH_REAL_INDEX(real_type, index_type, BLOCK); \
+        SCL_DISPATCH_REAL_INDEX(real_type, index_type, __VA_ARGS__); \
     })
 
 /**

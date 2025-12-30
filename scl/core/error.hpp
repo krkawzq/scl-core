@@ -1420,3 +1420,20 @@ public:
     } catch (...) { \
         ::scl::set_thread_error(::scl::ErrorCode::Unknown); \
     }
+
+/// @brief Wrapper for C-ABI functions that returns a handle (pointer)
+/// @param null_value The null value to return on error (e.g., SCL_NULL_SPARSE)
+#define SCL_C_API_END_HANDLE(null_value) \
+    } catch (const ::scl::Error& _e) { \
+        ::scl::set_thread_error(_e.code(), _e.message().c_str()); \
+        return null_value; \
+    } catch (const std::bad_alloc&) { \
+        ::scl::set_thread_error(::scl::ErrorCode::OutOfMemory); \
+        return null_value; \
+    } catch (const std::exception& _e) { \
+        ::scl::set_thread_error(::scl::ErrorCode::Unknown, _e.what()); \
+        return null_value; \
+    } catch (...) { \
+        ::scl::set_thread_error(::scl::ErrorCode::Unknown); \
+        return null_value; \
+    }

@@ -56,15 +56,17 @@
  *
  * Defines within BLOCK:
  *   - SCL_REAL_TYPE: float or double
+ *
+ * @note Uses variadic macro to handle code blocks containing commas
  */
-#define SCL_DISPATCH_REAL(real_type, BLOCK) \
+#define SCL_DISPATCH_REAL(real_type, ...) \
     do { \
         if ((real_type) == SCL_REAL32) { \
             using SCL_REAL_TYPE = float; \
-            BLOCK \
+            __VA_ARGS__ \
         } else { \
             using SCL_REAL_TYPE = double; \
-            BLOCK \
+            __VA_ARGS__ \
         } \
     } while (0)
 
@@ -73,15 +75,17 @@
  *
  * Defines within BLOCK:
  *   - SCL_INDEX_TYPE: std::int32_t or std::int64_t
+ *
+ * @note Uses variadic macro to handle code blocks containing commas
  */
-#define SCL_DISPATCH_INDEX(index_type, BLOCK) \
+#define SCL_DISPATCH_INDEX(index_type, ...) \
     do { \
         if ((index_type) == SCL_INDEX32) { \
             using SCL_INDEX_TYPE = std::int32_t; \
-            BLOCK \
+            __VA_ARGS__ \
         } else { \
             using SCL_INDEX_TYPE = std::int64_t; \
-            BLOCK \
+            __VA_ARGS__ \
         } \
     } while (0)
 
@@ -99,7 +103,7 @@
  *   - SCL_REAL_TYPE: always double
  *   - SCL_INDEX_TYPE: std::int32_t or std::int64_t
  */
-#define SCL_DISPATCH_REAL64_ONLY(real_type, index_type, BLOCK) \
+#define SCL_DISPATCH_REAL64_ONLY(real_type, index_type, ...) \
     do { \
         if ((real_type) != SCL_REAL64) { \
             throw ::scl::TypeError( \
@@ -109,7 +113,7 @@
         } \
         SCL_DISPATCH_INDEX(index_type, { \
             using SCL_REAL_TYPE = double; \
-            BLOCK \
+            __VA_ARGS__ \
         }); \
     } while (0)
 
@@ -123,7 +127,7 @@
  *   - SCL_REAL_TYPE: float or double
  *   - SCL_INDEX_TYPE: always std::int64_t
  */
-#define SCL_DISPATCH_INDEX64_ONLY(real_type, index_type, BLOCK) \
+#define SCL_DISPATCH_INDEX64_ONLY(real_type, index_type, ...) \
     do { \
         if ((index_type) != SCL_INDEX64) { \
             throw ::scl::TypeError( \
@@ -133,7 +137,7 @@
         } \
         SCL_DISPATCH_REAL(real_type, { \
             using SCL_INDEX_TYPE = std::int64_t; \
-            BLOCK \
+            __VA_ARGS__ \
         }); \
     } while (0)
 
@@ -142,7 +146,7 @@
  *
  * Throws ValueError if layout is not SCL_LAYOUT_CSR.
  */
-#define SCL_DISPATCH_CSR_ONLY(real_type, index_type, layout, BLOCK) \
+#define SCL_DISPATCH_CSR_ONLY(real_type, index_type, layout, ...) \
     do { \
         if ((layout) != SCL_LAYOUT_CSR) { \
             throw ::scl::ValueError( \
@@ -152,7 +156,7 @@
         } \
         SCL_DISPATCH_REAL_INDEX(real_type, index_type, { \
             constexpr bool SCL_IS_CSR = true; \
-            BLOCK \
+            __VA_ARGS__ \
         }); \
     } while (0)
 
@@ -161,7 +165,7 @@
  *
  * Throws ValueError if layout is not SCL_LAYOUT_CSC.
  */
-#define SCL_DISPATCH_CSC_ONLY(real_type, index_type, layout, BLOCK) \
+#define SCL_DISPATCH_CSC_ONLY(real_type, index_type, layout, ...) \
     do { \
         if ((layout) != SCL_LAYOUT_CSC) { \
             throw ::scl::ValueError( \
@@ -171,7 +175,7 @@
         } \
         SCL_DISPATCH_REAL_INDEX(real_type, index_type, { \
             constexpr bool SCL_IS_CSR = false; \
-            BLOCK \
+            __VA_ARGS__ \
         }); \
     } while (0)
 
@@ -244,17 +248,17 @@
  * return result;
  * ```
  */
-#define SCL_DISPATCH_REAL_INDEX_RET(real_type, index_type, result_var, BLOCK) \
+#define SCL_DISPATCH_REAL_INDEX_RET(real_type, index_type, result_var, ...) \
     SCL_DISPATCH_REAL_INDEX(real_type, index_type, { \
-        BLOCK \
+        __VA_ARGS__ \
     })
 
 /**
  * @brief Dispatch sparse and capture return value
  */
-#define SCL_DISPATCH_SPARSE_RET(real_type, index_type, layout, result_var, BLOCK) \
+#define SCL_DISPATCH_SPARSE_RET(real_type, index_type, layout, result_var, ...) \
     SCL_DISPATCH_SPARSE(real_type, index_type, layout, { \
-        BLOCK \
+        __VA_ARGS__ \
     })
 
 /* ============================================================================
@@ -271,10 +275,10 @@
  * @param h2    Second sparse handle
  * @param BLOCK Code block (receives SCL_REAL_TYPE, SCL_INDEX_TYPE, SCL_IS_CSR)
  */
-#define SCL_DISPATCH_BINARY_SPARSE(h1, h2, BLOCK) \
+#define SCL_DISPATCH_BINARY_SPARSE(h1, h2, ...) \
     do { \
         SCL_CHECK_SAME_SPARSE_TYPE(h1, h2); \
-        SCL_DISPATCH_SPARSE((h1)->real_type, (h1)->index_type, (h1)->layout, BLOCK); \
+        SCL_DISPATCH_SPARSE((h1)->real_type, (h1)->index_type, (h1)->layout, __VA_ARGS__); \
     } while (0)
 
 /* ============================================================================
