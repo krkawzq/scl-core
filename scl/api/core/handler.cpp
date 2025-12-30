@@ -998,3 +998,186 @@ auto scl_sparse_to_coo(
     return static_cast<std::int32_t>(scl::ErrorCode::Unknown);
 }
 
+// =============================================================================
+// SECTION 12: Unsafe Access Functions
+// =============================================================================
+
+// Include unsafe type definitions (always needed for implementation)
+#define SCL_UNSAFE_ACCESS
+#include "unsafe.h"
+#undef SCL_UNSAFE_ACCESS
+
+namespace {
+
+/// @brief Owned sentinel address (matches SharedSpan implementation)
+inline
+auto owned_sentinel_ptr() -> void* {
+    static const char sentinel = 0;
+    return const_cast<char*>(&sentinel);
+}
+
+}  // namespace
+
+SCL_API
+auto scl_unsafe_span_mode(const scl_span_t* span) -> scl_span_mode_t {
+    if (!span) return SCL_SPAN_VIEW;
+    if (span->buffer == nullptr) return SCL_SPAN_VIEW;
+    if (span->buffer == owned_sentinel_ptr()) return SCL_SPAN_OWNED;
+    return SCL_SPAN_SHARED;
+}
+
+SCL_API
+auto scl_unsafe_span_use_count(const scl_span_t* span) -> std::int32_t {
+    if (!span) return 0;
+    auto mode = scl_unsafe_span_mode(span);
+    if (mode == SCL_SPAN_VIEW) return 0;
+    if (mode == SCL_SPAN_OWNED) return 1;
+    // Shared mode - get use count from SharedBuffer
+    auto* buffer = static_cast<scl::SharedBuffer*>(span->buffer);
+    return static_cast<std::int32_t>(buffer->use_count());
+}
+
+SCL_API
+auto scl_unsafe_span_offset_bytes(const scl_span_t* span) -> std::int64_t {
+    if (!span || scl_unsafe_span_mode(span) != SCL_SPAN_SHARED) return 0;
+    auto* buffer = static_cast<scl::SharedBuffer*>(span->buffer);
+    return static_cast<std::int64_t>(
+        static_cast<const char*>(span->data) - 
+        static_cast<const char*>(buffer->data())
+    );
+}
+
+SCL_API
+auto scl_unsafe_span_incref(scl_span_t* span) -> void {
+    if (!span || scl_unsafe_span_mode(span) != SCL_SPAN_SHARED) return;
+    auto* buffer = static_cast<scl::SharedBuffer*>(span->buffer);
+    buffer->incref();
+}
+
+SCL_API
+auto scl_unsafe_span_decref(scl_span_t* span) -> void {
+    if (!span || scl_unsafe_span_mode(span) != SCL_SPAN_SHARED) return;
+    auto* buffer = static_cast<scl::SharedBuffer*>(span->buffer);
+    buffer->decref();
+}
+
+SCL_API
+auto scl_unsafe_sparse_primary_dim(scl_sparse_t handle) -> std::int64_t {
+    if (!SCL_IS_VALID_SPARSE(handle)) return 0;
+    return visit_sparse(handle, [](const auto& mat) -> std::int64_t {
+        return static_cast<std::int64_t>(mat.primary_dim());
+    });
+}
+
+SCL_API
+auto scl_unsafe_sparse_secondary_dim(scl_sparse_t handle) -> std::int64_t {
+    if (!SCL_IS_VALID_SPARSE(handle)) return 0;
+    return visit_sparse(handle, [](const auto& mat) -> std::int64_t {
+        return static_cast<std::int64_t>(mat.secondary_dim());
+    });
+}
+
+SCL_API
+auto scl_unsafe_sparse_rows_ptr(scl_sparse_t handle, std::int64_t* count) -> scl_sparse_row_t* {
+    if (!SCL_IS_VALID_SPARSE(handle)) return nullptr;
+    
+    scl_sparse_row_t* result = nullptr;
+    
+    visit_sparse(handle, [&result, count](auto& mat) {
+        // values and indices are in separate vectors, so we can't return a 
+        // contiguous scl_sparse_row_t*
+        if (count) *count = static_cast<std::int64_t>(mat.primary_dim());
+        result = nullptr;
+    });
+    
+    return result;
+}
+
+SCL_API
+auto scl_unsafe_sparse_row_ptr(scl_sparse_t handle, std::int64_t idx) -> scl_sparse_row_t* {
+    // values and indices are in separate vectors - use batch access instead
+    (void)handle;
+    (void)idx;
+    return nullptr;
+}
+
+SCL_API
+auto scl_unsafe_sparse_handle_size() -> std::size_t {
+    return sizeof(scl_sparse_s);
+}
+
+SCL_API
+auto scl_unsafe_sparse_handle_align() -> std::size_t {
+    return alignof(scl_sparse_s);
+}
+
+SCL_API
+auto scl_unsafe_sparse_variant_offset() -> std::size_t {
+    return offsetof(scl_sparse_s, data);
+}
+
+SCL_API
+auto scl_unsafe_sparse_get_all_rows(
+    scl_sparse_t handle,
+    void** values,
+    void** indices,
+    std::int64_t* lengths
+) -> std::int32_t {
+    if (!SCL_IS_VALID_SPARSE(handle)) return -1;
+    if (!values || !indices || !lengths) return -1;
+    
+    visit_sparse(handle, [values, indices, lengths](const auto& mat) {
+        using MatT = std::decay_t<decltype(mat)>;
+        using IndexT = typename MatT::index_type;
+        
+        auto primary = mat.primary_dim();
+        for (IndexT i = 0; i < primary; ++i) {
+            auto v = mat.primary_values(i);
+            auto idx = mat.primary_indices(i);
+            
+            values[i] = const_cast<void*>(static_cast<const void*>(v.data()));
+            indices[i] = const_cast<void*>(static_cast<const void*>(idx.data()));
+            lengths[i] = static_cast<std::int64_t>(v.size());
+        }
+    });
+    
+    return 0;
+}
+
+SCL_API
+auto scl_unsafe_sparse_set_row_view(
+    scl_sparse_t handle,
+    std::int64_t idx,
+    void* values,
+    void* indices,
+    std::int64_t length
+) -> std::int32_t {
+    if (!SCL_IS_VALID_SPARSE(handle)) return -1;
+    
+    SCL_TRY_PTR {
+        visit_sparse(handle, [idx, values, indices, length](auto& mat) {
+            using MatT = std::decay_t<decltype(mat)>;
+            using RealT = typename MatT::value_type;
+            using IndexT = typename MatT::index_type;
+            
+            auto row_idx = static_cast<IndexT>(idx);
+            auto len = static_cast<scl::Size>(length);
+            
+            // Create view spans from raw pointers
+            auto values_view = scl::SharedSpan<RealT>::view(
+                static_cast<RealT*>(values), len
+            );
+            auto indices_view = scl::SharedSpan<IndexT>::view(
+                static_cast<IndexT*>(indices), len
+            );
+            
+            // Replace the spans in the matrix
+            mat.values()[static_cast<std::size_t>(row_idx)] = std::move(values_view);
+            mat.indices()[static_cast<std::size_t>(row_idx)] = std::move(indices_view);
+        });
+        
+        return 0;
+    }
+    SCL_CATCH_PTR(-1);
+}
+
