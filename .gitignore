@@ -74,6 +74,11 @@ agent.lock
 
 # Project-specific
 scl_v*/
+python_v*/
+tests_v*/
+codegen_v*/
+docs_v*/
+
 python/scl/libs/*
 python/scl/_bindings/*
 

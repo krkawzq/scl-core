@@ -1,275 +1,313 @@
 # AGENT.md - AI Developer Guide for scl-core
 
+本节新增要求：  
+函数定义时必须遵循以下格式规范：
+
+1. `template`（如有模板）需单独一行。
+2. `[[nodiscard]]`、`SCL_FORCE_INLINE`、`constexpr`等标记须独占一行，紧随 `template`（如有）之后。
+3. 函数实现必须以 `auto` 或 `void` 开头，返回类型需使用 `-> T`（Trailing Return Type）指定，即 `auto f(...) -> T` 或 `void f(...) -> void`。
+4. 示例（√）：
+
+    ```cpp
+    /// @brief 示例函数
+    /// @tparam T 类型参数
+    /// @param[in] x 输入值
+    /// @return 值加一
+    template<typename T>
+    [[nodiscard]]
+    SCL_FORCE_INLINE
+    constexpr
+    auto add_one(T x) -> T {
+        return x + 1;
+    }
+    ```
+
+---
+
 This document defines the coding standards and protocols for the `scl-core` project.
 
 **Core Mission**: Build a high-performance biological operator library with zero-overhead C++ kernels and a stable C-ABI surface for Python integration.
 
 ---
 
-## 1. Documentation Standard
+## 1. C++ Standards
 
-### 1.1 Documentation Location
-
-- `xxx.hpp`: Implementation files with minimal inline comments
-- `docs/`: Comprehensive API documentation in Markdown format
-
-### 1.2 Implementation Files
-
-Keep inline comments minimal:
-- One-line function purpose (optional if self-explanatory)
-- Non-obvious algorithm tricks or optimizations
-- Warnings about subtle behavior
-
-### 1.3 API Documentation Format
-
-All API documentation in `docs/` must include these sections (in order):
-
-| Section | Required | Description |
-|---------|----------|-------------|
-| SUMMARY | Yes | One-line description |
-| PARAMETERS | Yes | Each parameter with [in], [out], or [in,out] |
-| PRECONDITIONS | Yes | Requirements before calling |
-| POSTCONDITIONS | Yes | Guarantees after execution |
-| MUTABILITY | If applicable | INPLACE, CONST, or ALLOCATES |
-| ALGORITHM | If non-trivial | Step-by-step description |
-| COMPLEXITY | Yes | Time and space complexity |
-| THREAD SAFETY | Yes | Safe, Unsafe, or conditional |
-| THROWS | If applicable | Exceptions and conditions |
-| NUMERICAL NOTES | If applicable | Precision, stability, edge cases |
-
-Function signatures in documentation must match implementation exactly. Use code blocks for signatures with inline parameter comments.
-
-**IMPORTANT**: API documentation must NOT contain examples. Describe contracts and behavior precisely.
-
-### 1.4 Workflow Requirement
-
-**CRITICAL**: After any file modification, update corresponding documentation in `docs/`.
-
-Checklist:
-1. Implementation in `.hpp` is correct
-2. Documentation exists in `docs/` directory
-3. Function signatures match exactly
-4. All required sections are present
-5. MUTABILITY is correct for in-place operations
-
-### 1.5 Language and Formatting
-
-- **Language**: English only
-- **Format**: Plain text only (NO Markdown/LaTeX syntax in code comments)
-- **No examples** in API documentation
-
----
-
-## 2. C++ Standards
-
-### 2.1 Language Standard
+### 1.1 Language Standard
 
 - **C++20** (ISO/IEC 14882:2020)
 - **Compilers**: GCC 11+, Clang 14+, MSVC 19.29+
 
-**Compile Flags**:
-```bash
-# Release: -std=c++20 -O3 -DNDEBUG -march=native -ffast-math -flto
-# Debug:   -std=c++20 -O0 -g -fsanitize=address,undefined
-```
+**Compile Flags**:  
+Release/Debug builds should use appropriate C++20 and optimization/sanitizer flags.
 
-### 2.2 Required C++20 Features
+### 1.2 Modern C++20 Features (Required)
 
-- Concepts (prefer over SFINAE)
-- std::span (replace raw pointer + size)
-- constexpr (maximize compile-time computation)
-- [[likely]]/[[unlikely]] (hot paths)
-- std::bit_cast (type punning for POD)
-- noexcept (especially move operations)
+- Use concepts for type constraints (prefer over SFINAE)
+- Use `std::span` for non-owning views (replace `T* + size`)
+- Use `constexpr`/`consteval` for compile-time computation as much as possible
+- Use attribute syntax directly (e.g., `[[nodiscard]]`, `[[likely]]`, `[[unlikely]]`, `[[no_unique_address]]`)
+- Always use trailing return type: `auto f() -> T` (required for all non-void functions)
+- Use `std::source_location` for error reporting (replace `__FILE__`, `__LINE__`)
+- Use designated initializers for config structs
 
-### 2.3 Code Style
+### 1.3 Namespaces
 
-**Namespaces**:
-- `scl::core`: Core types and utilities
+- `scl::core`: Core types, utilities, error handling
+- `scl::memory`: Memory operations (unified memory module)
 - `scl::kernel`: Computational kernels
 - `scl::math`: Mathematical functions
+- `scl::simd`: SIMD abstractions
 - `scl::threading`: Parallelization layer
 - `scl::binding`: C-ABI interface
 
-**Formatting**:
-- `#pragma once` for header guards
-- Section headers: `// =============================================================================`
+---
+
+## 2. Code Style
+
+### 2.1 File Structure
+
+Every header should start with `#pragma once`.  
+Sections should be commented for clarity.  
+Implementation is organized under the appropriate `scl::module` namespace.
+
+### 2.2 Formatting Rules
+
 - Indentation: 4 spaces
-- Line length: < 100 chars (max 120)
-- Opening brace on same line
+- Line length: under 100 chars (max 120)
+- Brace style: Same line
+- Include order: Platform headers → STL → SCL headers
 
-**Attributes**:
-- `SCL_FORCE_INLINE` for hot-path functions
-- `SCL_NODISCARD` for return values that must be checked
-- `SCL_RESTRICT` for non-aliased pointers in hot loops
-- `constexpr` for compile-time constants
+### 2.3 Function Declaration Style
 
-**Error Handling**:
-- `SCL_ASSERT` for internal invariants (debug-only)
-- `SCL_CHECK_ARG` for user input validation
-- `SCL_CHECK_DIM` for dimension mismatches
-- Prefer error codes over exceptions in hot paths
+- Each of the following must be in its own line (顺序为 template → 属性/修饰符 → 定义)：
+    - `template` 声明单独一行（如有）
+    - 所有属性/修饰符（如 `[[nodiscard]]`、`SCL_FORCE_INLINE`、`constexpr` 等）每个独占一行
+    - 函数定义以 `auto` 或 `void` 开头，必须使用 trailing return type（-> Type），不得遗漏，即 `auto f(...) -> T`
+- Batch small single-line accessors when possible.
 
----
+### 2.4 Variable Naming
 
-## 3. Clang-Tidy Compliance
-
-### 3.1 Configuration
-
-Project uses `.clang-tidy` at repository root. Key disabled checks:
-- `modernize-use-trailing-return-type`
-- `readability-identifier-length`
-- `readability-magic-numbers`
-- `cppcoreguidelines-pro-bounds-pointer-arithmetic`
-- `cppcoreguidelines-owning-memory`
-
-### 3.2 Mandatory Checks
-
-Never disable without justification:
-- `bugprone-*`
-- `clang-analyzer-*`
-- `cert-*`
-- `cppcoreguidelines-init-variables`
-- `cppcoreguidelines-slicing`
-- `modernize-use-nullptr`
-- `modernize-use-override`
-- `performance-move-const-arg`
+- Local variables: `snake_case`
+- Member variables: trailing underscore (e.g. `data_`)
+- Constants: `UPPER_SNAKE`
+- Template params: `PascalCase`
+- Concepts: `PascalCase` ending with able/like (e.g. `Arithmetic`, `SpanLike`)
 
 ---
 
-## 4. Performance Exceptions (NOLINT)
+## 3. Platform Macros (scl/core/platform.hpp)
 
-When performance conflicts with clang-tidy rules, document exceptions.
+### 3.1 Compiler Detection
 
-### 4.1 NOLINT Format
+- Use macros such as `SCL_COMPILER_GCC`, `SCL_COMPILER_CLANG`, `SCL_COMPILER_MSVC`, `SCL_COMPILER_GCC_LIKE` for conditional compilation.
 
-```cpp
-// PERFORMANCE: [brief reason]
-// [detailed explanation if needed]
-// NOLINTNEXTLINE(check-name)
-code_line;
-```
+### 3.2 Architecture Detection
 
-### 4.2 Common Exceptions
+- Use macros such as `SCL_ARCH_X86_64`, `SCL_ARCH_ARM64`, `SCL_ARCH_SSE4`, `SCL_ARCH_AVX2`, `SCL_ARCH_AVX512`, `SCL_ARCH_NEON` for architecture-specific code.
 
-**Allowed with documentation**:
-- Pointer arithmetic in hot loops (with benchmark)
-- Reinterpret cast for SIMD (with SIMD target and speedup)
-- Magic numbers in algorithms (with mathematical reference)
-- Uninitialized variables (with justification)
-- Raw loops over ranges (with benchmark)
-- Owning raw pointers in C-ABI layer (with ownership model)
-- Short variable names in math code (with algorithm reference)
+### 3.3 Function Attributes
 
-### 4.3 Prohibited Suppressions
+- Use macros such as `SCL_FORCE_INLINE`, `SCL_NOINLINE`, `SCL_RESTRICT`, `SCL_ASSUME(expr)`, `SCL_PREFETCH(addr, rw, locality)`, `SCL_ALIGNED(n)` to control code generation, inlining, aliasing and prefetching.
 
-Never suppress without human review:
-- `bugprone-use-after-move`
-- `clang-analyzer-core.NullDereference`
-- `clang-analyzer-core.UndefinedBinaryOperatorResult`
-- `cppcoreguidelines-slicing`
-- `bugprone-undefined-memory-manipulation`
-- `cert-err58-cpp`
+### 3.4 Deprecated Macros
 
-### 4.4 Performance Documentation Template
-
-```cpp
-// =============================================================================
-// PERFORMANCE EXCEPTION: [Short Title]
-// =============================================================================
-// Rule Suppressed: [check-name]
-// Reason: [Why this rule cannot be followed]
-// Alternative Considered: [What standard-compliant approach was tried]
-// Benchmark: [Performance comparison]
-// Safety: [Why this is still safe]
-// =============================================================================
-```
+- Do NOT use ancient macro wrappers for C++ attributes. Use C++20 attributes directly (e.g. use [[nodiscard]] instead of `SCL_NODISCARD`).
 
 ---
 
-## 5. Modern C++ Patterns
+## 4. Memory Module (scl/mem/)
 
-### 5.1 RAII
+### 4.1 Core Principle
 
-Use RAII wrappers for all resources. Mark move operations `noexcept`.
+- All memory operations must use the `scl::memory` module, NOT `std::` or platform-specific APIs directly.
 
-### 5.2 Strong Types
+### 4.2 Memory Module API (to be defined)
 
-Use strong types to prevent parameter confusion:
-```cpp
-struct RowIndex { Index value; };
-struct ColIndex { Index value; };
-```
-
-### 5.3 constexpr
-
-Maximize compile-time computation. Use `consteval` for lookup tables.
-
-### 5.4 Structured Bindings
-
-Use structured bindings for tuple-like returns. Use designated initializers for clarity.
+- Should cover copy, async copy, memset, fill, aligned alloc/free, and RAII aligned buffer abstractions.
 
 ---
 
-## 6. Development Checklist
+## 5. Error Handling
+
+### 5.1 Check Macros Hierarchy
+
+| Macro               | Phase      | Failure         | Use Case                       |
+|---------------------|------------|-----------------|--------------------------------|
+| `static_assert`     | Compile    | Compilation     | C++ standard checks            |
+| `SCL_STATIC_CHECK`  | Compile    | Compilation     | Type/precision validation      |
+| `SCL_CHECK`         | Runtime    | Throws          | Argument validation            |
+| `SCL_DEBUG_ASSERT`  | Debug only | Terminate       | Internal invariants (debug)    |
+
+### 5.2 Usage Rules
+
+- Compile-time checks: Validate types, precision bounds, shapes/statics, etc. with static_assert or `SCL_STATIC_CHECK`.
+- Runtime checks: Validate inputs, sizes, user error, with `SCL_CHECK` (throws)
+- Debug assertions: For invariants that should never fail in valid execution, only trigger in debug builds.
+
+### 5.3 Exception Types
+
+- The design should define a base `Error` exception and derived exceptions such as `DimensionError`, `ValueError`, `MemoryError`, `NotImplementedError` for typical categories.
+
+---
+
+## 6. Config System
+
+### 6.1 Config Base Template
+
+- All operator configs MUST inherit from `ConfigBase<Derived>` which provides `validate()` (throws if invalid) and `is_valid()` (returns bool, noexcept).
+
+### 6.2 Config Definition Pattern
+
+- Configs define their members, validation rules in `validate_impl()`, and logic in `is_valid_impl()`.
+
+### 6.3 Usage in Operators
+
+- Operators should accept a config argument (with default constructed value) and invoke `.validate()` at entry.
+
+---
+
+## 7. Operator Optimization Guidelines
+
+### 7.1 Performance Hierarchy
+
+All hot-path functions must optimize in the following order:
+
+1. Algorithm selection (lowest complexity)
+2. Memory access pattern (cache-friendly)
+3. SIMD vectorization
+4. Loop unrolling
+5. Branch prediction hints (`[[likely]]`/`[[unlikely]]`)
+6. Prefetching
+7. Register pressure minimization
+
+### 7.2 Required Optimizations for Hot Paths
+
+- Follow the above order and always annotate performance-critical routines.
+- Use platform prefetch and aliasing hints as needed.
+
+### 7.3 Accessor Functions
+
+- All accessors (e.g. `data()`, `rows()`, `cols()`, index operators) must be marked with strong inlining (`SCL_FORCE_INLINE`).
+
+---
+
+## 8. Documentation Standard (Doxygen)
+
+### 8.1 Comment Style
+
+- Use `///` and @ tags for all public APIs and important structures.
+- Documentation goes in source headers; CI will auto-generate docs.
+
+### 8.2 Required Tags
+
+Keep the following minimum documentation:
+
+- `@brief`        One-line description (mandatory)
+- `@tparam`        If templated, describe the template param
+- `@param[in/out]`   Parameter names, indicate direction
+- `@return`       If it returns a value, describe it
+- `@throws`       If can throw, what exceptions
+- `@pre`         Preconditions
+- `@post`        Postconditions
+- `@note`        Important info, e.g. complexity, thread-safety
+- `@warning`      Pitfalls, sharp edges
+
+### 8.3 Documentation Examples
+
+- Use the above tags for each API; see template blocks for guidance.
+- Document logic, thresholds, assumptions directly above the critical code sections.
+
+---
+
+## 9. Boundary and Precision Handling
+
+### 9.1 Numeric Precision Validation
+
+- Use compile-time checks for floating-point types and precision in numeric kernels, with `SCL_STATIC_CHECK`.
+
+### 9.2 Boundary Handling Pattern
+
+- Main loops should process in vector-sized chunks; remainder handled with scalar logic.
+- Always guard against empty input and document surprise paths.
+
+### 9.3 Numeric Stability Patterns
+
+- Use numerically stable approaches (e.g., log-sum-exp max-shifting) and document the reasoning inline.
+
+---
+
+## 10. Type Aliases (scl/core/types.hpp)
+
+- Core types should be strongly-typed using aliases, e.g., `Index`, `Size`, `Real`, and span/dimension structs.
+- E.g., use `scl::Index`, `scl::Size`, and explicit `Dim2`, `Dim3`, `Dim4` structures for tensor shapes.
+
+---
+
+## 11. Development Checklist
 
 ### Code Quality
-- [ ] Compiles with `-std=c++20 -Wall -Wextra -Werror`
-- [ ] Passes `clang-tidy` with project configuration
-- [ ] All NOLINT suppressions documented
-- [ ] Performance exceptions include benchmark data
-- [ ] Modern C++20 features used appropriately
+- Ensure code compiles with strict C++20 warnings and errors enabled.
+- Use C++20 attributes directly.
+- All memory ops via `scl::memory`
+- Platform macros from `scl/core/platform.hpp`
+- Trailing return type, attributes on own line
+
+### Error Handling
+- Compile-time checks for type/precision
+- Runtime checks with throws for arguments
+- Debug assertions only for invariants
+- No use of runtime `assert()` in production
+
+### Performance
+- All accessors marked with force inline
+- Use `[[likely]]`/`[[unlikely]]` on branches
+- Prefetch hot loops, unroll critical kernels
+- Use restrict on non-aliased pointers
+
+### Config System
+- All configs inherit `ConfigBase`
+- Validation functions as specified
 
 ### Documentation
-- [ ] Minimal inline comments in implementation
-- [ ] Documentation exists in `docs/`
-- [ ] Function signatures match exactly
-- [ ] All required sections present
-- [ ] MUTABILITY specified for state-changing functions
-- [ ] No examples in API documentation
-
-### Testing
-- [ ] Unit tests cover all public functions
-- [ ] Edge cases tested
-- [ ] Thread safety tests for parallel functions
-- [ ] Sanitizer builds pass (ASan, UBSan, TSan)
+- Doxygen with required tags on all public APIs and critical logic
 
 ---
 
-## 7. Quick Reference
+## 12. Quick Reference
 
-### 7.1 Macros
+### 12.1 Check Macro Summary
 
-```cpp
-#define SCL_FORCE_INLINE [[gnu::always_inline]] inline
-#define SCL_NODISCARD [[nodiscard]]
-#define SCL_RESTRICT __restrict__
-#define SCL_LIKELY(x) [[likely]] (x)
-#define SCL_UNLIKELY(x) [[unlikely]] (x)
-#define SCL_ASSERT(cond) assert(cond)  // debug-only
-#define SCL_CHECK_ARG(cond, msg) /* throws std::invalid_argument */
-#define SCL_CHECK_DIM(cond, msg) /* throws DimensionError */
-```
+- `SCL_STATIC_CHECK`: Compile-time check (type/precision)
+- `SCL_CHECK`: Runtime argument validation (throws)
+- `SCL_DEBUG_ASSERT`: Debug-only, for internal invariants
 
-### 7.2 Type Aliases
+### 12.2 Platform Macro Summary
 
-```cpp
-namespace scl {
-    using Index = std::int64_t;
-    using Real = double;
-    template <typename T> using Span = std::span<T>;
-    template <typename T> using MutableSpan = std::span<T>;
-    template <typename T> using ConstSpan = std::span<const T>;
-}
-```
+- `SCL_FORCE_INLINE`: Force inline  
+- `SCL_NOINLINE`: Prevent inline  
+- `SCL_RESTRICT`: Mark pointer as no-alias  
+- `SCL_ASSUME(expr)`: Optimizer hint  
+- `SCL_PREFETCH(addr, rw, locality)`: Cache prefetch  
+- `SCL_ALIGNED(n)`: Alignment specifier  
 
-### 7.3 Clang-Tidy Quick Reference
+### 12.3 Function Declaration Template
 
-| Check | Default | Notes |
-|-------|---------|-------|
-| `cppcoreguidelines-pro-bounds-pointer-arithmetic` | OFF | Allow with NOLINT |
-| `readability-magic-numbers` | OFF | Allow with documentation |
-| `readability-identifier-length` | OFF | Allow math notation |
-| `cppcoreguidelines-owning-memory` | OFF | Allow in C-ABI layer |
-| `bugprone-*` | ON | Never disable |
-| `clang-analyzer-*` | ON | Never disable |
+- Provide a doxygen comment with all required tags.
+- `template` on its own line (if needed)
+- All attribute/qualifier specifiers (`[[nodiscard]]`, `SCL_FORCE_INLINE`, `constexpr` etc.) each on their own line, directly after `template` (if any)
+- Function implementation begins with `auto` or `void`, and always uses trailing return type (`-> T`)
+
+    ```cpp
+    /// @brief Adds 1 to value
+    /// @tparam T Value type
+    /// @param[in] x Input value
+    /// @return x + 1
+    template<typename T>
+    [[nodiscard]]
+    SCL_FORCE_INLINE
+    constexpr
+    auto add_one(T x) -> T {
+        return x + 1;
+    }
+    ```
+
