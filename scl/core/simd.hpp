@@ -610,25 +610,4 @@ SCL_FORCE_INLINE void argsort_indirect_descending(const T* keys, Index* indices,
     );
 }
 
-// =============================================================================
-// SECTION 8: Convenience Aliases
-// =============================================================================
-
-/// @brief Sort array of Real values
-SCL_FORCE_INLINE void sort_real(Real* data, Size n) {
-    sort(data, n);
-}
-
-/// @brief Sort array of Index values
-SCL_FORCE_INLINE void sort_index(Index* data, Size n) {
-    sort(data, n);
-}
-
-/// @brief Fill array with SIMD-optimized iota (0, 1, 2, ...)
-/// @param data Output array
-/// @param n Number of elements
-SCL_FORCE_INLINE void iota(Index* data, Size n) {
-    detail::iota_simd(data, n);
-}
-
 }  // namespace scl::simd
