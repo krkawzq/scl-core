@@ -14,10 +14,6 @@ CompileFlags:
 
 Diagnostics:
   UnusedIncludes: Strict
-  Suppress:
-    - '*/scl/binding/c_api/*.h'
-    - '*/scl/binding/c_api/*/*.h'
-    - modernize-use-using:*.h
   ClangTidy:
     Add:
       - modernize*
