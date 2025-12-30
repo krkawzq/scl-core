@@ -23,14 +23,23 @@ extern "C" {
 
 using namespace scl::test;
 
+// Helper: Convert Eigen CSR to Sparse guard
+static Sparse eigen_to_sparse(const EigenCSR& eigen_mat) {
+    auto arrays = from_eigen_csr(eigen_mat);
+    return make_sparse_csr(
+        arrays.rows, arrays.cols, arrays.nnz,
+        arrays.indptr.data(), arrays.indices.data(), arrays.data.data()
+    );
+}
+
 // Helper: Create small RNA data
 static Sparse make_rna_data(scl_index_t n_cells, scl_index_t n_genes, Random& rng) {
-    return random_sparse_csr(n_cells, n_genes, 0.25, rng);
+    return eigen_to_sparse(random_sparse_csr(n_cells, n_genes, 0.25, rng));
 }
 
 // Helper: Create small ATAC data
 static Sparse make_atac_data(scl_index_t n_cells, scl_index_t n_peaks, Random& rng) {
-    return random_sparse_csr(n_cells, n_peaks, 0.15, rng);
+    return eigen_to_sparse(random_sparse_csr(n_cells, n_peaks, 0.15, rng));
 }
 
 SCL_TEST_BEGIN
@@ -382,8 +391,8 @@ SCL_TEST_CASE(feature_coupling_basic) {
 
     scl_index_t n_cells = 50, n_features1 = 40, n_features2 = 35;
 
-    auto modality1 = random_sparse_csr(n_cells, n_features1, 0.2, rng);
-    auto modality2 = random_sparse_csr(n_cells, n_features2, 0.2, rng);
+    auto modality1 = eigen_to_sparse(random_sparse_csr(n_cells, n_features1, 0.2, rng));
+    auto modality2 = eigen_to_sparse(random_sparse_csr(n_cells, n_features2, 0.2, rng));
 
     std::vector<scl_index_t> feature1_indices(100);
     std::vector<scl_index_t> feature2_indices(100);
@@ -413,8 +422,8 @@ SCL_TEST_CASE(feature_coupling_basic) {
 
 SCL_TEST_CASE(feature_coupling_null_checks) {
     Random rng(42);
-    auto mod1 = random_sparse_csr(10, 20, 0.2, rng);
-    auto mod2 = random_sparse_csr(10, 15, 0.2, rng);
+    auto mod1 = eigen_to_sparse(random_sparse_csr(10, 20, 0.2, rng));
+    auto mod2 = eigen_to_sparse(random_sparse_csr(10, 15, 0.2, rng));
 
     std::vector<scl_index_t> feat1(30), feat2(30);
     std::vector<scl_real_t> scores(30);
@@ -649,8 +658,8 @@ SCL_TEST_RETRY(multimodal_integration_random, 3) {
     auto [n_cells, n_genes] = random_shape(40, 100, rng);
     auto [_, n_peaks] = random_shape(50, 120, rng);
 
-    auto rna = random_sparse_csr(n_cells, n_genes, 0.2, rng);
-    auto atac = random_sparse_csr(n_cells, n_peaks, 0.15, rng);
+    auto rna = eigen_to_sparse(random_sparse_csr(n_cells, n_genes, 0.2, rng));
+    auto atac = eigen_to_sparse(random_sparse_csr(n_cells, n_peaks, 0.15, rng));
 
     std::vector<scl_index_t> genes(50), peaks(50);
     std::vector<scl_real_t> corrs(50);
@@ -670,7 +679,7 @@ SCL_TEST_RETRY(peak_to_gene_random, 3) {
     auto [n_cells, n_peaks] = random_shape(30, 80, rng);
     scl_index_t n_genes = n_peaks / 2;
 
-    auto atac = random_sparse_csr(n_cells, n_peaks, 0.1, rng);
+    auto atac = eigen_to_sparse(random_sparse_csr(n_cells, n_peaks, 0.1, rng));
 
     std::vector<scl_index_t> mapping(n_peaks);
     for (scl_index_t i = 0; i < n_peaks; ++i) {

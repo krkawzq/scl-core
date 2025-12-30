@@ -32,6 +32,25 @@ SCL_EXPORT scl_error_t scl_algebra_spmv(
     SCL_C_API_CHECK_NULL(y, "Output vector y is null");
     
     SCL_C_API_TRY
+        // Get matrix dimensions directly from internal API
+        const Index rows = A->rows();
+        const Index cols = A->cols();
+        
+        // Check if matrix is CSR or CSC
+        const bool is_csr = A->is_csr_format();
+        
+        // For CSR: y = A*x, so x_size must be >= cols, y_size must be >= rows
+        // For CSC: y = A*x, so x_size must be >= rows, y_size must be >= cols
+        const Index required_x_size = is_csr ? cols : rows;
+        const Index required_y_size = is_csr ? rows : cols;
+        
+        if (x_size < static_cast<scl_size_t>(required_x_size)) {
+            return SCL_ERROR_DIMENSION_MISMATCH;
+        }
+        if (y_size < static_cast<scl_size_t>(required_y_size)) {
+            return SCL_ERROR_DIMENSION_MISMATCH;
+        }
+        
         A->visit([&](auto& matrix) {
             const Array<const Real> x_arr(
                 reinterpret_cast<const Real*>(x),

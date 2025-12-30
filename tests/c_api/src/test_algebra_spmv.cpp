@@ -18,6 +18,10 @@
 #include "test.hpp"
 #include "precision.hpp"
 
+extern "C" {
+#include "scl/binding/c_api/algebra.h"
+}
+
 using namespace scl::test;
 using precision::Tolerance;
 
@@ -54,7 +58,7 @@ SCL_TEST_RETRY(spmv_random_matrices, 5)
     scl_real_t beta = rng.uniform(-2.0, 2.0);
     
     // SCL implementation
-    std::vector<scl_real_t> y_scl = y_init;
+    std::vector<scl_real_t> y_scl(y_init.data(), y_init.data() + y_init.size());
     scl_error_t err = scl_algebra_spmv(
         A, x.data(), x.size(),
         y_scl.data(), y_scl.size(),

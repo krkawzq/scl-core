@@ -57,7 +57,7 @@ SCL_TEST_CASE(reference_mapping_basic) {
 
     auto query_expr = make_expression_data(n_query, n_genes, rng);
     auto ref_expr = make_expression_data(n_ref, n_genes, rng);
-    auto query_to_ref = random_sparse_csr(n_query, n_ref, 0.1, rng);
+    auto query_to_ref = eigen_to_sparse(random_sparse_csr(n_query, n_ref, 0.1, rng));
 
     std::vector<scl_index_t> ref_labels(n_ref);
     for (scl_index_t i = 0; i < n_ref; ++i) {
@@ -89,7 +89,7 @@ SCL_TEST_CASE(reference_mapping_null_checks) {
     Random rng(42);
     auto query = make_expression_data(10, 20, rng);
     auto ref = make_expression_data(20, 20, rng);
-    auto neighbors = random_sparse_csr(10, 20, 0.1, rng);
+    auto neighbors = eigen_to_sparse(random_sparse_csr(10, 20, 0.1, rng));
 
     std::vector<scl_index_t> ref_labels(20, 0);
     std::vector<scl_index_t> query_labels(10);
@@ -586,7 +586,7 @@ SCL_TEST_CASE(label_propagation_basic) {
 
     scl_index_t n_cells = 60, n_types = 6;
 
-    auto neighbor_graph = random_sparse_csr(n_cells, n_cells, 0.15, rng);
+    auto neighbor_graph = eigen_to_sparse(random_sparse_csr(n_cells, n_cells, 0.15, rng));
 
     // Initial labels: some labeled, some unlabeled (-1)
     std::vector<scl_index_t> initial_labels(n_cells);
@@ -621,7 +621,7 @@ SCL_TEST_CASE(label_propagation_basic) {
 
 SCL_TEST_CASE(label_propagation_null_checks) {
     Random rng(42);
-    auto graph = random_sparse_csr(20, 20, 0.1, rng);
+    auto graph = eigen_to_sparse(random_sparse_csr(20, 20, 0.1, rng));
     std::vector<scl_index_t> initial(20, 0);
     std::vector<scl_index_t> final(20);
     std::vector<scl_real_t> conf(20);
@@ -788,8 +788,8 @@ SCL_TEST_RETRY(annotation_pipeline_random, 3) {
 
     scl_index_t n_types = 4;
 
-    auto query = random_sparse_csr(n_query, n_genes, 0.2, rng);
-    auto ref = random_sparse_csr(n_ref, n_genes, 0.2, rng);
+    auto query = eigen_to_sparse(random_sparse_csr(n_query, n_genes, 0.2, rng));
+    auto ref = eigen_to_sparse(random_sparse_csr(n_ref, n_genes, 0.2, rng));
 
     std::vector<scl_index_t> ref_labels(n_ref);
     for (scl_index_t i = 0; i < n_ref; ++i) {

@@ -15,6 +15,10 @@
 #include "test.hpp"
 #include "precision.hpp"
 
+extern "C" {
+#include "scl/binding/c_api/mwu.h"
+}
+
 using namespace scl::test;
 using precision::Tolerance;
 

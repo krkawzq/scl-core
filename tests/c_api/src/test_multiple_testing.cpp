@@ -26,6 +26,10 @@
 #include "test.hpp"
 #include "precision.hpp"
 
+extern "C" {
+#include "scl/binding/c_api/multiple_testing.h"
+}
+
 using namespace scl::test;
 using precision::Tolerance;
 

@@ -192,8 +192,11 @@ inline bool sparse_matrices_equal(
     }
     
     double max_diff = 0;
-    for (int k = 0; k < diff.outerSize(); ++k) {
-        for (typename Eigen::SparseMatrix<Scalar, Options, Index>::InnerIterator it(diff, k); it; ++it) {
+    // Use makeCompressed() to ensure the matrix is in compressed format
+    Eigen::SparseMatrix<Scalar, Options, Index> diff_compressed = diff;
+    diff_compressed.makeCompressed();
+    for (int k = 0; k < diff_compressed.outerSize(); ++k) {
+        for (typename Eigen::SparseMatrix<Scalar, Options, Index>::InnerIterator it(diff_compressed, k); it; ++it) {
             max_diff = std::max(max_diff, std::abs(it.value()));
         }
     }

@@ -29,6 +29,10 @@
 
 #include "test.hpp"
 
+extern "C" {
+#include "scl/binding/c_api/components.h"
+}
+
 using namespace scl::test;
 
 // Helper: Create simple 4-node graph

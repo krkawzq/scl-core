@@ -102,8 +102,10 @@ SCL_TEST_CASE(correlation_test_perfect_negative) {
 SCL_TEST_CASE(correlation_test_no_correlation) {
     // Independent random vectors
     Random rng(42);
-    std::vector<scl_real_t> x = random_vector(20, rng);
-    std::vector<scl_real_t> y = random_vector(20, rng);
+    auto x_eigen = random_vector(20, rng);
+    auto y_eigen = random_vector(20, rng);
+    std::vector<scl_real_t> x(x_eigen.data(), x_eigen.data() + x_eigen.size());
+    std::vector<scl_real_t> y(y_eigen.data(), y_eigen.data() + y_eigen.size());
     
     double observed = reference_correlation(x, y);
     scl_real_t p_value = 0.0;
@@ -190,8 +192,10 @@ SCL_TEST_RETRY(correlation_test_random, 3)
     Random rng(42);
     size_t n = rng.uniform_int(10, 50);
     
-    std::vector<scl_real_t> x = random_vector(n, rng);
-    std::vector<scl_real_t> y = random_vector(n, rng);
+    auto x_eigen = random_vector(n, rng);
+    auto y_eigen = random_vector(n, rng);
+    std::vector<scl_real_t> x(x_eigen.data(), x_eigen.data() + x_eigen.size());
+    std::vector<scl_real_t> y(y_eigen.data(), y_eigen.data() + y_eigen.size());
     
     double observed = reference_correlation(x, y);
     scl_real_t p_value = 0.0;

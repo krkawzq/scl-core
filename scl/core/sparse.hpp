@@ -1228,7 +1228,7 @@ struct Sparse {
         // Copy pointers and collect aliases for refcount increment
         Index new_nnz = 0;
         std::vector<void*> aliases;
-        aliases.reserve(new_rows * 2);
+        aliases.reserve((new_rows * 2));
 
         for (Index i = 0; i < new_rows; ++i) {
             Index src = row_indices[i];

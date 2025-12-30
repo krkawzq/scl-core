@@ -22,6 +22,10 @@
 
 #include "test.hpp"
 
+extern "C" {
+#include "scl/binding/c_api/communication.h"
+}
+
 using namespace scl::test;
 
 // Helper: Create small expression matrix (5 genes x 8 cells)

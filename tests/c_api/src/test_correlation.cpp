@@ -13,6 +13,10 @@
 
 #include "test.hpp"
 
+extern "C" {
+#include "scl/binding/c_api/correlation.h"
+}
+
 using namespace scl::test;
 
 // Helper: Create 3x4 test matrix for correlation
@@ -291,10 +295,11 @@ SCL_TEST_RETRY(random_correlation_properties, 3) {
     scl_index_t n_cols = std::max(shape.second, n_rows + 10);  // Ensure n_cols > n_rows
 
     auto mat_data = random_sparse_csr(n_rows, n_cols, 0.3, rng);
-    Sparse mat = make_sparse_csr(n_rows, n_cols, mat_data.nnz,
-                                 mat_data.indptr.data(),
-                                 mat_data.indices.data(),
-                                 mat_data.data.data());
+    auto csr = from_eigen_csr(mat_data);
+    Sparse mat = make_sparse_csr(csr.rows, csr.cols, csr.nnz,
+                                 csr.indptr.data(),
+                                 csr.indices.data(),
+                                 csr.data.data());
 
     std::vector<scl_real_t> corr(n_rows * n_rows);
     scl_error_t err = scl_corr_pearson_auto(mat, corr.data());

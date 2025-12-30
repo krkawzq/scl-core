@@ -16,6 +16,10 @@
 #include "test.hpp"
 #include "precision.hpp"
 
+extern "C" {
+#include "scl/binding/c_api/comparison.h"
+}
+
 using namespace scl::test;
 using precision::Tolerance;
 
@@ -149,8 +153,10 @@ SCL_TEST_RETRY(cohens_d_random_groups, 5)
     
     SCL_ASSERT_EQ(err, SCL_OK);
     
-    // Reference
-    double ref = reference::cohens_d(group1, group2);
+    // Reference - convert Eigen to std::vector
+    std::vector<scl_real_t> group1_vec(group1.data(), group1.data() + group1.size());
+    std::vector<scl_real_t> group2_vec(group2.data(), group2.data() + group2.size());
+    double ref = reference::cohens_d(group1_vec, group2_vec);
     
     SCL_ASSERT_TRUE(precision::approx_equal(effect_size, ref, Tolerance::statistical()));
 }
@@ -225,8 +231,10 @@ SCL_TEST_RETRY(glass_delta_random, 5)
     
     SCL_ASSERT_EQ(err, SCL_OK);
     
-    // Reference
-    double ref = reference::glass_delta(control, treatment);
+    // Reference - convert Eigen to std::vector
+    std::vector<scl_real_t> control_vec(control.data(), control.data() + control.size());
+    std::vector<scl_real_t> treatment_vec(treatment.data(), treatment.data() + treatment.size());
+    double ref = reference::glass_delta(control_vec, treatment_vec);
     
     SCL_ASSERT_TRUE(precision::approx_equal(delta, ref, Tolerance::statistical()));
 }
@@ -274,13 +282,15 @@ SCL_TEST_TAGGED(effect_size_stability, "slow", "monte_carlo")
         // Cohen's d
         scl_real_t d_scl;
         scl_comp_effect_size(group1.data(), n1, group2.data(), n2, &d_scl);
-        double d_ref = reference::cohens_d(group1, group2);
+        std::vector<scl_real_t> group1_vec(group1.data(), group1.data() + group1.size());
+        std::vector<scl_real_t> group2_vec(group2.data(), group2.data() + group2.size());
+        double d_ref = reference::cohens_d(group1_vec, group2_vec);
         cohens_d_errors.push_back(std::abs(d_scl - d_ref));
         
         // Glass's delta
         scl_real_t delta_scl;
         scl_comp_glass_delta(group1.data(), n1, group2.data(), n2, &delta_scl);
-        double delta_ref = reference::glass_delta(group1, group2);
+        double delta_ref = reference::glass_delta(group1_vec, group2_vec);
         glass_delta_errors.push_back(std::abs(delta_scl - delta_ref));
     }
     

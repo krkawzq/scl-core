@@ -122,25 +122,112 @@ endfunction()
 message(STATUS "")
 message(STATUS "Registering test files:")
 
-# Core tests (always built)
-add_scl_test(demo         src/test_demo.cpp)
+# Core infrastructure tests
 add_scl_test(guards       src/test_guards.cpp)
-add_scl_test(core_error   src/test_core_error.cpp)
-add_scl_test(sparse_basic src/test_sparse_basic.cpp)
-add_scl_test(sparse_ops   src/test_sparse_ops.cpp)
+add_scl_test(core         src/test_core.cpp)
+add_scl_test(sparse       src/test_sparse.cpp)
 add_scl_test(dense        src/test_dense.cpp)
 add_scl_test(tools        src/test_tools.cpp)
+add_scl_test(unsafe       src/test_unsafe.cpp)
+
+# Algebra tests
+add_scl_test(algebra      src/test_algebra.cpp)
+add_scl_test(algebra_spmv src/test_algebra_spmv.cpp)
+
+# Normalization tests
+add_scl_test(normalize    src/test_normalize.cpp)
+add_scl_test(log1p        src/test_log1p.cpp)
+
+# Matrix operations
+add_scl_test(comparison   src/test_comparison.cpp)
+add_scl_test(merge        src/test_merge.cpp)
+
+# Graph algorithms
+add_scl_test(components   src/test_components.cpp)
+add_scl_test(neighbors    src/test_neighbors.cpp)
+add_scl_test(bbknn        src/test_bbknn.cpp)
+add_scl_test(louvain      src/test_louvain.cpp)
+add_scl_test(leiden       src/test_leiden.cpp)
+add_scl_test(centrality   src/test_centrality.cpp)
+add_scl_test(communication src/test_communication.cpp)
+
+# Clustering and community detection
+add_scl_test(permutation  src/test_permutation.cpp)
+add_scl_test(propagation  src/test_propagation.cpp)
+
+# Statistical tests
+add_scl_test(mwu          src/test_mwu.cpp)
+add_scl_test(multiple_testing src/test_multiple_testing.cpp)
+add_scl_test(comp_effect_size src/test_comp_effect_size.cpp)
+add_scl_test(correlation  src/test_correlation.cpp)
+add_scl_test(association  src/test_association.cpp)
+
+# Feature selection and analysis
+add_scl_test(feature      src/test_feature.cpp)
+add_scl_test(hvg          src/test_hvg.cpp)
+add_scl_test(markers      src/test_markers.cpp)
+add_scl_test(hotspot      src/test_hotspot.cpp)
+
+# Quality control
+add_scl_test(qc           src/test_qc.cpp)
+add_scl_test(outlier      src/test_outlier.cpp)
+
+# Trajectory and pseudotime
+add_scl_test(pseudotime   src/test_pseudotime.cpp)
+add_scl_test(lineage     src/test_lineage.cpp)
+
+# Dimensionality reduction
+add_scl_test(projection   src/test_projection.cpp)
+
+# Imputation and preprocessing
+add_scl_test(impute       src/test_impute.cpp)
+add_scl_test(alignment    src/test_alignment.cpp)
+
+# Metrics and evaluation
+add_scl_test(metrics      src/test_metrics.cpp)
+add_scl_test(entropy      src/test_entropy.cpp)
+add_scl_test(mmd          src/test_mmd.cpp)
+
+# Niche analysis
+add_scl_test(niche        src/test_niche.cpp)
+
+# Kernel operations
+add_scl_test(kernel       src/test_kernel.cpp)
+
+# Annotation
+add_scl_test(annotation   src/test_annotation.cpp)
+add_scl_test(group        src/test_group.cpp)
 
 # -----------------------------------------------------------------------------
 # Custom Targets
 # -----------------------------------------------------------------------------
 
+# Collect all test target names
+set(ALL_TEST_TARGETS
+    test_guards test_core test_sparse test_dense test_tools test_unsafe
+    test_algebra test_algebra_spmv
+    test_normalize test_log1p
+    test_comparison test_merge
+    test_components test_neighbors test_bbknn test_louvain test_leiden
+    test_centrality test_communication
+    test_permutation test_propagation
+    test_mwu test_multiple_testing test_comp_effect_size test_correlation
+    test_association
+    test_feature test_hvg test_markers test_hotspot
+    test_qc test_outlier
+    test_pseudotime test_lineage
+    test_projection
+    test_impute test_alignment
+    test_metrics test_entropy test_mmd
+    test_niche
+    test_kernel
+    test_annotation test_group
+)
+
 # Run all tests
 add_custom_target(run_all_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS 
-        test_demo test_guards test_core_error 
-        test_sparse_basic test_sparse_ops test_dense test_tools
+    DEPENDS ${ALL_TEST_TARGETS}
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running all C API tests..."
 )
@@ -148,9 +235,7 @@ add_custom_target(run_all_tests
 # Run tests with verbose output
 add_custom_target(run_all_tests_verbose
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure --verbose
-    DEPENDS 
-        test_demo test_guards test_core_error 
-        test_sparse_basic test_sparse_ops test_dense test_tools
+    DEPENDS ${ALL_TEST_TARGETS}
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running tests (verbose)..."
 )

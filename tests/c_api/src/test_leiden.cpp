@@ -12,6 +12,10 @@
 // =============================================================================
 
 #include "test.hpp"
+
+extern "C" {
+#include "scl/binding/c_api/leiden.h"
+}
 #include "precision.hpp"
 
 using namespace scl::test;

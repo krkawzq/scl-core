@@ -17,6 +17,10 @@
 
 #include "test.hpp"
 
+extern "C" {
+#include "scl/binding/c_api/comparison.h"
+}
+
 using namespace scl::test;
 
 SCL_TEST_BEGIN

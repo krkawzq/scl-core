@@ -190,7 +190,7 @@ file(MAKE_DIRECTORY ${SCL_OUTPUT_DIR})
 # 6. Multi-Precision Target Generation Macro
 # -----------------------------------------------------------------------------
 # Parameters:
-#   precision: 0=f32, 1=f64, 2=f16
+#   precision: 0=f32, 1=f64
 #   index_precision: 0=i16, 1=i32, 2=i64
 #   suffix: library suffix (e.g., "f32_i32")
 macro(create_scl_lib precision index_precision suffix)
@@ -268,21 +268,17 @@ macro(create_scl_lib precision index_precision suffix)
 endmacro()
 
 # -----------------------------------------------------------------------------
-# 7. Create Library Variants (All 9 Combinations)
+# 7. Create Library Variants (Only Float32/Float64 Combinations)
 # -----------------------------------------------------------------------------
-# Float16 variants
-create_scl_lib(2 0 "f16_i16")
-create_scl_lib(2 1 "f16_i32")
-create_scl_lib(2 2 "f16_i64")
 
 # Float32 variants
-create_scl_lib(0 0 "f32_i16")
-create_scl_lib(0 1 "f32_i32")
+#create_scl_lib(0 0 "f32_i16")
+# create_scl_lib(0 1 "f32_i32")
 create_scl_lib(0 2 "f32_i64")
 
 # Float64 variants
-create_scl_lib(1 0 "f64_i16")
-create_scl_lib(1 1 "f64_i32")
+#create_scl_lib(1 0 "f64_i16")
+# create_scl_lib(1 1 "f64_i32")
 create_scl_lib(1 2 "f64_i64")
 
 # -----------------------------------------------------------------------------
@@ -307,9 +303,8 @@ message(STATUS "  SIMD Scalar:     ${SCL_ONLY_SCALAR}")
 message(STATUS "  HDF5:            ${HDF5_FOUND}")
 message(STATUS "  Source Files:    ${SCL_SOURCES_COUNT}")
 message(STATUS "  Output Dir:      ${SCL_OUTPUT_DIR}")
-message(STATUS "  Targets:         scl_f16_i16, scl_f16_i32, scl_f16_i64,")
-message(STATUS "                   scl_f32_i16, scl_f32_i32, scl_f32_i64,")
-message(STATUS "                   scl_f64_i16, scl_f64_i32, scl_f64_i64")
+message(STATUS "  Targets:         scl_f32_i64,")
+message(STATUS "                   scl_f64_i64")
 message(STATUS "==========================================")
 message(STATUS "")
 
