@@ -651,6 +651,26 @@ inline constexpr int simd_lanes = static_cast<int>(simd_width / sizeof(T));
     #define SCL_ALLOCA(size) __builtin_alloca(size)
 #endif
 
+/// @brief Aligned stack allocation
+/// @param size Size in bytes to allocate
+/// @param alignment Required alignment (must be power of 2)
+/// @return Aligned pointer to stack memory
+///
+/// Implementation:
+///   1. Allocate size + alignment - 1 bytes
+///   2. Manually align the pointer to the nearest aligned address
+///   3. Return aligned pointer
+///
+/// @note The returned pointer is valid until the calling function returns
+/// @warning Do not free() the returned pointer - it's on the stack
+#define SCL_ALLOCA_ALIGNED(size, alignment) \
+    ({ \
+        void* _base = SCL_ALLOCA((size) + (alignment) - 1); \
+        void* _aligned = reinterpret_cast<void*>( \
+            (reinterpret_cast<std::uintptr_t>(_base) + (alignment) - 1) & ~((alignment) - 1)); \
+        _aligned; \
+    })
+
 // Padding to avoid false sharing
 #define SCL_PAD_TO_CACHE_LINE(name) \
     char name[::scl::platform::cache_line_size]

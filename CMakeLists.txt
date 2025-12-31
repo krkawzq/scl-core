@@ -281,8 +281,13 @@ set(SCL_API_CORE_SOURCES
     ${SCL_API_DIR}/core/handler.cpp    # Sparse matrix handler implementation
 )
 
+# Kernel C-API sources
+set(SCL_API_KERNEL_SOURCES
+    ${SCL_API_DIR}/kernel/log1p.cpp    # Log1p transformation kernels
+)
+
 # Collect all API sources
-set(SCL_API_SOURCES ${SCL_API_CORE_SOURCES})
+set(SCL_API_SOURCES ${SCL_API_CORE_SOURCES} ${SCL_API_KERNEL_SOURCES})
 
 # Main source list (C API only, core is header-only)
 set(SCL_ALL_SOURCES ${SCL_API_SOURCES})
@@ -300,8 +305,13 @@ set(SCL_API_CORE_HEADERS
     ${SCL_API_DIR}/core/unsafe.h       # Unsafe direct access (optional)
 )
 
+# Kernel C-API public headers (installed to include/scl/api/kernel/)
+set(SCL_API_KERNEL_HEADERS
+    ${SCL_API_DIR}/kernel/log1p.h      # Log1p transformation kernels
+)
+
 # All API headers
-set(SCL_API_HEADERS ${SCL_API_CORE_HEADERS})
+set(SCL_API_HEADERS ${SCL_API_CORE_HEADERS} ${SCL_API_KERNEL_HEADERS})
 
 # C++ core headers (for IDE support and installation)
 file(GLOB_RECURSE SCL_CORE_HEADERS

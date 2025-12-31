@@ -4,15 +4,19 @@
 /// @brief Mann-Whitney U Test statistics (precise implementation)
 ///
 /// This header provides:
-///   - Mann-Whitney U test p-value computation
+///   - Mann-Whitney U test p-value computation from U statistic
 ///   - Normal approximation with tie correction
 ///   - Two-sided, greater, and less alternative hypotheses
 ///   - Both scalar and SIMD implementations
 ///
-/// @note Uses precise normal distribution functions
-/// @note For fast approximate version, see scl/math/mwu_fast.hpp
+/// @note Uses precise normal distribution functions from scl/math/stats.hpp
+/// @note For rank-based MWU computation, see rank_utils.hpp
+/// @note This module provides standalone p-value calculation when U is already known
 
+#include "scl/core/type.hpp"
+#include "scl/core/macro.hpp"
 #include "scl/core/simd.hpp"
+#include "scl/math/stat_base.hpp"
 #include "scl/math/stats.hpp"
 
 #include <cmath>
@@ -66,7 +70,7 @@ SCL_FORCE_INLINE
 auto compute_z(
     double U, double mu, double sd, double cc
 ) -> double {
-    if (sd <= 0.0) [[unlikely]] {
+    if (sd < stat_constants::SIGMA_MIN) [[unlikely]] {
         return 0.0;
     }
 
@@ -99,7 +103,7 @@ auto mwu_pvalue_two_sided(
     double mu{}, sd{};
     detail::mwu_moments(n1, n2, tie_sum, mu, sd);
 
-    if (sd <= 0.0) [[unlikely]] {
+    if (sd < stat_constants::SIGMA_MIN) [[unlikely]] {
         return 1.0;
     }
 
@@ -124,7 +128,7 @@ auto mwu_pvalue_greater(
     double mu{}, sd{};
     detail::mwu_moments(n1, n2, tie_sum, mu, sd);
 
-    if (sd <= 0.0) [[unlikely]] {
+    if (sd < stat_constants::SIGMA_MIN) [[unlikely]] {
         return (U > mu) ? 0.0 : 1.0;
     }
 
@@ -150,7 +154,7 @@ auto mwu_pvalue_less(
     double mu{}, sd{};
     detail::mwu_moments(n1, n2, tie_sum, mu, sd);
 
-    if (sd <= 0.0) [[unlikely]] {
+    if (sd < stat_constants::SIGMA_MIN) [[unlikely]] {
         return (U < mu) ? 0.0 : 1.0;
     }
 

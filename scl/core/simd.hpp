@@ -314,14 +314,31 @@ class SortBuffer {
 public:
     explicit SortBuffer(Size n) : size_(n) {
         const Size bytes = n * sizeof(T);
+        
         if (bytes <= config::STACK_BUFFER_THRESHOLD) {
-            // Use stack allocation (alloca)
-            ptr_ = static_cast<T*>(SCL_ALLOCA(bytes));
+            // Use aligned stack allocation for small buffers (performance critical)
+            ptr_ = static_cast<T*>(SCL_ALLOCA_ALIGNED(bytes, config::SORT_ALIGNMENT));
             on_heap_ = false;
+            
+            // Verify alignment (debug mode)
+            #ifndef NDEBUG
+                const auto addr = reinterpret_cast<std::uintptr_t>(ptr_);
+                if ((addr & (config::SORT_ALIGNMENT - 1)) != 0) {
+                    // Alignment failed - this should never happen
+                    throw std::runtime_error("SCL_ALLOCA_ALIGNED failed to align pointer");
+                }
+            #endif
         } else {
-            // Use heap allocation with alignment
-            ptr_ = static_cast<T*>(std::aligned_alloc(config::SORT_ALIGNMENT, bytes));
+            // Use heap allocation with alignment for large buffers
+            // aligned_alloc requires size to be a multiple of alignment
+            const Size aligned_bytes = ((bytes + config::SORT_ALIGNMENT - 1) / config::SORT_ALIGNMENT) * config::SORT_ALIGNMENT;
+            ptr_ = static_cast<T*>(std::aligned_alloc(config::SORT_ALIGNMENT, aligned_bytes));
             on_heap_ = true;
+            
+            // Ensure allocation succeeded
+            if (!ptr_) {
+                throw std::bad_alloc();
+            }
         }
     }
     

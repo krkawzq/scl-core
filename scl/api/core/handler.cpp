@@ -937,53 +937,6 @@ auto scl_sparse_is_sorted(scl_sparse_t handle) -> std::int32_t {
 // =============================================================================
 
 // TODO: Implement slice functions with proper mask-based API
-// The slice.hpp API uses std::span<const std::uint8_t> mask, not start/end indices.
-// Need to redesign C-API or add range-based slice helper functions.
-
-SCL_API
-auto scl_sparse_row_slice(
-    scl_sparse_t handle,
-    std::int64_t start,
-    std::int64_t end
-) -> scl_sparse_t {
-    (void)handle; (void)start; (void)end;
-    scl::set_thread_error(scl::ErrorCode::NotImplemented, "row_slice not yet implemented");
-    return SCL_NULL_SPARSE;
-}
-
-SCL_API
-auto scl_sparse_col_slice(
-    scl_sparse_t handle,
-    std::int64_t start,
-    std::int64_t end
-) -> scl_sparse_t {
-    (void)handle; (void)start; (void)end;
-    scl::set_thread_error(scl::ErrorCode::NotImplemented, "col_slice not yet implemented");
-    return SCL_NULL_SPARSE;
-}
-
-SCL_API
-auto scl_sparse_row_select(
-    scl_sparse_t handle,
-    const std::int64_t* row_indices,
-    std::int64_t count
-) -> scl_sparse_t {
-    (void)handle; (void)row_indices; (void)count;
-    scl::set_thread_error(scl::ErrorCode::NotImplemented, "row_select not yet implemented");
-    return SCL_NULL_SPARSE;
-}
-
-SCL_API
-auto scl_sparse_col_select(
-    scl_sparse_t handle,
-    const std::int64_t* col_indices,
-    std::int64_t count
-) -> scl_sparse_t {
-    (void)handle; (void)col_indices; (void)count;
-    scl::set_thread_error(scl::ErrorCode::NotImplemented, "col_select not yet implemented");
-    return SCL_NULL_SPARSE;
-}
-
 // =============================================================================
 // SECTION 11: Export Functions
 // =============================================================================
@@ -1073,6 +1026,154 @@ auto scl_sparse_to_coo(
     return 0;
     SCL_C_API_END
     return static_cast<std::int32_t>(scl::ErrorCode::Unknown);
+}
+
+// =============================================================================
+// SECTION 11: Slice and Select Operations
+// =============================================================================
+
+SCL_API
+auto scl_sparse_row_slice(
+    scl_sparse_t handle,
+    std::int64_t start,
+    std::int64_t end
+) -> scl_sparse_t {
+    if (!SCL_IS_VALID_SPARSE(handle)) {
+        scl::set_thread_error(scl::ErrorCode::NullPointer, "sparse handle is null");
+        return SCL_NULL_SPARSE;
+    }
+    
+    SCL_C_API_BEGIN
+    
+    const auto rows = scl_sparse_rows(handle);
+    SCL_CHECK_ARG(start >= 0 && start <= rows, "start index out of bounds");
+    SCL_CHECK_ARG(end >= start && end <= rows, "end index out of bounds");
+    
+    // 创建row mask: [start, end)
+    const auto mask_size = static_cast<std::size_t>(rows);
+    std::vector<std::uint8_t> mask(mask_size, 0);
+    for (std::int64_t i = start; i < end; ++i) {
+        mask[static_cast<std::size_t>(i)] = 1;
+    }
+    
+    auto* result = create_handle_like(handle);
+    
+    visit_sparse(handle, [&](const auto& mat) {
+        auto mask_span = std::span<const std::uint8_t>(mask.data(), mask.size());
+        result->data = scl::sparse::slice_rows(mat, mask_span);
+    });
+    
+    return result;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
+}
+
+SCL_API
+auto scl_sparse_col_slice(
+    scl_sparse_t handle,
+    std::int64_t start,
+    std::int64_t end
+) -> scl_sparse_t {
+    if (!SCL_IS_VALID_SPARSE(handle)) {
+        scl::set_thread_error(scl::ErrorCode::NullPointer, "sparse handle is null");
+        return SCL_NULL_SPARSE;
+    }
+    
+    SCL_C_API_BEGIN
+    
+    const auto cols = scl_sparse_cols(handle);
+    SCL_CHECK_ARG(start >= 0 && start <= cols, "start index out of bounds");
+    SCL_CHECK_ARG(end >= start && end <= cols, "end index out of bounds");
+    
+    // 创建column mask: [start, end)
+    const auto mask_size = static_cast<std::size_t>(cols);
+    std::vector<std::uint8_t> mask(mask_size, 0);
+    for (std::int64_t i = start; i < end; ++i) {
+        mask[static_cast<std::size_t>(i)] = 1;
+    }
+    
+    auto* result = create_handle_like(handle);
+    
+    visit_sparse(handle, [&](const auto& mat) {
+        auto mask_span = std::span<const std::uint8_t>(mask.data(), mask.size());
+        result->data = scl::sparse::slice_cols(mat, mask_span);
+    });
+    
+    return result;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
+}
+
+SCL_API
+auto scl_sparse_row_select(
+    scl_sparse_t handle,
+    const std::int64_t* row_indices,
+    std::int64_t count
+) -> scl_sparse_t {
+    if (!SCL_IS_VALID_SPARSE(handle)) {
+        scl::set_thread_error(scl::ErrorCode::NullPointer, "sparse handle is null");
+        return SCL_NULL_SPARSE;
+    }
+    
+    SCL_C_API_BEGIN
+    SCL_CHECK_NOT_NULL(row_indices);
+    SCL_CHECK_ARG(count >= 0, "count must be non-negative");
+    
+    const auto rows = scl_sparse_rows(handle);
+    
+    // 创建row mask from indices
+    const auto mask_size = static_cast<std::size_t>(rows);
+    std::vector<std::uint8_t> mask(mask_size, 0);
+    for (std::int64_t i = 0; i < count; ++i) {
+        const auto idx = row_indices[i];
+        SCL_CHECK_ARG(idx >= 0 && idx < rows, "row index out of bounds");
+        mask[static_cast<std::size_t>(idx)] = 1;
+    }
+    
+    auto* result = create_handle_like(handle);
+    
+    visit_sparse(handle, [&](const auto& mat) {
+        auto mask_span = std::span<const std::uint8_t>(mask.data(), mask.size());
+        result->data = scl::sparse::slice_rows(mat, mask_span);
+    });
+    
+    return result;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
+}
+
+SCL_API
+auto scl_sparse_col_select(
+    scl_sparse_t handle,
+    const std::int64_t* col_indices,
+    std::int64_t count
+) -> scl_sparse_t {
+    if (!SCL_IS_VALID_SPARSE(handle)) {
+        scl::set_thread_error(scl::ErrorCode::NullPointer, "sparse handle is null");
+        return SCL_NULL_SPARSE;
+    }
+    
+    SCL_C_API_BEGIN
+    SCL_CHECK_NOT_NULL(col_indices);
+    SCL_CHECK_ARG(count >= 0, "count must be non-negative");
+    
+    const auto cols = scl_sparse_cols(handle);
+    
+    // 创建column mask from indices
+    const auto mask_size = static_cast<std::size_t>(cols);
+    std::vector<std::uint8_t> mask(mask_size, 0);
+    for (std::int64_t i = 0; i < count; ++i) {
+        const auto idx = col_indices[i];
+        SCL_CHECK_ARG(idx >= 0 && idx < cols, "column index out of bounds");
+        mask[static_cast<std::size_t>(idx)] = 1;
+    }
+    
+    auto* result = create_handle_like(handle);
+    
+    visit_sparse(handle, [&](const auto& mat) {
+        auto mask_span = std::span<const std::uint8_t>(mask.data(), mask.size());
+        result->data = scl::sparse::slice_cols(mat, mask_span);
+    });
+    
+    return result;
+    SCL_C_API_END_HANDLE(SCL_NULL_SPARSE)
 }
 
 // =============================================================================

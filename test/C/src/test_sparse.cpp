@@ -42,54 +42,383 @@ SCL_TEST_CASE(identity_creates_diagonal_matrix) {
     scl_sparse_destroy(handle);
 }
 
-// TODO: from_coo crashes - needs debugging
-// SCL_TEST_CASE(from_coo_creates_csr_matrix) {
-//     // Create a 3x3 matrix
-//     std::vector<std::int64_t> row_indices = {0, 0, 1, 2, 2, 2};
-//     std::vector<std::int64_t> col_indices = {0, 2, 1, 0, 1, 2};
-//     std::vector<double> values = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
-//     
-//     auto handle = scl_sparse_from_coo(
-//         3, 3,
-//         row_indices.data(),
-//         col_indices.data(),
-//         values.data(),
-//         6,
-//         SCL_REAL64,
-//         SCL_INDEX64,
-//         SCL_LAYOUT_CSR
-//     );
-//     
-//     SCL_ASSERT_NOT_NULL(handle);
-//     SCL_ASSERT_EQ(scl_sparse_rows(handle), 3);
-//     SCL_ASSERT_EQ(scl_sparse_cols(handle), 3);
-//     SCL_ASSERT_EQ(scl_sparse_nnz(handle), 6);
-//     SCL_ASSERT_EQ(scl_sparse_layout(handle), SCL_LAYOUT_CSR);
-//     
-//     scl_sparse_destroy(handle);
-// }
+SCL_TEST_CASE(from_coo_creates_csr_matrix) {
+    // Create a 3x3 matrix
+    std::vector<std::int64_t> row_indices = {0, 0, 1, 2, 2, 2};
+    std::vector<std::int64_t> col_indices = {0, 2, 1, 0, 1, 2};
+    std::vector<double> values = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    
+    auto handle = scl_sparse_from_coo(
+        3, 3,
+        row_indices.data(),
+        col_indices.data(),
+        values.data(),
+        6,
+        SCL_REAL64,
+        SCL_INDEX64,
+        SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_NOT_NULL(handle);
+    SCL_ASSERT_EQ(scl_sparse_rows(handle), 3);
+    SCL_ASSERT_EQ(scl_sparse_cols(handle), 3);
+    SCL_ASSERT_EQ(scl_sparse_nnz(handle), 6);
+    SCL_ASSERT_EQ(scl_sparse_layout(handle), SCL_LAYOUT_CSR);
+    
+    scl_sparse_destroy(handle);
+}
 
-// SCL_TEST_CASE(from_coo_creates_csc_matrix) {
-//     std::vector<std::int64_t> row_indices = {0, 1};
-//     std::vector<std::int64_t> col_indices = {0, 1};
-//     std::vector<double> values = {1.0, 2.0};
-//     
-//     auto handle = scl_sparse_from_coo(
-//         2, 2,
-//         row_indices.data(),
-//         col_indices.data(),
-//         values.data(),
-//         2,
-//         SCL_REAL64,
-//         SCL_INDEX64,
-//         SCL_LAYOUT_CSC
-//     );
-//     
-//     SCL_ASSERT_NOT_NULL(handle);
-//     SCL_ASSERT_EQ(scl_sparse_layout(handle), SCL_LAYOUT_CSC);
-//     
-//     scl_sparse_destroy(handle);
-// }
+SCL_TEST_CASE(from_coo_creates_csc_matrix) {
+    std::vector<std::int64_t> row_indices = {0, 1};
+    std::vector<std::int64_t> col_indices = {0, 1};
+    std::vector<double> values = {1.0, 2.0};
+    
+    auto handle = scl_sparse_from_coo(
+        2, 2,
+        row_indices.data(),
+        col_indices.data(),
+        values.data(),
+        2,
+        SCL_REAL64,
+        SCL_INDEX64,
+        SCL_LAYOUT_CSC
+    );
+    
+    SCL_ASSERT_NOT_NULL(handle);
+    SCL_ASSERT_EQ(scl_sparse_layout(handle), SCL_LAYOUT_CSC);
+    
+    scl_sparse_destroy(handle);
+}
+
+// from_coo 边界条件测试
+SCL_TEST_CASE(from_coo_single_element) {
+    std::vector<std::int64_t> row_indices = {0};
+    std::vector<std::int64_t> col_indices = {0};
+    std::vector<double> values = {5.0};
+    
+    auto handle = scl_sparse_from_coo(
+        3, 3, row_indices.data(), col_indices.data(), values.data(),
+        1, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_SPARSE_NNZ(handle, 1);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_diagonal_matrix) {
+    std::vector<std::int64_t> row_indices = {0, 1, 2, 3, 4};
+    std::vector<std::int64_t> col_indices = {0, 1, 2, 3, 4};
+    std::vector<double> values = {1.0, 2.0, 3.0, 4.0, 5.0};
+    
+    auto handle = scl_sparse_from_coo(
+        5, 5, row_indices.data(), col_indices.data(), values.data(),
+        5, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_SPARSE_DIMS(handle, 5, 5);
+    SCL_ASSERT_SPARSE_NNZ(handle, 5);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_unsorted_indices) {
+    // Indices not sorted - should be handled automatically
+    std::vector<std::int64_t> row_indices = {2, 0, 1, 2, 0};
+    std::vector<std::int64_t> col_indices = {2, 0, 1, 0, 1};
+    std::vector<double> values = {5.0, 1.0, 3.0, 4.0, 2.0};
+    
+    auto handle = scl_sparse_from_coo(
+        3, 3, row_indices.data(), col_indices.data(), values.data(),
+        5, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_SPARSE_NNZ(handle, 5);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_duplicate_indices) {
+    // Duplicate (row,col) pairs - behavior depends on implementation
+    // Current: preserves duplicates (nnz=4)
+    // Alternative: merges duplicates (nnz=2)
+    std::vector<std::int64_t> row_indices = {0, 0, 1, 1};
+    std::vector<std::int64_t> col_indices = {0, 0, 1, 1};
+    std::vector<double> values = {1.0, 2.0, 3.0, 4.0};
+    
+    auto handle = scl_sparse_from_coo(
+        2, 2, row_indices.data(), col_indices.data(), values.data(),
+        4, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    // Current implementation: preserves all elements
+    auto nnz = scl_sparse_nnz(handle);
+    SCL_ASSERT_TRUE(nnz == 2 || nnz == 4);  // Either behavior is valid
+    
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_large_nnz) {
+    // 较大的非零元素数（触发堆分配路径）
+    const int n = 100;
+    std::vector<std::int64_t> row_indices(n);
+    std::vector<std::int64_t> col_indices(n);
+    std::vector<double> values(n);
+    
+    for (int i = 0; i < n; ++i) {
+        row_indices[i] = i;
+        col_indices[i] = i;
+        values[i] = static_cast<double>(i + 1);
+    }
+    
+    auto handle = scl_sparse_from_coo(
+        n, n, row_indices.data(), col_indices.data(), values.data(),
+        n, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_SPARSE_NNZ(handle, n);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_int32_type) {
+    std::vector<std::int64_t> row_indices = {0, 1, 2};
+    std::vector<std::int64_t> col_indices = {0, 1, 2};
+    std::vector<std::int32_t> values = {10, 20, 30};
+    
+    auto handle = scl_sparse_from_coo(
+        3, 3, row_indices.data(), col_indices.data(), values.data(),
+        3, SCL_INT32, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_EQ(scl_sparse_value_type(handle), SCL_INT32);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_uint8_small_values) {
+    std::vector<std::int64_t> row_indices = {0, 1, 2, 3};
+    std::vector<std::int64_t> col_indices = {0, 1, 2, 3};
+    std::vector<std::uint8_t> values = {1, 2, 3, 255};
+    
+    auto handle = scl_sparse_from_coo(
+        4, 4, row_indices.data(), col_indices.data(), values.data(),
+        4, SCL_UINT8, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_EQ(scl_sparse_value_type(handle), SCL_UINT8);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_rectangular_matrix) {
+    // 非方阵
+    std::vector<std::int64_t> row_indices = {0, 0, 1};
+    std::vector<std::int64_t> col_indices = {0, 5, 3};
+    std::vector<double> values = {1.0, 2.0, 3.0};
+    
+    auto handle = scl_sparse_from_coo(
+        5, 10, row_indices.data(), col_indices.data(), values.data(),
+        3, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_SPARSE_DIMS(handle, 5, 10);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_sparse_large_matrix) {
+    // 稀疏的大矩阵
+    const int rows = 1000, cols = 1000, nnz = 50;
+    std::vector<std::int64_t> row_indices(nnz);
+    std::vector<std::int64_t> col_indices(nnz);
+    std::vector<double> values(nnz);
+    
+    // 随机稀疏元素
+    Random rng(42);
+    for (int i = 0; i < nnz; ++i) {
+        row_indices[i] = rng.uniform_int(0, rows - 1);
+        col_indices[i] = rng.uniform_int(0, cols - 1);
+        values[i] = rng.uniform(0.0, 10.0);
+    }
+    
+    auto handle = scl_sparse_from_coo(
+        rows, cols, row_indices.data(), col_indices.data(), values.data(),
+        nnz, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_LE(scl_sparse_nnz(handle), nnz);  // May merge duplicates
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_all_same_row) {
+    // 所有元素在同一行
+    std::vector<std::int64_t> row_indices = {0, 0, 0, 0, 0};
+    std::vector<std::int64_t> col_indices = {0, 1, 2, 3, 4};
+    std::vector<double> values = {1.0, 2.0, 3.0, 4.0, 5.0};
+    
+    auto handle = scl_sparse_from_coo(
+        10, 10, row_indices.data(), col_indices.data(), values.data(),
+        5, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_SPARSE_NNZ(handle, 5);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_different_index_types) {
+    // 测试 Index32
+    std::vector<std::int32_t> row_indices = {0, 1, 2};
+    std::vector<std::int32_t> col_indices = {0, 1, 2};
+    std::vector<double> values = {1.0, 2.0, 3.0};
+    
+    auto handle = scl_sparse_from_coo(
+        3, 3, row_indices.data(), col_indices.data(), values.data(),
+        3, SCL_REAL64, SCL_INDEX32, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_EQ(scl_sparse_index_type(handle), SCL_INDEX32);
+    scl_sparse_destroy(handle);
+}
+
+// from_coo 错误处理测试
+SCL_TEST_CASE(from_coo_null_row_indices) {
+    std::vector<std::int64_t> col_indices = {0};
+    std::vector<double> values = {1.0};
+    
+    scl_clear_error();
+    auto handle = scl_sparse_from_coo(
+        3, 3, nullptr, col_indices.data(), values.data(),
+        1, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_NULL(handle);
+    SCL_ASSERT_HAS_ERROR();
+}
+
+SCL_TEST_CASE(from_coo_null_col_indices) {
+    std::vector<std::int64_t> row_indices = {0};
+    std::vector<double> values = {1.0};
+    
+    scl_clear_error();
+    auto handle = scl_sparse_from_coo(
+        3, 3, row_indices.data(), nullptr, values.data(),
+        1, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_NULL(handle);
+    SCL_ASSERT_HAS_ERROR();
+}
+
+SCL_TEST_CASE(from_coo_null_values) {
+    std::vector<std::int64_t> row_indices = {0};
+    std::vector<std::int64_t> col_indices = {0};
+    
+    scl_clear_error();
+    auto handle = scl_sparse_from_coo(
+        3, 3, row_indices.data(), col_indices.data(), nullptr,
+        1, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_NULL(handle);
+    SCL_ASSERT_HAS_ERROR();
+}
+
+SCL_TEST_CASE(from_coo_negative_dimensions) {
+    std::vector<std::int64_t> row_indices = {0};
+    std::vector<std::int64_t> col_indices = {0};
+    std::vector<double> values = {1.0};
+    
+    scl_clear_error();
+    auto handle = scl_sparse_from_coo(
+        -1, 10, row_indices.data(), col_indices.data(), values.data(),
+        1, SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_NULL(handle);
+    SCL_ASSERT_HAS_ERROR();
+}
+
+SCL_TEST_CASE(from_coo_invalid_value_type) {
+    std::vector<std::int64_t> row_indices = {0};
+    std::vector<std::int64_t> col_indices = {0};
+    std::vector<double> values = {1.0};
+    
+    scl_clear_error();
+    auto handle = scl_sparse_from_coo(
+        3, 3, row_indices.data(), col_indices.data(), values.data(),
+        1, static_cast<scl_value_type_t>(999), SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_NULL(handle);
+    SCL_ASSERT_HAS_ERROR();
+}
+
+SCL_TEST_CASE(from_coo_nnz_exceeds_size) {
+    std::vector<std::int64_t> row_indices = {0};
+    std::vector<std::int64_t> col_indices = {0};
+    std::vector<double> values = {1.0};
+    
+    scl_clear_error();
+    auto handle = scl_sparse_from_coo(
+        2, 2, row_indices.data(), col_indices.data(), values.data(),
+        100,  // nnz=100 但只有 2×2=4 个可能位置
+        SCL_REAL64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_NULL(handle);
+    SCL_ASSERT_HAS_ERROR();
+}
+
+// from_coo 整数类型专项测试
+SCL_TEST_CASE(from_coo_int8_negative_values) {
+    std::vector<std::int64_t> row_indices = {0, 1, 2};
+    std::vector<std::int64_t> col_indices = {0, 1, 2};
+    std::vector<std::int8_t> values = {-10, 0, 127};  // Int8 范围测试
+    
+    auto handle = scl_sparse_from_coo(
+        3, 3, row_indices.data(), col_indices.data(), values.data(),
+        3, SCL_INT8, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_uint64_large_values) {
+    std::vector<std::int64_t> row_indices = {0, 1};
+    std::vector<std::int64_t> col_indices = {0, 1};
+    std::vector<std::uint64_t> values = {1000000000ULL, 9999999999ULL};
+    
+    auto handle = scl_sparse_from_coo(
+        2, 2, row_indices.data(), col_indices.data(), values.data(),
+        2, SCL_UINT64, SCL_INDEX64, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    scl_sparse_destroy(handle);
+}
+
+SCL_TEST_CASE(from_coo_mixed_precision) {
+    // Real32 + Index32
+    std::vector<std::int32_t> row_indices = {0, 1, 2};
+    std::vector<std::int32_t> col_indices = {0, 1, 2};
+    std::vector<float> values = {1.5f, 2.5f, 3.5f};
+    
+    auto handle = scl_sparse_from_coo(
+        3, 3, row_indices.data(), col_indices.data(), values.data(),
+        3, SCL_REAL32, SCL_INDEX32, SCL_LAYOUT_CSR
+    );
+    
+    SCL_ASSERT_SPARSE_VALID(handle);
+    SCL_ASSERT_EQ(scl_sparse_value_type(handle), SCL_REAL32);
+    SCL_ASSERT_EQ(scl_sparse_index_type(handle), SCL_INDEX32);
+    scl_sparse_destroy(handle);
+}
 
 SCL_TEST_SUITE_END
 

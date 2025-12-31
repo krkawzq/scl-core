@@ -231,6 +231,20 @@ add_scl_test(sparse             src/test_sparse.cpp)
 add_scl_test(sparse_creation    src/test_sparse_creation.cpp)
 add_scl_test(sparse_operations  src/test_sparse_operations.cpp)
 add_scl_test(summary            src/test_summary.cpp)
+add_scl_test(alignment          src/test_alignment.cpp)
+add_scl_test(performance        src/test_performance.cpp)
+add_scl_test(boundaries         src/test_boundaries.cpp)
+add_scl_test(data_patterns      src/test_data_patterns.cpp)
+add_scl_test(integer_types      src/test_integer_types.cpp)
+add_scl_test(lifecycle          src/test_lifecycle.cpp)
+add_scl_test(comprehensive      src/test_comprehensive.cpp)
+add_scl_test(final_coverage     src/test_final_coverage.cpp)
+add_scl_test(slice              src/test_slice.cpp)
+add_scl_test(final_42           src/test_final_42.cpp)
+add_scl_test(numerical_validation src/test_numerical_validation.cpp)
+
+# Kernel tests
+add_scl_test(log1p              src/test_log1p.cpp)
 
 # Future tests can be added here:
 # add_scl_test(dense       src/test_dense.cpp)

@@ -74,35 +74,38 @@
 ---
 
 #### 2.2 effect_size - 效应量
-- [ ] C++ 实现 (`scl/math/effect_size.hpp`)
-- [ ] C-API 接口 (`scl/api/math/effect_size.h`)
-- [ ] 文档开发
+- [x] C++ 实现 (`scl/math/effect_size.hpp`) ✅ 2025-12-31
+- [x] C-API 接口 (N/A - 数学工具，无需封装)
+- [x] 文档开发 (内联文档已完成)
 
 **功能**: Cohen's d, Hedges' g, Glass' Δ, CLES
 **依赖**: `stat_base.hpp`
 **优先级**: P0 - 差异显著性量化
+**状态**: ✅ 已完成
 
 ---
 
 #### 2.3 ttest - t 检验
-- [ ] C++ 实现 (`scl/math/ttest.hpp`)
-- [ ] C-API 接口 (`scl/api/math/ttest.h`)
-- [ ] 文档开发
+- [x] C++ 实现 (`scl/math/ttest.hpp`) ✅ 2025-12-31
+- [x] C-API 接口 (N/A - 数学工具，无需封装)
+- [x] 文档开发 (内联文档已完成)
 
 **功能**: Welch's t-test, Student's t-test, 配对 t 检验
 **依赖**: `stat_base.hpp`, `scl/math/stats.hpp`
 **优先级**: P0 - 最常用参数检验
+**状态**: ✅ 已完成
 
 ---
 
 #### 2.4 mwu - Mann-Whitney U 检验
-- [ ] C++ 实现 (`scl/math/mwu.hpp`)
-- [ ] C-API 接口 (`scl/api/math/mwu.h`)
-- [ ] 文档开发
+- [x] C++ 实现 (`scl/math/mwu.hpp`) ✅ 2025-12-31
+- [x] C-API 接口 (N/A - 数学工具，无需封装)
+- [x] 文档开发 (内联文档已完成)
 
 **功能**: Mann-Whitney U 检验（非参数）、Wilcoxon 秩和检验
-**依赖**: `rank_utils.hpp`, `scl/math/mwu.hpp` (数学函数)
+**依赖**: `rank_utils.hpp`, `stat_base.hpp`
 **优先级**: P0 - 最常用非参数检验
+**状态**: ✅ 已完成（更新现有实现以符合新规范）
 
 ---
 
@@ -120,26 +123,28 @@
 ---
 
 #### 3.2 multiple_testing - 多重检验校正
-- [ ] C++ 实现 (`scl/math/multiple_testing.hpp`)
-- [ ] C-API 接口 (`scl/api/math/multiple_testing.h`)
-- [ ] 文档开发
+- [x] C++ 实现 (`scl/math/multiple_testing.hpp`) ✅ 2025-12-31
+- [x] C-API 接口 (N/A - 数学工具，无需封装)
+- [x] 文档开发 (内联文档已完成)
 
 **功能**: Bonferroni, Benjamini-Hochberg FDR, Benjamini-Yekutieli FDR
-**依赖**: `scl/core/sort.hpp`
+**依赖**: `scl/core/sort.hpp` (使用 std::sort)
 **优先级**: P0 - 多重检验必备
+**状态**: ✅ 已完成（使用现代 C++20 std::span 接口）
 
 ---
 
 ### 4. 基础预处理
 
 #### 4.1 log1p - log1p 变换
-- [ ] C++ 实现 (`scl/kernel/log1p.hpp`)
-- [ ] C-API 接口 (`scl/api/kernel/log1p.h`)
+- [x] C++ 实现 (`scl/kernel/log1p.hpp`) ✅ 2025-12-31
+- [x] C-API 接口 (`scl/api/kernel/log1p.h` + `log1p.cpp`) ✅ 2025-12-31
 - [ ] 文档开发
 
-**功能**: log(1+x) 变换、SIMD 优化
-**依赖**: `scl/core/simd.hpp`
+**功能**: log(1+x) 变换、log2(1+x) 变换、expm1(x) 变换、8-way SIMD 优化、管道预取、自动并行化
+**依赖**: `scl/core/simd.hpp`, `scl/threading/parallel_for.hpp`
 **优先级**: P0 - 标准化前置步骤
+**状态**: ✅ 已完成（C++ + C-API）
 
 ---
 

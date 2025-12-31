@@ -94,6 +94,11 @@ inline void set_seed(uint64_t seed) {
     global_rng() = Random(seed);
 }
 
+/// Create a seeded random generator for test reproducibility
+inline Random make_test_rng(int test_id = 0) {
+    return Random(42 + test_id);  // 每个测试有独立但可预测的seed
+}
+
 // =============================================================================
 // Random Shape Generation
 // =============================================================================
@@ -125,6 +130,164 @@ inline double random_density(
     Random& rng = global_rng()
 ) {
     return rng.uniform(min_density, max_density);
+}
+
+// =============================================================================
+// Random Data for C-API Tests
+// =============================================================================
+
+/// Generate random COO data for scl_sparse_from_coo
+template<typename ValueT>
+inline void generate_random_coo(
+    scl_index_t rows,
+    scl_index_t cols,
+    scl_index_t nnz,
+    std::vector<std::int64_t>& row_indices,
+    std::vector<std::int64_t>& col_indices,
+    std::vector<ValueT>& values,
+    Random& rng = global_rng()
+) {
+    row_indices.resize(nnz);
+    col_indices.resize(nnz);
+    values.resize(nnz);
+    
+    for (scl_index_t k = 0; k < nnz; ++k) {
+        row_indices[k] = rng.uniform_int(0, rows - 1);
+        col_indices[k] = rng.uniform_int(0, cols - 1);
+        
+        if constexpr (std::is_floating_point_v<ValueT>) {
+            values[k] = static_cast<ValueT>(rng.uniform(-10.0, 10.0));
+        } else if constexpr (std::is_signed_v<ValueT>) {
+            auto max_val = std::numeric_limits<ValueT>::max() / 2;
+            values[k] = static_cast<ValueT>(rng.uniform_int(-max_val, max_val));
+        } else {
+            auto max_val = std::numeric_limits<ValueT>::max() / 2;
+            values[k] = static_cast<ValueT>(rng.uniform_int(0, max_val));
+        }
+    }
+}
+
+/// Generate random diagonal matrix data
+template<typename ValueT>
+inline void generate_diagonal_data(
+    scl_index_t n,
+    std::vector<std::int64_t>& row_indices,
+    std::vector<std::int64_t>& col_indices,
+    std::vector<ValueT>& values,
+    Random& rng = global_rng()
+) {
+    row_indices.resize(n);
+    col_indices.resize(n);
+    values.resize(n);
+    
+    for (scl_index_t i = 0; i < n; ++i) {
+        row_indices[i] = i;
+        col_indices[i] = i;
+        
+        if constexpr (std::is_floating_point_v<ValueT>) {
+            values[i] = static_cast<ValueT>(rng.uniform(-10.0, 10.0));
+        } else if constexpr (std::is_signed_v<ValueT>) {
+            values[i] = static_cast<ValueT>(rng.uniform_int(-100, 100));
+        } else {
+            values[i] = static_cast<ValueT>(rng.uniform_int(1, 100));
+        }
+    }
+}
+
+/// Generate random tridiagonal matrix data
+template<typename ValueT>
+inline void generate_tridiagonal_data(
+    scl_index_t n,
+    std::vector<std::int64_t>& row_indices,
+    std::vector<std::int64_t>& col_indices,
+    std::vector<ValueT>& values,
+    Random& rng = global_rng()
+) {
+    row_indices.clear();
+    col_indices.clear();
+    values.clear();
+    
+    for (scl_index_t i = 0; i < n; ++i) {
+        // Main diagonal
+        row_indices.push_back(i);
+        col_indices.push_back(i);
+        
+        if constexpr (std::is_floating_point_v<ValueT>) {
+            values.push_back(static_cast<ValueT>(rng.uniform(1.0, 10.0)));
+        } else {
+            values.push_back(static_cast<ValueT>(rng.uniform_int(1, 10)));
+        }
+        
+        // Upper diagonal
+        if (i < n - 1) {
+            row_indices.push_back(i);
+            col_indices.push_back(i + 1);
+            
+            if constexpr (std::is_floating_point_v<ValueT>) {
+                values.push_back(static_cast<ValueT>(rng.uniform(-2.0, 2.0)));
+            } else if constexpr (std::is_signed_v<ValueT>) {
+                values.push_back(static_cast<ValueT>(rng.uniform_int(-2, 2)));
+            } else {
+                values.push_back(static_cast<ValueT>(rng.uniform_int(1, 2)));
+            }
+        }
+        
+        // Lower diagonal
+        if (i > 0) {
+            row_indices.push_back(i);
+            col_indices.push_back(i - 1);
+            
+            if constexpr (std::is_floating_point_v<ValueT>) {
+                values.push_back(static_cast<ValueT>(rng.uniform(-2.0, 2.0)));
+            } else if constexpr (std::is_signed_v<ValueT>) {
+                values.push_back(static_cast<ValueT>(rng.uniform_int(-2, 2)));
+            } else {
+                values.push_back(static_cast<ValueT>(rng.uniform_int(1, 2)));
+            }
+        }
+    }
+}
+
+/// Generate random index array for selection
+inline std::vector<std::int64_t> generate_random_indices(
+    scl_index_t max_index,
+    scl_index_t count,
+    bool allow_duplicates = false,
+    Random& rng = global_rng()
+) {
+    std::vector<std::int64_t> indices;
+    
+    if (!allow_duplicates) {
+        // 不重复：使用shuffle
+        std::vector<std::int64_t> all(max_index);
+        std::iota(all.begin(), all.end(), 0);
+        std::shuffle(all.begin(), all.end(), rng.engine());
+        
+        count = std::min(count, max_index);
+        indices.assign(all.begin(), all.begin() + count);
+    } else {
+        // 允许重复
+        indices.resize(count);
+        for (scl_index_t i = 0; i < count; ++i) {
+            indices[i] = rng.uniform_int(0, max_index - 1);
+        }
+    }
+    
+    return indices;
+}
+
+/// Generate random scalar for testing
+template<typename T>
+inline T random_scalar(Random& rng = global_rng()) {
+    if constexpr (std::is_floating_point_v<T>) {
+        return static_cast<T>(rng.uniform(-10.0, 10.0));
+    } else if constexpr (std::is_signed_v<T>) {
+        auto max_val = std::numeric_limits<T>::max() / 2;
+        return static_cast<T>(rng.uniform_int(-max_val, max_val));
+    } else {
+        auto max_val = std::numeric_limits<T>::max() / 2;
+        return static_cast<T>(rng.uniform_int(0, max_val));
+    }
 }
 
 // =============================================================================
