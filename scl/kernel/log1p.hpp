@@ -416,7 +416,7 @@ auto log1p_inplace(
 
     if (len >= config::MIN_PARALLEL_SIZE) {
         // Parallel processing for large arrays
-        const Size num_threads = scl::threading::num_threads();
+        const Size num_threads = scl::threading::get_num_threads();
         const Size chunk_size = (len + num_threads - 1) / num_threads;
 
         scl::threading::parallel_for(Size(0), num_threads, [&](Size thread_id) {
@@ -443,7 +443,7 @@ auto log2p1_inplace(
     const Size len = values.size();
 
     if (len >= config::MIN_PARALLEL_SIZE) {
-        const Size num_threads = scl::threading::num_threads();
+        const Size num_threads = scl::threading::get_num_threads();
         const Size chunk_size = (len + num_threads - 1) / num_threads;
 
         scl::threading::parallel_for(Size(0), num_threads, [&](Size thread_id) {
@@ -469,7 +469,7 @@ auto expm1_inplace(
     const Size len = values.size();
 
     if (len >= config::MIN_PARALLEL_SIZE) {
-        const Size num_threads = scl::threading::num_threads();
+        const Size num_threads = scl::threading::get_num_threads();
         const Size chunk_size = (len + num_threads - 1) / num_threads;
 
         scl::threading::parallel_for(Size(0), num_threads, [&](Size thread_id) {
@@ -500,7 +500,7 @@ auto log1p(
     std::span<const T> input,
     std::span<T> output
 ) -> void {
-    SCL_CHECK(input.size() == output.size(),
+    SCL_CHECK(input.size() == output.size(), DimensionError,
         "log1p: input and output must have the same size");
 
     // Copy input to output, then apply in-place transformation
@@ -517,7 +517,7 @@ auto log2p1(
     std::span<const T> input,
     std::span<T> output
 ) -> void {
-    SCL_CHECK(input.size() == output.size(),
+    SCL_CHECK(input.size() == output.size(), DimensionError,
         "log2p1: input and output must have the same size");
 
     std::copy(input.begin(), input.end(), output.begin());
@@ -533,7 +533,7 @@ auto expm1(
     std::span<const T> input,
     std::span<T> output
 ) -> void {
-    SCL_CHECK(input.size() == output.size(),
+    SCL_CHECK(input.size() == output.size(), DimensionError,
         "expm1: input and output must have the same size");
 
     std::copy(input.begin(), input.end(), output.begin());

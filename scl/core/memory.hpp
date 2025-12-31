@@ -421,6 +421,7 @@ auto has_flag(AllocFlags flags, AllocFlags test) noexcept -> bool {
 /// @note Uses mmap on POSIX, VirtualAlloc on Windows
 /// @note Memory is zero-initialized by the OS
 [[nodiscard]]
+inline
 auto virtual_alloc(Size byte_size, AllocFlags flags = AllocFlags::None) noexcept -> void* {
     if (byte_size == 0) [[unlikely]] return nullptr;
 
@@ -491,6 +492,7 @@ auto virtual_alloc(Size byte_size, AllocFlags flags = AllocFlags::None) noexcept
 /// @brief Free memory allocated with virtual_alloc
 /// @param[in] ptr Pointer to memory
 /// @param[in] byte_size Size in bytes (required for munmap on POSIX)
+inline
 auto virtual_free(void* ptr, Size byte_size) noexcept -> void {
     if (!ptr) [[unlikely]] return;
 
@@ -1037,6 +1039,7 @@ enum class MemoryAdvice : std::uint32_t {
 /// @return true on success
 /// @note Uses madvise on POSIX, VirtualAlloc hints on Windows
 [[nodiscard]]
+inline
 auto memory_advise(void* ptr, Size byte_size, MemoryAdvice advice) noexcept -> bool {
     if (!ptr || byte_size == 0) [[unlikely]] return false;
 
@@ -1094,6 +1097,7 @@ auto memory_advise(void* ptr, Size byte_size, MemoryAdvice advice) noexcept -> b
 /// @note Uses mlock on POSIX, VirtualLock on Windows
 /// @warning Requires appropriate privileges
 [[nodiscard]]
+inline
 auto memory_lock(void* ptr, Size byte_size) noexcept -> bool {
     if (!ptr || byte_size == 0) [[unlikely]] return false;
 
@@ -1112,6 +1116,7 @@ auto memory_lock(void* ptr, Size byte_size) noexcept -> bool {
 /// @param[in] ptr Pointer to memory region
 /// @param[in] byte_size Size of region in bytes
 /// @return true on success
+inline
 auto memory_unlock(void* ptr, Size byte_size) noexcept -> bool {
     if (!ptr || byte_size == 0) [[unlikely]] return false;
 

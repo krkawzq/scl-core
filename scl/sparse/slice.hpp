@@ -679,7 +679,6 @@ auto slice_secondary(
                         detail::slice_merge(
                             src_indices.to_std_span(),
                             src_values.to_std_span(),
-                            mask,
                             mask_indices,
                             temp_indices,
                             temp_values
@@ -705,11 +704,11 @@ auto slice_secondary(
                 if (!temp_indices.empty()) {
                     memory::copy(
                         std::span<const IndexT>(temp_indices),
-                        dst_indices.to_std_span()
+                        std::span<IndexT>(const_cast<IndexT*>(dst_indices.data()), dst_indices.size())
                     );
                     memory::copy(
                         std::span<const ValueT>(temp_values),
-                        dst_values.to_std_span()
+                        std::span<ValueT>(const_cast<ValueT*>(dst_values.data()), dst_values.size())
                     );
                 }
             },
@@ -761,7 +760,6 @@ auto slice_secondary(
                     detail::slice_merge(
                         src_indices.to_std_span(),
                         src_values.to_std_span(),
-                        mask,
                         mask_indices,
                         temp_indices,
                         temp_values
@@ -788,11 +786,11 @@ auto slice_secondary(
             if (!temp_indices.empty()) {
                 memory::copy(
                     std::span<const IndexT>(temp_indices),
-                    dst_indices.to_std_span()
+                    std::span<IndexT>(const_cast<IndexT*>(dst_indices.data()), dst_indices.size())
                 );
                 memory::copy(
                     std::span<const ValueT>(temp_values),
-                    dst_values.to_std_span()
+                    std::span<ValueT>(const_cast<ValueT*>(dst_values.data()), dst_values.size())
                 );
             }
         }

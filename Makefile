@@ -1,4 +1,4 @@
-.PHONY: help build compile compile-cpp clean format lint all tree cloc makedoc docs-dev docs-build docs-preview docs-clean codegen codegen-python codegen-docs
+.PHONY: help build compile compile-cpp clean format lint all tree cloc makedoc docs-dev docs-build docs-preview docs-clean codegen codegen-python codegen-docs test test-build test-run test-clean
 
 # Config
 
@@ -6,6 +6,7 @@ PYTHON := python3
 VENV_PYTHON := .venv/bin/python
 PIP := $(PYTHON) -m pip
 CMAKE_BUILD_DIR := build/cmake
+CMAKE_TEST_DIR := test/C/build
 INSTALL_DIR := python/scl/libs
 
 .DEFAULT_GOAL := help
@@ -39,6 +40,12 @@ help:
 	@echo "  codegen        Generate all (Python bindings + C API docs)"
 	@echo "  codegen-python Generate Python ctypes bindings from C API"
 	@echo "  codegen-docs   Generate C API documentation skeletons"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test           Build and run all tests with detailed output"
+	@echo "  test-build     Build tests only"
+	@echo "  test-run       Run tests only (requires test-build)"
+	@echo "  test-clean     Clean test build artifacts"
 
 all: clean build format lint
 
@@ -222,3 +229,57 @@ codegen-docs:
 	@echo "Generating C API documentation skeletons..."
 	@$(VENV_PYTHON) -m codegen -v c-api-docs
 	@echo "C API documentation skeletons generated"
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+test: compile test-build test-run
+	@echo ""
+	@echo "✅ All tests completed"
+
+test-build: compile
+	@echo "Building C-API tests..."
+	@mkdir -p $(CMAKE_TEST_DIR)
+	@if [ -d "$(CMAKE_BUILD_DIR)/install" ]; then \
+		cd $(CMAKE_TEST_DIR) && cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
+			-DCMAKE_PREFIX_PATH="$(shell pwd)/$(CMAKE_BUILD_DIR)/install"; \
+	else \
+		cd $(CMAKE_TEST_DIR) && cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release; \
+	fi
+	@cd $(CMAKE_TEST_DIR) && ninja -j$$(nproc 2>/dev/null || echo 4)
+	@echo "✅ Tests built successfully"
+
+test-run: test-build
+	@echo ""
+	@echo "========================================"
+	@echo "  Running SCL C-API Tests"
+	@echo "========================================"
+	@echo ""
+	@cd $(CMAKE_TEST_DIR) && ctest --output-on-failure --verbose --progress \
+		--label-exclude "DISABLED" || \
+		(echo ""; \
+		 echo "❌ Some tests failed. Run individual tests for details:"; \
+		 echo "   cd $(CMAKE_TEST_DIR) && ./test_<name>"; \
+		 exit 1)
+	@echo ""
+	@echo "========================================"
+	@echo "  Test Summary"
+	@echo "========================================"
+	@cd $(CMAKE_TEST_DIR) && ctest --output-on-failure --print-summary || true
+
+test-clean:
+	@echo "Cleaning test build artifacts..."
+	@rm -rf $(CMAKE_TEST_DIR)
+	@echo "✅ Test artifacts cleaned"
+
+test-quick: test-build
+	@cd $(CMAKE_TEST_DIR) && ctest --output-on-failure --parallel $$(nproc 2>/dev/null || echo 4)
+
+test-single:
+	@if [ -z "$(TEST)" ]; then \
+		echo "Usage: make test-single TEST=<test_name>"; \
+		echo "Example: make test-single TEST=test_error"; \
+		exit 1; \
+	fi
+	@cd $(CMAKE_TEST_DIR) && ./$(TEST) || true

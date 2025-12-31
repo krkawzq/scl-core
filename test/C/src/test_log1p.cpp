@@ -18,6 +18,7 @@
 // =============================================================================
 
 #include "test.hpp"
+#include "scl/api/kernel/log1p.h"  // Log1p C-API
 #include <cmath>
 #include <vector>
 #include <algorithm>
@@ -380,31 +381,25 @@ SCL_TEST_CASE(log1p_sparse_csr_real64) {
     SCL_ASSERT_EQ(err, 0);
     SCL_ASSERT_NO_ERROR();
 
-    // Extract values and verify
-    auto exported = scl_sparse_to_coo(mat);
-    SCL_ASSERT_SPARSE_VALID(exported);
-
-    // Get data
+    // Extract values to verify
     std::vector<double> result_vals(nnz);
     std::vector<int64_t> result_rows(nnz);
     std::vector<int64_t> result_cols(nnz);
 
-    int32_t extract_err = scl_sparse_extract_coo(
-        exported,
-        result_rows.data(), result_cols.data(), result_vals.data(),
-        nnz
+    int32_t extract_err = scl_sparse_to_coo(
+        mat,
+        result_rows.data(), result_cols.data(), result_vals.data()
     );
     SCL_ASSERT_EQ(extract_err, 0);
 
     // Verify transformed values
     for (int64_t i = 0; i < nnz; ++i) {
         double expected = ref_log1p(vals[i]);
-        printf("    [%lld] original=%.6f, transformed=%.6f, expected=%.6f\n",
-               i, vals[i], result_vals[i], expected);
+        printf("    [%ld] original=%.6f, transformed=%.6f, expected=%.6f\n",
+               (long)i, vals[i], result_vals[i], expected);
         SCL_ASSERT_TRUE(is_close(result_vals[i], expected, 1e-10, 1e-12));
     }
 
-    scl_sparse_destroy(exported);
     scl_sparse_destroy(mat);
 }
 
@@ -431,27 +426,22 @@ SCL_TEST_CASE(log1p_sparse_csc_real32) {
     SCL_ASSERT_NO_ERROR();
 
     // Export and verify
-    auto exported = scl_sparse_to_coo(mat);
-    SCL_ASSERT_SPARSE_VALID(exported);
-
     std::vector<float> result_vals(nnz);
     std::vector<int64_t> result_rows(nnz);
     std::vector<int64_t> result_cols(nnz);
 
-    scl_sparse_extract_coo(
-        exported,
-        result_rows.data(), result_cols.data(), result_vals.data(),
-        nnz
+    scl_sparse_to_coo(
+        mat,
+        result_rows.data(), result_cols.data(), result_vals.data()
     );
 
     for (int64_t i = 0; i < nnz; ++i) {
         float expected = ref_log1p(vals[i]);
-        printf("    [%lld] original=%.6f, transformed=%.6f, expected=%.6f\n",
-               i, vals[i], result_vals[i], expected);
+        printf("    [%ld] original=%.6f, transformed=%.6f, expected=%.6f\n",
+               (long)i, vals[i], result_vals[i], expected);
         SCL_ASSERT_TRUE(is_close(result_vals[i], expected, 1e-5f, 1e-7f));
     }
 
-    scl_sparse_destroy(exported);
     scl_sparse_destroy(mat);
 }
 
@@ -475,21 +465,19 @@ SCL_TEST_CASE(log2p1_sparse_csr) {
     SCL_ASSERT_EQ(err, 0);
     SCL_ASSERT_NO_ERROR();
 
-    auto exported = scl_sparse_to_coo(mat);
     std::vector<double> result_vals(nnz);
     std::vector<int64_t> result_rows(nnz);
     std::vector<int64_t> result_cols(nnz);
 
-    scl_sparse_extract_coo(exported, result_rows.data(), result_cols.data(), result_vals.data(), nnz);
+    scl_sparse_to_coo(mat, result_rows.data(), result_cols.data(), result_vals.data());
 
     for (int64_t i = 0; i < nnz; ++i) {
         double expected = ref_log2p1(vals[i]);
-        printf("    [%lld] original=%.6f, transformed=%.6f, expected=%.6f\n",
-               i, vals[i], result_vals[i], expected);
+        printf("    [%ld] original=%.6f, transformed=%.6f, expected=%.6f\n",
+               (long)i, vals[i], result_vals[i], expected);
         SCL_ASSERT_TRUE(is_close(result_vals[i], expected, 1e-10, 1e-12));
     }
 
-    scl_sparse_destroy(exported);
     scl_sparse_destroy(mat);
 }
 
@@ -513,21 +501,19 @@ SCL_TEST_CASE(expm1_sparse_csr) {
     SCL_ASSERT_EQ(err, 0);
     SCL_ASSERT_NO_ERROR();
 
-    auto exported = scl_sparse_to_coo(mat);
     std::vector<double> result_vals(nnz);
     std::vector<int64_t> result_rows(nnz);
     std::vector<int64_t> result_cols(nnz);
 
-    scl_sparse_extract_coo(exported, result_rows.data(), result_cols.data(), result_vals.data(), nnz);
+    scl_sparse_to_coo(mat, result_rows.data(), result_cols.data(), result_vals.data());
 
     for (int64_t i = 0; i < nnz; ++i) {
         double expected = ref_expm1(vals[i]);
-        printf("    [%lld] original=%.6f, transformed=%.6f, expected=%.6f\n",
-               i, vals[i], result_vals[i], expected);
+        printf("    [%ld] original=%.6f, transformed=%.6f, expected=%.6f\n",
+               (long)i, vals[i], result_vals[i], expected);
         SCL_ASSERT_TRUE(is_close(result_vals[i], expected, 1e-10, 1e-12));
     }
 
-    scl_sparse_destroy(exported);
     scl_sparse_destroy(mat);
 }
 

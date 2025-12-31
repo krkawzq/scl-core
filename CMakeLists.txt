@@ -1,9 +1,9 @@
 # =============================================================================
 # SCL-Core CMake Build Configuration
 # =============================================================================
-# 
+#
 # Modern CMake (3.21+) configuration for scl-core library
-# 
+#
 # Build Options:
 #   -DSCL_BACKEND=OPENMP|TBB|BS|SERIAL  Threading backend (default: auto)
 #   -DSCL_BUILD_SHARED=ON|OFF           Build shared library (default: ON)
@@ -43,6 +43,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# 正确连接 compile_commands.json
+# 若不是构建在顶层目录下，则在源目录生成一个软链接，指向实际的 compile_commands.json
+if(CMAKE_EXPORT_COMPILE_COMMANDS)
+    set(_compile_commands_src "${CMAKE_BINARY_DIR}/compile_commands.json")
+    set(_compile_commands_dst "${CMAKE_SOURCE_DIR}/compile_commands.json")
+    if(EXISTS "${_compile_commands_src}" AND NOT "${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_BINARY_DIR}")
+        if(NOT EXISTS "${_compile_commands_dst}")
+            # Unix like systems: create symlink
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "${_compile_commands_src}" "${_compile_commands_dst}"
+            )
+            message(STATUS "Created symlink: ${_compile_commands_dst} -> ${_compile_commands_src}")
+        endif()
+    endif()
+endif()
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -134,19 +151,19 @@ if(SCL_BACKEND_SELECTED STREQUAL "OPENMP")
     set(SCL_THREADING_LIBS OpenMP::OpenMP_CXX)
     set(SCL_THREADING_DEFINES SCL_BACKEND_OPENMP=1)
     set(SCL_BACKEND_FOUND TRUE)
-    
+
 elseif(SCL_BACKEND_SELECTED STREQUAL "TBB")
     find_package(TBB REQUIRED)
     set(SCL_THREADING_LIBS TBB::tbb)
     set(SCL_THREADING_DEFINES SCL_BACKEND_TBB=1)
     set(SCL_BACKEND_FOUND TRUE)
-    
+
 elseif(SCL_BACKEND_SELECTED STREQUAL "BS")
     # BS::thread_pool is header-only, included in third_party
     set(SCL_THREADING_LIBS "")
     set(SCL_THREADING_DEFINES SCL_BACKEND_BS=1)
     set(SCL_BACKEND_FOUND TRUE)
-    
+
 elseif(SCL_BACKEND_SELECTED STREQUAL "SERIAL")
     set(SCL_THREADING_LIBS "")
     set(SCL_THREADING_DEFINES SCL_BACKEND_SERIAL=1)
@@ -179,7 +196,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wnull-dereference
         -Wdouble-promotion
     )
-    
+
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         list(APPEND SCL_WARNING_FLAGS
             -Wduplicated-cond
@@ -187,7 +204,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             -Wlogical-op
         )
     endif()
-    
+
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     list(APPEND SCL_WARNING_FLAGS
         /W4
@@ -204,32 +221,32 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # Release optimizations
     if(CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo")
         list(APPEND SCL_OPTIMIZATION_FLAGS -O3)
-        
+
         if(SCL_ENABLE_NATIVE)
             list(APPEND SCL_OPTIMIZATION_FLAGS -march=native)
             message(STATUS "Native architecture optimization: ON")
         endif()
-        
+
         # Fast math (careful with NaN/Inf handling)
         # list(APPEND SCL_OPTIMIZATION_FLAGS -ffast-math)
     endif()
-    
+
     # LTO
     if(SCL_ENABLE_LTO)
         list(APPEND SCL_OPTIMIZATION_FLAGS -flto)
         message(STATUS "Link-time optimization: ON")
     endif()
-    
+
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     if(CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo")
         list(APPEND SCL_OPTIMIZATION_FLAGS /O2 /Ob3)
-        
+
         if(SCL_ENABLE_NATIVE)
             # MSVC auto-detects, but we can hint AVX2
             list(APPEND SCL_OPTIMIZATION_FLAGS /arch:AVX2)
         endif()
     endif()
-    
+
     if(SCL_ENABLE_LTO)
         list(APPEND SCL_OPTIMIZATION_FLAGS /GL)
     endif()
@@ -243,12 +260,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         list(APPEND SCL_SANITIZER_FLAGS -fsanitize=address -fno-omit-frame-pointer)
         message(STATUS "AddressSanitizer: ON")
     endif()
-    
+
     if(SCL_ENABLE_UBSAN)
         list(APPEND SCL_SANITIZER_FLAGS -fsanitize=undefined)
         message(STATUS "UndefinedBehaviorSanitizer: ON")
     endif()
-    
+
     if(SCL_ENABLE_TSAN)
         list(APPEND SCL_SANITIZER_FLAGS -fsanitize=thread)
         message(STATUS "ThreadSanitizer: ON")
@@ -373,7 +390,7 @@ endif()
 if(SCL_BUILD_SHARED AND SCL_ALL_SOURCES)
     add_library(scl SHARED ${SCL_ALL_SOURCES} ${SCL_HEADERS})
     target_link_libraries(scl PUBLIC scl_common)
-    
+
     set_target_properties(scl PROPERTIES
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}
@@ -384,18 +401,18 @@ if(SCL_BUILD_SHARED AND SCL_ALL_SOURCES)
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON
     )
-    
+
     # Export symbols
-    target_compile_definitions(scl PRIVATE 
+    target_compile_definitions(scl PRIVATE
         SCL_BUILDING_LIBRARY=1
         # Allow unsafe access for internal implementation
         SCL_UNSAFE_ACCESS=1
     )
-    
+
     if(WIN32)
         target_compile_definitions(scl PUBLIC SCL_DLL=1)
     endif()
-    
+
     message(STATUS "Building shared library: libscl.so")
 elseif(SCL_BUILD_SHARED)
     message(STATUS "Skipping shared library (no source files found)")
@@ -405,18 +422,18 @@ endif()
 if(SCL_BUILD_STATIC AND SCL_ALL_SOURCES)
     add_library(scl_static STATIC ${SCL_ALL_SOURCES} ${SCL_HEADERS})
     target_link_libraries(scl_static PUBLIC scl_common)
-    
+
     set_target_properties(scl_static PROPERTIES
         OUTPUT_NAME "scl_static"
         EXPORT_NAME "scl_static"
     )
-    
+
     # Export symbols for static builds
-    target_compile_definitions(scl_static PRIVATE 
+    target_compile_definitions(scl_static PRIVATE
         SCL_BUILDING_LIBRARY=1
         SCL_UNSAFE_ACCESS=1
     )
-    
+
     message(STATUS "Building static library: libscl_static.a")
 elseif(SCL_BUILD_STATIC)
     message(STATUS "Skipping static library (no source files found)")
@@ -450,19 +467,19 @@ endif()
 # -----------------------------------------------------------------------------
 # Note: This CMakeLists.txt Only Builds the Core Library
 # -----------------------------------------------------------------------------
-# 
+#
 # This project ONLY builds the core SCL library with C FFI exports.
-# 
+#
 # Tests, benchmarks, examples, and Python bindings are built in SEPARATE
 # projects that use the installed SCL library through its C API interface.
-# 
+#
 # Benefits of this design:
 #   1. Clean separation: library vs consumers
 #   2. Tests validate the public C API (not internals)
 #   3. Library is independently installable
 #   4. Easier maintenance and versioning
 #   5. External projects can use SCL without test/benchmark dependencies
-# 
+#
 # To test/benchmark SCL, see the separate test and benchmark projects.
 
 # -----------------------------------------------------------------------------
@@ -517,13 +534,13 @@ endif()
 #     ${CMAKE_CURRENT_BINARY_DIR}/scl-config.cmake
 #     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/scl
 # )
-# 
+#
 # write_basic_package_version_file(
 #     ${CMAKE_CURRENT_BINARY_DIR}/scl-config-version.cmake
 #     VERSION ${PROJECT_VERSION}
 #     COMPATIBILITY SameMajorVersion
 # )
-# 
+#
 # install(FILES
 #     ${CMAKE_CURRENT_BINARY_DIR}/scl-config.cmake
 #     ${CMAKE_CURRENT_BINARY_DIR}/scl-config-version.cmake
