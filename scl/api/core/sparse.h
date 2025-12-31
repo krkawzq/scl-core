@@ -68,7 +68,7 @@ extern "C" {
  *
  * @param rows Number of rows
  * @param cols Number of columns
- * @param real_type Value precision (SCL_REAL32 or SCL_REAL64)
+ * @param value_type Value type (Real/Int/Uint + precision)
  * @param index_type Index precision (SCL_INDEX32 or SCL_INDEX64)
  * @param layout Storage layout (SCL_LAYOUT_CSR or SCL_LAYOUT_CSC)
  * @return New sparse handle, or SCL_NULL_SPARSE on error
@@ -76,7 +76,7 @@ extern "C" {
 scl_sparse_t scl_sparse_zeros(
     int64_t rows,
     int64_t cols,
-    scl_real_type_t real_type,
+    scl_value_type_t value_type,
     scl_index_type_t index_type,
     scl_layout_t layout
 );
@@ -85,13 +85,13 @@ scl_sparse_t scl_sparse_zeros(
  * @brief Create an identity matrix
  *
  * @param n Matrix dimension (n x n)
- * @param real_type Value precision
+ * @param value_type Value type (Real/Int/Uint + precision)
  * @param index_type Index precision
  * @return New sparse CSR handle, or SCL_NULL_SPARSE on error
  */
 scl_sparse_t scl_sparse_identity(
     int64_t n,
-    scl_real_type_t real_type,
+    scl_value_type_t value_type,
     scl_index_type_t index_type
 );
 
@@ -122,7 +122,7 @@ scl_sparse_t scl_sparse_from_coo(
     const void* col_indices,
     const void* values,
     int64_t nnz,
-    scl_real_type_t real_type,
+    scl_value_type_t value_type,
     scl_index_type_t index_type,
     scl_layout_t layout
 );
@@ -147,7 +147,7 @@ scl_sparse_t scl_sparse_from_csr(
     const int64_t* row_ptrs,
     const void* col_indices,
     const void* values,
-    scl_real_type_t real_type,
+    scl_value_type_t value_type,
     scl_index_type_t index_type
 );
 
@@ -169,7 +169,7 @@ scl_sparse_t scl_sparse_from_csc(
     const int64_t* col_ptrs,
     const void* row_indices,
     const void* values,
-    scl_real_type_t real_type,
+    scl_value_type_t value_type,
     scl_index_type_t index_type
 );
 
@@ -191,7 +191,7 @@ scl_sparse_t scl_sparse_from_dense(
     int64_t rows,
     int64_t cols,
     const void* data,
-    scl_real_type_t real_type,
+    scl_value_type_t value_type,
     scl_index_type_t index_type,
     scl_layout_t layout,
     double tolerance
@@ -258,9 +258,16 @@ double scl_sparse_sparsity(scl_sparse_t handle);
 int32_t scl_sparse_is_empty(scl_sparse_t handle);
 
 /**
- * @brief Get value precision type
+ * @brief Get value type (Real/Int/Uint + precision)
  * @param handle Sparse handle
- * @return Real type enumeration
+ * @return Value type enumeration (SCL_REAL32, SCL_INT32, SCL_UINT8, etc.)
+ */
+scl_value_type_t scl_sparse_value_type(scl_sparse_t handle);
+
+/**
+ * @brief Get value precision type (legacy, backward compatibility)
+ * @param handle Sparse handle
+ * @return Real type enumeration (same as scl_sparse_value_type for Real types)
  */
 scl_real_type_t scl_sparse_real_type(scl_sparse_t handle);
 

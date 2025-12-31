@@ -178,6 +178,14 @@ using scl_byte_t = std::byte;
 namespace scl {
 
 // -----------------------------------------------------------------------------
+// Null Type (for unsupported precisions)
+// -----------------------------------------------------------------------------
+
+/// @brief Null type for unsupported precision types
+/// @note Used as placeholder when platform doesn't support certain precisions
+using scl_null_t = std::nullptr_t;
+
+// -----------------------------------------------------------------------------
 // Integer Types (Signed)
 // -----------------------------------------------------------------------------
 
@@ -226,6 +234,9 @@ using UInt64 = scl_uint64_t;
 #if SCL_ENABLE_FLOAT16
     /// @brief 16-bit floating-point (half precision, IEEE 754 binary16)
     using Real16 = scl_float16_t;
+#else
+    /// @brief 16-bit floating-point placeholder (platform not supported)
+    using Real16 = scl_null_t;
 #endif
 
 /// @brief 32-bit floating-point (single precision, IEEE 754 binary32)
@@ -237,6 +248,9 @@ using Real64 = scl_float64_t;
 #if SCL_ENABLE_FLOAT128
     /// @brief 128-bit floating-point (quadruple precision, IEEE 754 binary128)
     using Real128 = scl_float128_t;
+#else
+    /// @brief 128-bit floating-point placeholder (platform not supported)
+    using Real128 = scl_null_t;
 #endif
 
 // -----------------------------------------------------------------------------
@@ -252,6 +266,9 @@ using Index64 = scl_int64_t;
 #if SCL_ENABLE_INT128
     /// @brief 128-bit signed index type (extended precision)
     using Index128 = scl_int128_t;
+#else
+    /// @brief 128-bit signed index placeholder (platform not supported)
+    using Index128 = scl_null_t;
 #endif
 
 // -----------------------------------------------------------------------------
@@ -313,6 +330,38 @@ namespace scl {
     /// @brief Default floating-point type (64-bit by default)
     using Real = Real64;
     inline constexpr int default_real_bits = 64;
+#endif
+
+/// @brief Default signed integer type configuration
+/// @note Can be overridden with -DSCL_DEFAULT_INT32 or -DSCL_DEFAULT_INT64
+#if defined(SCL_DEFAULT_INT64)
+    /// @brief Default signed integer type (64-bit)
+    using Int = Int64;
+    inline constexpr int default_int_bits = 64;
+#elif defined(SCL_DEFAULT_INT32)
+    /// @brief Default signed integer type (32-bit)
+    using Int = Int32;
+    inline constexpr int default_int_bits = 32;
+#else
+    /// @brief Default signed integer type (32-bit by default)
+    using Int = Int32;
+    inline constexpr int default_int_bits = 32;
+#endif
+
+/// @brief Default unsigned integer type configuration
+/// @note Can be overridden with -DSCL_DEFAULT_UINT32 or -DSCL_DEFAULT_UINT64
+#if defined(SCL_DEFAULT_UINT64)
+    /// @brief Default unsigned integer type (64-bit)
+    using Uint = UInt64;
+    inline constexpr int default_uint_bits = 64;
+#elif defined(SCL_DEFAULT_UINT32)
+    /// @brief Default unsigned integer type (32-bit)
+    using Uint = UInt32;
+    inline constexpr int default_uint_bits = 32;
+#else
+    /// @brief Default unsigned integer type (32-bit by default)
+    using Uint = UInt32;
+    inline constexpr int default_uint_bits = 32;
 #endif
 
 // -----------------------------------------------------------------------------
@@ -461,6 +510,41 @@ template<typename T>
 inline constexpr bool is_numeric_v = 
     is_int_any_v<T> || is_uint_v<T> || is_real_any_v<T>;
 
+/// @brief Check if type is a supported value type for Sparse matrices
+template<typename T>
+inline constexpr bool is_supported_value_type_v = 
+    is_real_v<T> || is_int_v<T> || is_uint_v<T>;
+
+// -----------------------------------------------------------------------------
+// Value Type Category
+// -----------------------------------------------------------------------------
+
+/// @brief Value type category enumeration
+enum class ValueCategory {
+    Real,  ///< Floating-point types
+    Int,   ///< Signed integer types
+    Uint   ///< Unsigned integer types
+};
+
+/// @brief Get value type category at compile time
+/// @tparam T Value type
+/// @return ValueCategory enum
+template<typename T>
+[[nodiscard]] constexpr
+auto value_category() noexcept -> ValueCategory {
+    if constexpr (is_real_v<T>) {
+        return ValueCategory::Real;
+    } else if constexpr (is_int_v<T>) {
+        return ValueCategory::Int;
+    } else if constexpr (is_uint_v<T>) {
+        return ValueCategory::Uint;
+    } else {
+        static_assert(is_supported_value_type_v<T>, 
+                     "Unsupported value type - must be Real, Int, or Uint");
+        return ValueCategory::Real;  // Fallback (unreachable)
+    }
+}
+
 }  // namespace scl
 
 // =============================================================================
@@ -566,5 +650,133 @@ auto is_compatible_precision() noexcept -> bool {
 /// @tparam U Second type
 template<typename T, typename U>
 using wider_type_t = std::conditional_t<(sizeof(T) >= sizeof(U)), T, U>;
+
+}  // namespace scl
+
+// =============================================================================
+// SECTION 9: Precision Disabling Utilities
+// =============================================================================
+
+namespace scl {
+
+// -----------------------------------------------------------------------------
+// Precision Disabling Implementation
+// -----------------------------------------------------------------------------
+
+namespace detail {
+
+/// @brief Check if a type is scl_null_t (unsupported precision)
+/// @tparam T Type to check
+template<typename T>
+inline constexpr bool is_null_precision_v = std::is_same_v<T, scl_null_t>;
+
+/// @brief Enable if precision is NOT null (supported)
+/// @tparam P Precision type to check
+template<typename P>
+using enable_if_precision_supported_t = std::enable_if_t<!is_null_precision_v<P>>;
+
+/// @brief Enable if precision IS null (unsupported)
+/// @tparam P Precision type to check
+template<typename P>
+using enable_if_precision_unsupported_t = std::enable_if_t<is_null_precision_v<P>>;
+
+} // namespace detail
+
+// -----------------------------------------------------------------------------
+// Precision Disabling Macros and Templates
+// -----------------------------------------------------------------------------
+
+/// @brief Disable function for unsupported precision types
+/// @tparam T Template parameter type
+/// @tparam P Precision type to check
+/// @return void (only enabled if P is not scl_null_t)
+/// @note When P == scl_null_t, this template is disabled via SFINAE
+/// 
+/// Usage example:
+/// @code
+/// template<typename T = Real>
+/// auto my_function() -> disable_if_null_precision<T> {
+///     // Function body - only compiled if T is not scl_null_t
+/// }
+/// @endcode
+template<typename P>
+using disable_if_null_precision = detail::enable_if_precision_supported_t<P>;
+
+/// @brief Enable function only for unsupported precision types (for specialized error messages)
+/// @tparam T Template parameter type
+/// @tparam P Precision type to check
+/// @return void (only enabled if P is scl_null_t)
+/// @note When P != scl_null_t, this template is disabled via SFINAE
+/// 
+/// Usage example:
+/// @code
+/// template<typename T = Real>
+/// auto my_function() -> enable_if_null_precision<T> {
+///     static_assert(always_false<T>::value, "Type not supported on this platform");
+/// }
+/// @endcode
+template<typename P>
+using enable_if_null_precision = detail::enable_if_precision_unsupported_t<P>;
+
+/// @brief Concept for supported precision types
+/// @tparam P Precision type to check
+template<typename P>
+concept SupportedPrecision = !detail::is_null_precision_v<P>;
+
+/// @brief Concept for unsupported precision types
+/// @tparam P Precision type to check
+template<typename P>
+concept UnsupportedPrecision = detail::is_null_precision_v<P>;
+
+// -----------------------------------------------------------------------------
+// Compile-Time Precision Check Utilities
+// -----------------------------------------------------------------------------
+
+/// @brief Check if Real16 is supported on this platform
+inline constexpr bool has_real16_support = !detail::is_null_precision_v<Real16>;
+
+/// @brief Check if Real128 is supported on this platform
+inline constexpr bool has_real128_support = !detail::is_null_precision_v<Real128>;
+
+/// @brief Check if Index128 is supported on this platform
+inline constexpr bool has_index128_support = !detail::is_null_precision_v<Index128>;
+
+/// @brief Check if a specific precision type is supported
+/// @tparam P Precision type to check
+/// @return true if supported, false if scl_null_t
+template<typename P>
+[[nodiscard]]
+constexpr
+auto is_precision_supported() noexcept -> bool {
+    return !detail::is_null_precision_v<P>;
+}
+
+// -----------------------------------------------------------------------------
+// Static Assertion Helpers
+// -----------------------------------------------------------------------------
+
+/// @brief Static assertion helper for unsupported precision
+/// @tparam P Precision type
+/// @note Use in operator implementations to provide clear error messages
+#define SCL_REQUIRE_PRECISION_SUPPORT(P, OpName) \
+    static_assert(!::scl::detail::is_null_precision_v<P>, \
+                  OpName " does not support precision type " #P " on this platform. " \
+                  "This precision is not available (maps to scl_null_t). " \
+                  "Please use Real32, Real64, Index32, or Index64 instead.")
+
+/// @brief Check precision support at compile-time and provide helpful message
+/// @tparam P Precision type
+/// @param op_name Operator name for error message
+/// @note This is a constexpr function for use in template contexts
+template<typename P>
+constexpr
+auto require_precision_support(const char* op_name) -> void {
+    if constexpr (detail::is_null_precision_v<P>) {
+        // Will trigger a compile error with the static_assert
+        []<bool flag = false>() {
+            static_assert(flag, "Unsupported precision type on this platform");
+        }();
+    }
+}
 
 }  // namespace scl

@@ -52,12 +52,41 @@
  * ============================================================================ */
 
 /**
- * @brief Dispatch based on real type only (2 combinations)
+ * @brief Dispatch based on value type (10 combinations)
+ *
+ * Defines within BLOCK:
+ *   - SCL_VALUE_TYPE: float, double, int8_t, int16_t, int32_t, int64_t,
+ *                     uint8_t, uint16_t, uint32_t, or uint64_t
+ *
+ * @note Uses variadic macro to handle code blocks containing commas
+ */
+#define SCL_DISPATCH_VALUE(value_type, ...) \
+    do { \
+        switch (value_type) { \
+            case SCL_REAL32:  { using SCL_VALUE_TYPE = float;           __VA_ARGS__; } break; \
+            case SCL_REAL64:  { using SCL_VALUE_TYPE = double;          __VA_ARGS__; } break; \
+            case SCL_INT8:    { using SCL_VALUE_TYPE = std::int8_t;     __VA_ARGS__; } break; \
+            case SCL_INT16:   { using SCL_VALUE_TYPE = std::int16_t;    __VA_ARGS__; } break; \
+            case SCL_INT32:   { using SCL_VALUE_TYPE = std::int32_t;    __VA_ARGS__; } break; \
+            case SCL_INT64:   { using SCL_VALUE_TYPE = std::int64_t;    __VA_ARGS__; } break; \
+            case SCL_UINT8:   { using SCL_VALUE_TYPE = std::uint8_t;    __VA_ARGS__; } break; \
+            case SCL_UINT16:  { using SCL_VALUE_TYPE = std::uint16_t;   __VA_ARGS__; } break; \
+            case SCL_UINT32:  { using SCL_VALUE_TYPE = std::uint32_t;   __VA_ARGS__; } break; \
+            case SCL_UINT64:  { using SCL_VALUE_TYPE = std::uint64_t;   __VA_ARGS__; } break; \
+            default: \
+                scl::set_thread_error(scl::ErrorCode::TypeMismatch, "Unsupported value type"); \
+                break; \
+        } \
+    } while (0)
+
+/**
+ * @brief Dispatch based on real type only (2 combinations, legacy)
  *
  * Defines within BLOCK:
  *   - SCL_REAL_TYPE: float or double
  *
  * @note Uses variadic macro to handle code blocks containing commas
+ * @deprecated Use SCL_DISPATCH_VALUE for new code
  */
 #define SCL_DISPATCH_REAL(real_type, ...) \
     do { \

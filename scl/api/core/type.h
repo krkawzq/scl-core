@@ -203,17 +203,41 @@ typedef struct scl_config_s* scl_config_t;
  * ============================================================================ */
 
 /**
- * @brief Real (floating-point) type enumeration
+ * @brief Unified value type enumeration for sparse matrix data
  *
- * Specifies the precision of floating-point values in matrices and operations.
+ * Supports floating-point (Real), signed integer (Int), and unsigned integer (Uint).
+ * All types are standard C/C++ types without platform dependencies.
+ *
+ * Encoding scheme (for efficient category/size queries):
+ *   - Bits 0-3: Byte size (1, 2, 4, 8)
+ *   - Bits 4-5: Category (00=Real, 01=Int, 10=Uint)
+ *
  * Maps to C++ types in scl/core/type.hpp:
- *   - SCL_REAL32 -> scl::Real32 (float,  4 bytes)
- *   - SCL_REAL64 -> scl::Real64 (double, 8 bytes)
+ *   - Real types:  Real32 (float), Real64 (double)
+ *   - Int types:   Int8, Int16, Int32, Int64
+ *   - Uint types:  Uint8, Uint16, Uint32, Uint64
  */
-typedef enum scl_real_type_e {
-    SCL_REAL32 = 0,  /**< 32-bit float (float)  - sizeof = 4 */
-    SCL_REAL64 = 1,  /**< 64-bit float (double) - sizeof = 8, default */
-} scl_real_type_t;
+typedef enum scl_value_type_e {
+    /* Floating-point types (category 0x00) */
+    SCL_REAL32 = 0x04,  /**< 32-bit float  (4 bytes) */
+    SCL_REAL64 = 0x08,  /**< 64-bit double (8 bytes) - default for Real */
+    
+    /* Signed integer types (category 0x10) */
+    SCL_INT8   = 0x11,  /**< 8-bit  signed int (1 byte) */
+    SCL_INT16  = 0x12,  /**< 16-bit signed int (2 bytes) */
+    SCL_INT32  = 0x14,  /**< 32-bit signed int (4 bytes) - default for Int */
+    SCL_INT64  = 0x18,  /**< 64-bit signed int (8 bytes) */
+    
+    /* Unsigned integer types (category 0x20) */
+    SCL_UINT8  = 0x21,  /**< 8-bit  unsigned int (1 byte) */
+    SCL_UINT16 = 0x22,  /**< 16-bit unsigned int (2 bytes) */
+    SCL_UINT32 = 0x24,  /**< 32-bit unsigned int (4 bytes) - default for Uint */
+    SCL_UINT64 = 0x28,  /**< 64-bit unsigned int (8 bytes) */
+} scl_value_type_t;
+
+/* Legacy type alias for backward compatibility */
+typedef scl_value_type_t scl_real_type_t;
+typedef enum scl_value_type_e scl_real_type_e;
 
 /**
  * @brief Index type enumeration
@@ -248,6 +272,25 @@ typedef enum scl_order_e {
     SCL_ORDER_ROW_MAJOR = 0,  /**< Row-major (C-style) - default */
     SCL_ORDER_COL_MAJOR = 1,  /**< Column-major (Fortran-style) */
 } scl_order_t;
+
+/* ============================================================================
+ * SECTION 4.0: Default Type Configuration
+ * ============================================================================ */
+
+/**
+ * @brief Default value types for each category
+ *
+ * These defaults are used when user doesn't specify explicit types.
+ * Configuration philosophy:
+ *   - Real:  64-bit (double) for numerical accuracy
+ *   - Int:   32-bit (int32_t) for space efficiency
+ *   - Uint:  32-bit (uint32_t) for space efficiency
+ *   - Index: 64-bit (int64_t) for large matrix support
+ */
+#define SCL_VALUE_DEFAULT_REAL  SCL_REAL64  /**< Default: double */
+#define SCL_VALUE_DEFAULT_INT   SCL_INT32   /**< Default: int32_t */
+#define SCL_VALUE_DEFAULT_UINT  SCL_UINT32  /**< Default: uint32_t */
+#define SCL_INDEX_DEFAULT       SCL_INDEX64 /**< Default: int64_t */
 
 /* ============================================================================
  * SECTION 4.1: Extended Precision Type Enumerations (Platform-Dependent)
@@ -291,7 +334,18 @@ typedef enum scl_index_type_ext_e {
  * ============================================================================ */
 
 /**
- * @brief Check if a real type is valid (standard types only)
+ * @brief Check if a value type is valid
+ * @param type Value type enumeration
+ * @return 1 if valid, 0 otherwise
+ */
+static inline int scl_is_valid_value_type(scl_value_type_t type) {
+    return (type == SCL_REAL32 || type == SCL_REAL64 ||
+            type == SCL_INT8   || type == SCL_INT16  || type == SCL_INT32  || type == SCL_INT64 ||
+            type == SCL_UINT8  || type == SCL_UINT16 || type == SCL_UINT32 || type == SCL_UINT64) ? 1 : 0;
+}
+
+/**
+ * @brief Check if a real type is valid (legacy, backward compatibility)
  * @param type Real type enumeration
  * @return 1 if valid, 0 otherwise
  */
@@ -318,16 +372,16 @@ static inline int scl_is_valid_layout(scl_layout_t layout) {
 }
 
 /* ============================================================================
- * SECTION 5: Type Size Queries
+ * SECTION 5: Type Size Queries (Legacy)
  * ============================================================================ */
 
 /**
- * @brief Get size in bytes for a real type
+ * @brief Get size in bytes for a real type (legacy, backward compatibility)
  * @param type Real type enumeration
  * @return Size in bytes (4 for REAL32, 8 for REAL64)
  */
 static inline size_t scl_real_type_size(scl_real_type_t type) {
-    return (type == SCL_REAL64) ? 8 : 4;
+    return ((type) == SCL_REAL64) ? 8 : 4;
 }
 
 /**
@@ -443,6 +497,60 @@ typedef struct scl_buffer_config_s {
 #endif
 
 /* ============================================================================
+ * SECTION 8: Value Type Query Functions (C-API)
+ * ============================================================================ */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief Get value type category
+ * @param type Value type enumeration
+ * @return 0=Real, 1=Int, 2=Uint, -1=Invalid
+ */
+int32_t scl_value_type_category(scl_value_type_t type);
+
+/**
+ * @brief Get value type byte size
+ * @param type Value type enumeration
+ * @return 1, 2, 4, or 8 bytes, -1 if invalid
+ */
+int32_t scl_value_type_sizeof(scl_value_type_t type);
+
+/**
+ * @brief Get value type name
+ * @param type Value type enumeration
+ * @return String like "Real64", "Int32", "Uint16", etc., or "Unknown"
+ */
+const char* scl_value_type_name(scl_value_type_t type);
+
+/**
+ * @brief Check if value type is floating-point
+ * @param type Value type enumeration
+ * @return 1 if Real type, 0 otherwise
+ */
+int32_t scl_value_type_is_real(scl_value_type_t type);
+
+/**
+ * @brief Check if value type is signed integer
+ * @param type Value type enumeration
+ * @return 1 if Int type, 0 otherwise
+ */
+int32_t scl_value_type_is_int(scl_value_type_t type);
+
+/**
+ * @brief Check if value type is unsigned integer
+ * @param type Value type enumeration
+ * @return 1 if Uint type, 0 otherwise
+ */
+int32_t scl_value_type_is_uint(scl_value_type_t type);
+
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
+
+/* ============================================================================
  * SECTION 9: C++ Internal Dispatch Macros (Implementation Only)
  * ============================================================================ */
 
@@ -461,43 +569,147 @@ typedef struct scl_buffer_config_s {
     (static_cast<int>(real_type) | (static_cast<int>(index_type) << 1))
 
 /**
- * @brief Dispatch macro for 2x2 real/index type combinations
+ * @brief Dispatch macro for 10x2 value/index type combinations (20 total)
+ *
+ * Supports all value types: Real32/64, Int8/16/32/64, Uint8/16/32/64
  *
  * Usage:
- *   SCL_DISPATCH_REAL_INDEX(handle->real_type, handle->index_type, {
- *       using RealT = SCL_REAL_TYPE;
+ *   SCL_DISPATCH_VALUE_INDEX(handle->value_type, handle->index_type, {
+ *       using ValueT = SCL_VALUE_TYPE;
  *       using IndexT = SCL_INDEX_TYPE;
- *       // ... use RealT and IndexT
+ *       // ... use ValueT and IndexT
  *   });
  *
- * @note Uses variadic macro to handle code blocks containing commas
+ * Defines within BLOCK:
+ *   - SCL_VALUE_TYPE: actual C++ type
+ *   - SCL_INDEX_TYPE: std::int32_t or std::int64_t
+ *   - SCL_REAL_TYPE: for backward compatibility (same as SCL_VALUE_TYPE for Real types)
  */
-#define SCL_DISPATCH_REAL_INDEX(real_type, index_type, ...) \
+#define SCL_DISPATCH_VALUE_INDEX(value_type, index_type, ...) \
     do { \
-        switch (SCL_TYPE_INDEX(real_type, index_type)) { \
-            case 0: { \
-                using SCL_REAL_TYPE = float; \
-                using SCL_INDEX_TYPE = std::int32_t; \
-                __VA_ARGS__ \
-            } break; \
-            case 1: { \
-                using SCL_REAL_TYPE = double; \
-                using SCL_INDEX_TYPE = std::int32_t; \
-                __VA_ARGS__ \
-            } break; \
-            case 2: { \
-                using SCL_REAL_TYPE = float; \
-                using SCL_INDEX_TYPE = std::int64_t; \
-                __VA_ARGS__ \
-            } break; \
-            case 3: { \
-                using SCL_REAL_TYPE = double; \
-                using SCL_INDEX_TYPE = std::int64_t; \
-                __VA_ARGS__ \
-            } break; \
-            default: break; \
+        switch (value_type) { \
+            case SCL_REAL32: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = float; using SCL_REAL_TYPE = float; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = float; using SCL_REAL_TYPE = float; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            case SCL_REAL64: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = double; using SCL_REAL_TYPE = double; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = double; using SCL_REAL_TYPE = double; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            case SCL_INT8: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = std::int8_t; using SCL_REAL_TYPE = std::int8_t; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = std::int8_t; using SCL_REAL_TYPE = std::int8_t; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            case SCL_INT16: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = std::int16_t; using SCL_REAL_TYPE = std::int16_t; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = std::int16_t; using SCL_REAL_TYPE = std::int16_t; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            case SCL_INT32: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = std::int32_t; using SCL_REAL_TYPE = std::int32_t; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = std::int32_t; using SCL_REAL_TYPE = std::int32_t; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            case SCL_INT64: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = std::int64_t; using SCL_REAL_TYPE = std::int64_t; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = std::int64_t; using SCL_REAL_TYPE = std::int64_t; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            case SCL_UINT8: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = std::uint8_t; using SCL_REAL_TYPE = std::uint8_t; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = std::uint8_t; using SCL_REAL_TYPE = std::uint8_t; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            case SCL_UINT16: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = std::uint16_t; using SCL_REAL_TYPE = std::uint16_t; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = std::uint16_t; using SCL_REAL_TYPE = std::uint16_t; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            case SCL_UINT32: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = std::uint32_t; using SCL_REAL_TYPE = std::uint32_t; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = std::uint32_t; using SCL_REAL_TYPE = std::uint32_t; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            case SCL_UINT64: \
+                if ((index_type) == SCL_INDEX32) { \
+                    using SCL_VALUE_TYPE = std::uint64_t; using SCL_REAL_TYPE = std::uint64_t; \
+                    using SCL_INDEX_TYPE = std::int32_t; \
+                    { __VA_ARGS__; } \
+                } else { \
+                    using SCL_VALUE_TYPE = std::uint64_t; using SCL_REAL_TYPE = std::uint64_t; \
+                    using SCL_INDEX_TYPE = std::int64_t; \
+                    { __VA_ARGS__; } \
+                } \
+                break; \
+            default: \
+                scl::set_thread_error(scl::ErrorCode::TypeMismatch, "Unsupported value type"); \
+                break; \
         } \
     } while (0)
+
+/**
+ * @brief Legacy dispatch macro for real/index type combinations
+ * @deprecated Use SCL_DISPATCH_VALUE_INDEX for new code
+ */
+#define SCL_DISPATCH_REAL_INDEX(value_type, index_type, ...) \
+    SCL_DISPATCH_VALUE_INDEX(value_type, index_type, __VA_ARGS__)
 
 /**
  * @brief Dispatch macro for layout (CSR/CSC)
@@ -514,19 +726,21 @@ typedef struct scl_buffer_config_s {
     do { \
         if ((layout) == SCL_LAYOUT_CSR) { \
             constexpr bool SCL_IS_CSR = true; \
-            __VA_ARGS__ \
+            { __VA_ARGS__; } \
         } else { \
             constexpr bool SCL_IS_CSR = false; \
-            __VA_ARGS__ \
+            { __VA_ARGS__; } \
         } \
     } while (0)
 
 /**
- * @brief Full dispatch macro for sparse matrices (2x2x2 = 8 combinations)
+ * @brief Full dispatch macro for sparse matrices (10x2x2 = 40 combinations)
+ *
+ * Supports all value types × index types × layouts
  *
  * Usage:
- *   SCL_DISPATCH_SPARSE(handle->real_type, handle->index_type, handle->layout, {
- *       using RealT = SCL_REAL_TYPE;
+ *   SCL_DISPATCH_SPARSE(handle->value_type, handle->index_type, handle->layout, {
+ *       using ValueT = SCL_VALUE_TYPE;
  *       using IndexT = SCL_INDEX_TYPE;
  *       constexpr bool IsCSR = SCL_IS_CSR;
  *       // ... use types
@@ -534,26 +748,31 @@ typedef struct scl_buffer_config_s {
  *
  * @note Uses variadic macro to handle code blocks containing commas
  */
-#define SCL_DISPATCH_SPARSE(real_type, index_type, layout, ...) \
-    SCL_DISPATCH_LAYOUT(layout, { \
-        SCL_DISPATCH_REAL_INDEX(real_type, index_type, __VA_ARGS__); \
-    })
+#define SCL_DISPATCH_SPARSE(value_type, index_type, layout, ...) \
+    SCL_DISPATCH_LAYOUT(layout, \
+        SCL_DISPATCH_VALUE_INDEX(value_type, index_type, __VA_ARGS__) \
+    )
 
 /**
  * @brief Get variant index for sparse matrix storage
  *
- * Maps (real_type, index_type, layout) to variant index [0-7]:
- *   - 0: CSR<Real32, Index32>
- *   - 1: CSR<Real64, Index32>
- *   - 2: CSR<Real32, Index64>
- *   - 3: CSR<Real64, Index64>
- *   - 4: CSC<Real32, Index32>
- *   - 5: CSC<Real64, Index32>
- *   - 6: CSC<Real32, Index64>
- *   - 7: CSC<Real64, Index64>
+ * Maps (value_type, index_type, layout) to variant index [0-39]:
+ * Formula: value_type_index * 4 + index_type * 2 + layout
+ *
+ * Where value_type_index maps:
+ *   0=Real32, 1=Real64, 2=Int8, 3=Int16, 4=Int32, 5=Int64,
+ *   6=Uint8, 7=Uint16, 8=Uint32, 9=Uint64
+ *
+ * Example indices:
+ *   - 0: Real32, Index32, CSR
+ *   - 1: Real32, Index32, CSC
+ *   - 7: Real64, Index64, CSC
+ *   - 39: Uint64, Index64, CSC
+ *
+ * @note This is implemented in handler.cpp via sparse_variant_index()
  */
-#define SCL_SPARSE_VARIANT_INDEX(real_type, index_type, layout) \
-    (SCL_TYPE_INDEX(real_type, index_type) | (static_cast<int>(layout) << 2))
+#define SCL_SPARSE_VARIANT_INDEX(value_type, index_type, layout) \
+    sparse_variant_index(value_type, index_type, layout)
 
 #endif  /* __cplusplus */
 

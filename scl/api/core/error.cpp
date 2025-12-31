@@ -18,6 +18,7 @@
 /// }
 /// ```
 
+#include "type.h"
 #include "scl/core/error.hpp"
 
 #include <cstdint>
@@ -430,10 +431,10 @@ auto scl_copy_error_message(char* buffer, std::size_t buffer_size) -> std::size_
 // =============================================================================
 
 /// @brief Get library version string
-/// @return Static string with version (e.g., "2.0.0")
+/// @return Static string with version (e.g., "0.5.0")
 SCL_API
 auto scl_get_version() -> const char* {
-    return "2.0.0";
+    return SCL_API_VERSION_STRING;
 }
 
 /// @brief Get library version as integer components
@@ -446,8 +447,8 @@ auto scl_get_version_components(
     std::int32_t* minor, 
     std::int32_t* patch
 ) -> void {
-    if (major) *major = 2;
-    if (minor) *minor = 0;
-    if (patch) *patch = 0;
+    if (major) *major = SCL_API_VERSION_MAJOR;
+    if (minor) *minor = SCL_API_VERSION_MINOR;
+    if (patch) *patch = SCL_API_VERSION_PATCH;
 }
 

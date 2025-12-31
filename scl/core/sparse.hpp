@@ -354,11 +354,19 @@ struct SparseBufferStrategy {
 
 /// @brief CSR/CSC Sparse Matrix with SharedSpan-based storage
 ///
-/// @tparam ValueT Value type (typically float or double)
-/// @tparam IndexT Index type (typically Index = int32_t)
+/// @tparam ValueT Value type - supports Real32/64, Int8/16/32/64, Uint8/16/32/64
+/// @tparam IndexT Index type - supports Index32/64
 /// @tparam IsCSR true for CSR format, false for CSC format
 template<typename ValueT = Real, typename IndexT = Index, bool IsCSR = true>
 class Sparse {
+    // Compile-time type validation
+    static_assert(is_supported_value_type_v<ValueT>,
+                 "ValueT must be one of: Real32, Real64, "
+                 "Int8, Int16, Int32, Int64, "
+                 "Uint8, Uint16, Uint32, Uint64");
+    static_assert(std::is_same_v<IndexT, Index32> || std::is_same_v<IndexT, Index64>,
+                 "IndexT must be Index32 or Index64");
+    
     // Friend declaration for transpose type (allows access to private members)
     friend class Sparse<ValueT, IndexT, !IsCSR>;
     
