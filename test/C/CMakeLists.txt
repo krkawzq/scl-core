@@ -40,6 +40,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
@@ -84,12 +86,15 @@ endif()
 # If not found, will look in ../build for locally built library
 set(SCL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "Path to SCL root")
 
+# 项目根目录（用于导出 compile_commands.json）
+set(PROJECT_ROOT_DIR "${SCL_ROOT}")
+
 # Include directories
 set(SCL_INCLUDE_DIR "${SCL_ROOT}")
 set(TEST_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # Library directories
-set(SCL_LIB_DIR "${SCL_ROOT}/build")
+set(SCL_LIB_DIR "${SCL_ROOT}/build/cmake")
 
 message(STATUS "SCL root: ${SCL_ROOT}")
 message(STATUS "SCL include: ${SCL_INCLUDE_DIR}")
@@ -148,6 +153,29 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 endif()
 
 # -----------------------------------------------------------------------------
+# Export compile_commands.json Setup
+# -----------------------------------------------------------------------------
+
+# Export compile_commands.json to project root as compile_commands_test.json
+# This ensures the file is available after cmake configure and updated after builds
+add_custom_command(
+    OUTPUT "${PROJECT_ROOT_DIR}/compile_commands_test.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_BINARY_DIR}/compile_commands.json"
+            "${PROJECT_ROOT_DIR}/compile_commands_test.json"
+    DEPENDS "${CMAKE_BINARY_DIR}/compile_commands.json"
+    COMMENT "Export compile_commands.json to ${PROJECT_ROOT_DIR}/compile_commands_test.json"
+    VERBATIM
+)
+
+# Create a target that depends on the export command
+# This ensures the file is generated during build
+add_custom_target(export_compile_commands_test
+    DEPENDS "${PROJECT_ROOT_DIR}/compile_commands_test.json"
+    COMMENT "Exporting compile_commands_test.json to project root"
+)
+
+# -----------------------------------------------------------------------------
 # Test Helper Function
 # -----------------------------------------------------------------------------
 
@@ -155,6 +183,10 @@ function(add_scl_test test_name source_file)
     set(target_name "test_${test_name}")
     
     add_executable(${target_name} ${source_file})
+    
+    # Make test target depend on export_compile_commands_test
+    # This ensures compile_commands_test.json is updated when tests are built
+    add_dependencies(${target_name} export_compile_commands_test)
     
     # Include directories
     target_include_directories(${target_name} PRIVATE
@@ -294,5 +326,5 @@ message(STATUS "Run tests:   cd build && ctest")
 message(STATUS "            or: cmake --build build --target run_tests")
 message(STATUS "")
 message(STATUS "========================================")
-message(STATUS "")
-
+message(STATUS ""
+)

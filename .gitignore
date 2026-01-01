@@ -83,3 +83,5 @@ python/scl/libs/*
 python/scl/_bindings/*
 
 package-lock.json
+
+compile_commands_test.json

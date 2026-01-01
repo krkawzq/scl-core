@@ -12,6 +12,12 @@ CompileFlags:
     - -Iinclude
   Remove: [-m*, -f*]
 
+# 为测试代码使用独立的编译数据库
+If:
+  PathMatch: test/C/.*
+CompileFlags:
+  CompilationDatabase: compile_commands_test.json
+
 Diagnostics:
   UnusedIncludes: Strict
   ClangTidy:
