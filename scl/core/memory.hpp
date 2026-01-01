@@ -145,8 +145,8 @@ struct AlignedDeleter {
 
     /// @brief Delete aligned memory
     /// @param[in] ptr Pointer to free
-    auto operator()(T* ptr) const noexcept -> void {
-        if (!ptr) [[unlikely]] return;
+    void operator()(T* ptr) const noexcept {
+        if (!ptr) [[unlikely]] { return; };
 
         if constexpr (std::is_arithmetic_v<T>) {
             // Use C++17 aligned delete for arithmetic types
@@ -256,7 +256,7 @@ auto aligned_alloc(Size count, Size alignment = DEFAULT_ALIGNMENT) -> AlignedPtr
 /// @param[in] alignment Alignment used during allocation
 template<typename T>
 SCL_FORCE_INLINE
-auto aligned_free(T* ptr, Size alignment = DEFAULT_ALIGNMENT) noexcept -> void {
+void aligned_free(T* ptr, Size alignment = DEFAULT_ALIGNMENT) noexcept {
     AlignedDeleter<T>{alignment}(ptr);
 }
 
@@ -281,7 +281,7 @@ public:
     /// @brief Construct buffer with specified size and alignment
     /// @param[in] count Number of elements
     /// @param[in] alignment Memory alignment in bytes
-    AlignedBuffer(Size count, Size alignment = DEFAULT_ALIGNMENT)
+    explicit AlignedBuffer(Size count, Size alignment = DEFAULT_ALIGNMENT)
         : ptr_(aligned_alloc<T>(count, alignment)), count_(count) {}
 
     ~AlignedBuffer() = default;
@@ -314,11 +314,11 @@ public:
 
     /// @brief Implicit conversion to span
     [[nodiscard]]
-    operator span_type() noexcept { return span(); }
+    explicit operator span_type() noexcept { return span(); }
 
     /// @brief Implicit conversion to const span
     [[nodiscard]]
-    operator const_span_type() const noexcept { return span(); }
+    explicit operator const_span_type() const noexcept { return span(); }
 
     // -------------------------------------------------------------------------
     // Element Access
@@ -423,7 +423,7 @@ auto has_flag(AllocFlags flags, AllocFlags test) noexcept -> bool {
 [[nodiscard]]
 inline
 auto virtual_alloc(Size byte_size, AllocFlags flags = AllocFlags::None) noexcept -> void* {
-    if (byte_size == 0) [[unlikely]] return nullptr;
+    if (byte_size == 0) [[unlikely]] { return nullptr; };
 
 #if SCL_PLATFORM_WINDOWS
     // Windows: VirtualAlloc
@@ -493,8 +493,8 @@ auto virtual_alloc(Size byte_size, AllocFlags flags = AllocFlags::None) noexcept
 /// @param[in] ptr Pointer to memory
 /// @param[in] byte_size Size in bytes (required for munmap on POSIX)
 inline
-auto virtual_free(void* ptr, Size byte_size) noexcept -> void {
-    if (!ptr) [[unlikely]] return;
+void virtual_free(void* ptr, Size byte_size) noexcept {
+    if (ptr == nullptr) [[unlikely]] { return; };
 
 #if SCL_PLATFORM_WINDOWS
     SCL_UNUSED(byte_size);
@@ -522,9 +522,9 @@ public:
     /// @brief Construct buffer with specified size
     /// @param[in] count Number of elements
     /// @param[in] flags Allocation flags
-    VirtualBuffer(Size count, AllocFlags flags = AllocFlags::None)
+    explicit VirtualBuffer(Size count, AllocFlags flags = AllocFlags::None)
         : count_(count) {
-        if (count == 0) return;
+        if (count == 0) [[unlikely]] { return; };
         byte_size_ = align_up(count * sizeof(T), PAGE_SIZE);
         ptr_ = static_cast<T*>(virtual_alloc(byte_size_, flags));
     }
@@ -549,7 +549,7 @@ public:
 
     auto operator=(VirtualBuffer&& other) noexcept -> VirtualBuffer& {
         if (this != &other) {
-            if (ptr_) virtual_free(ptr_, byte_size_);
+            if (ptr_) { virtual_free(ptr_, byte_size_); };
             ptr_ = other.ptr_;
             count_ = other.count_;
             byte_size_ = other.byte_size_;
@@ -599,8 +599,8 @@ private:
 /// @note Uses optimized paths for trivially copyable types
 template<typename T>
 SCL_FORCE_INLINE
-auto fill(std::span<T> dest, T value) -> void {
-    if (dest.empty()) [[unlikely]] return;
+void fill(std::span<T> dest, T value) {
+    if (dest.empty()) [[unlikely]] { return; };
 
     if constexpr (std::is_trivially_copyable_v<T> && sizeof(T) == 1) {
         // Single-byte: memset is optimal (uses AVX-512 + NT stores)
@@ -621,7 +621,7 @@ auto fill(std::span<T> dest, T value) -> void {
 /// @param[out] dest Destination span
 template<typename T>
 SCL_FORCE_INLINE
-auto zero(std::span<T> dest) -> void {
+void zero(std::span<T> dest) {
     if constexpr (std::is_trivial_v<T>) {
         std::memset(dest.data(), 0, dest.size_bytes());
     } else {
@@ -641,7 +641,7 @@ auto zero(std::span<T> dest) -> void {
 /// @pre No overlap between src and dest
 template<typename T>
 SCL_FORCE_INLINE
-auto copy_fast(std::span<const T> src, std::span<T> dest) -> void {
+void copy_fast(std::span<const T> src, std::span<T> dest) {
     SCL_DEBUG_ASSERT_MSG(src.size() == dest.size(), "copy_fast: size mismatch");
     SCL_DEBUG_ASSERT_MSG(
         src.data() + src.size() <= dest.data() || dest.data() + dest.size() <= src.data(),
@@ -662,10 +662,10 @@ auto copy_fast(std::span<const T> src, std::span<T> dest) -> void {
 /// @pre src.size() == dest.size()
 template<typename T>
 SCL_FORCE_INLINE
-auto copy(std::span<const T> src, std::span<T> dest) -> void {
+void copy(std::span<const T> src, std::span<T> dest) {
     SCL_DEBUG_ASSERT_MSG(src.size() == dest.size(), "copy: size mismatch");
 
-    if (src.data() == dest.data()) [[unlikely]] return;
+    if (src.data() == dest.data()) [[unlikely]] { return; };
 
     if constexpr (std::is_trivially_copyable_v<T>) {
         std::memmove(dest.data(), src.data(), src.size_bytes());
@@ -690,7 +690,7 @@ auto copy(std::span<const T> src, std::span<T> dest) -> void {
 ///       - x86 SSE2: _mm_stream_si128
 ///       - ARM NEON: vst1q (no true NT store, uses regular store)
 template<typename T>
-auto stream_copy(std::span<const T> src, std::span<T> dest) -> void {
+void stream_copy(std::span<const T> src, std::span<T> dest) {
     SCL_DEBUG_ASSERT_MSG(src.size() == dest.size(), "stream_copy: size mismatch");
 
     const auto byte_size = src.size_bytes();
@@ -820,10 +820,10 @@ auto stream_copy(std::span<const T> src, std::span<T> dest) -> void {
 /// @param[in] max_prefetches Maximum prefetch operations
 template<int Locality = 3, typename T>
 SCL_FORCE_INLINE
-auto prefetch_read(
+void prefetch_read(
     std::span<const T> src,
     Size max_prefetches = DEFAULT_MAX_PREFETCHES
-) -> void {
+) {
     static_assert(Locality >= 0 && Locality <= 3, "Locality must be 0-3");
 
     const auto* p = reinterpret_cast<const char*>(src.data());
@@ -842,10 +842,10 @@ auto prefetch_read(
 /// @param[in] max_prefetches Maximum prefetch operations
 template<int Locality = 3, typename T>
 SCL_FORCE_INLINE
-auto prefetch_write(
+void prefetch_write(
     std::span<T> dest,
     Size max_prefetches = DEFAULT_MAX_PREFETCHES
-) -> void {
+) {
     static_assert(Locality >= 0 && Locality <= 3, "Locality must be 0-3");
 
     auto* p = reinterpret_cast<char*>(dest.data());
@@ -864,7 +864,7 @@ auto prefetch_write(
 /// @param[in] current_idx Current iteration index
 template<typename T, Size Distance = DEFAULT_PREFETCH_DISTANCE>
 SCL_FORCE_INLINE
-auto prefetch_ahead(std::span<const T> src, Size current_idx) -> void {
+void prefetch_ahead(std::span<const T> src, Size current_idx) {
     const Size ahead_idx = current_idx + Distance;
     if (ahead_idx < src.size()) [[likely]] {
         SCL_PREFETCH_READ(src.data() + ahead_idx, 0);
@@ -884,9 +884,9 @@ template<typename T>
 [[nodiscard]]
 SCL_FORCE_INLINE
 auto equal(std::span<const T> a, std::span<const T> b) -> bool {
-    if (a.size() != b.size()) [[unlikely]] return false;
-    if (a.data() == b.data()) [[unlikely]] return true;
-    if (a.empty()) [[unlikely]] return true;
+    if (a.size() != b.size()) [[unlikely]] { return false; };
+    if (a.data() == b.data()) [[unlikely]] { return true; };
+    if (a.empty()) [[unlikely]] { return true; };
 
     if constexpr (std::is_trivially_copyable_v<T>) {
         return std::memcmp(a.data(), b.data(), a.size_bytes()) == 0;
@@ -908,18 +908,18 @@ auto compare(std::span<const T> a, std::span<const T> b) -> int {
         const Size min_len = std::min(a.size(), b.size());
         if (min_len > 0) {
             const int cmp = std::memcmp(a.data(), b.data(), min_len * sizeof(T));
-            if (cmp != 0) return (cmp < 0) ? -1 : 1;
+            if (cmp != 0) { return (cmp < 0) ? -1 : 1; };
         }
     } else {
         const Size min_len = std::min(a.size(), b.size());
         for (Size i = 0; i < min_len; ++i) {
-            if (a[i] < b[i]) return -1;
-            if (a[i] > b[i]) return 1;
+            if (a[i] < b[i]) { return -1; };
+            if (a[i] > b[i]) { return 1; };
         }
     }
 
-    if (a.size() < b.size()) return -1;
-    if (a.size() > b.size()) return 1;
+    if (a.size() < b.size()) { return -1; };
+    if (a.size() > b.size()) { return 1; };
     return 0;
 }
 
@@ -933,7 +933,7 @@ auto compare(std::span<const T> a, std::span<const T> b) -> int {
 /// @param[in,out] b Second value
 template<typename T>
 SCL_FORCE_INLINE
-auto swap(T& a, T& b) noexcept -> void {
+void swap(T& a, T& b) noexcept {
     T tmp = static_cast<T&&>(a);
     a = static_cast<T&&>(b);
     b = static_cast<T&&>(tmp);
@@ -946,9 +946,9 @@ auto swap(T& a, T& b) noexcept -> void {
 /// @pre a.size() == b.size()
 /// @pre No overlap between a and b
 template<typename T>
-auto swap_ranges(std::span<T> a, std::span<T> b) -> void {
+void swap_ranges(std::span<T> a, std::span<T> b) {
     SCL_DEBUG_ASSERT_MSG(a.size() == b.size(), "swap_ranges: size mismatch");
-    if (a.data() == b.data()) [[unlikely]] return;
+    if (a.data() == b.data()) [[unlikely]] { return; }
     SCL_DEBUG_ASSERT_MSG(
         a.data() + a.size() <= b.data() || b.data() + b.size() <= a.data(),
         "swap_ranges: overlap detected"
@@ -965,8 +965,8 @@ auto swap_ranges(std::span<T> a, std::span<T> b) -> void {
 /// @tparam T Element type
 /// @param[in,out] data Span to reverse
 template<typename T>
-auto reverse(std::span<T> data) -> void {
-    if (data.size() <= 1) [[unlikely]] return;
+void reverse(std::span<T> data) {
+    if (data.size() <= 1) [[unlikely]] { return; };
     std::reverse(data.begin(), data.end());
 }
 
@@ -977,7 +977,7 @@ auto reverse(std::span<T> data) -> void {
 /// @pre src.size() == dest.size()
 template<typename T>
 SCL_FORCE_INLINE
-auto reverse_copy(std::span<const T> src, std::span<T> dest) -> void {
+void reverse_copy(std::span<const T> src, std::span<T> dest) {
     SCL_DEBUG_ASSERT_MSG(src.size() == dest.size(), "reverse_copy: size mismatch");
     std::reverse_copy(src.begin(), src.end(), dest.begin());
 }
@@ -1015,6 +1015,7 @@ auto cache_lines(Size bytes) noexcept -> Size {
 SCL_FORCE_INLINE
 constexpr
 auto pages(Size bytes) noexcept -> Size {
+    // NOLINTNEXTLINE(readability-suspicious-call-argument)
     return align_up(bytes, PAGE_SIZE) / PAGE_SIZE;
 }
 
@@ -1041,7 +1042,9 @@ enum class MemoryAdvice : std::uint32_t {
 [[nodiscard]]
 inline
 auto memory_advise(void* ptr, Size byte_size, MemoryAdvice advice) noexcept -> bool {
-    if (!ptr || byte_size == 0) [[unlikely]] return false;
+    if (ptr == nullptr || byte_size == 0) [[unlikely]] {
+      return false;
+    }
 
 #if SCL_PLATFORM_LINUX
     int linux_advice = MADV_NORMAL;
@@ -1099,7 +1102,9 @@ auto memory_advise(void* ptr, Size byte_size, MemoryAdvice advice) noexcept -> b
 [[nodiscard]]
 inline
 auto memory_lock(void* ptr, Size byte_size) noexcept -> bool {
-    if (!ptr || byte_size == 0) [[unlikely]] return false;
+    if (ptr == nullptr || byte_size == 0) [[unlikely]] {
+      return false;
+    }
 
 #if SCL_PLATFORM_WINDOWS
     return VirtualLock(ptr, byte_size) != 0;
@@ -1118,7 +1123,9 @@ auto memory_lock(void* ptr, Size byte_size) noexcept -> bool {
 /// @return true on success
 inline
 auto memory_unlock(void* ptr, Size byte_size) noexcept -> bool {
-    if (!ptr || byte_size == 0) [[unlikely]] return false;
+    if (ptr == nullptr || byte_size == 0) [[unlikely]] {
+      return false;
+    }
 
 #if SCL_PLATFORM_WINDOWS
     return VirtualUnlock(ptr, byte_size) != 0;
@@ -1137,7 +1144,7 @@ auto memory_unlock(void* ptr, Size byte_size) noexcept -> bool {
 
 /// @brief Store fence - ensure all prior stores are visible
 SCL_FORCE_INLINE
-auto store_fence() noexcept -> void {
+void store_fence() noexcept {
 #if SCL_ARCH_X86
     _mm_sfence();
 #elif SCL_ARCH_ARM
@@ -1153,7 +1160,7 @@ auto store_fence() noexcept -> void {
 
 /// @brief Load fence - ensure all prior loads are complete
 SCL_FORCE_INLINE
-auto load_fence() noexcept -> void {
+void load_fence() noexcept {
 #if SCL_ARCH_X86
     _mm_lfence();
 #elif SCL_ARCH_ARM
@@ -1169,7 +1176,7 @@ auto load_fence() noexcept -> void {
 
 /// @brief Full memory fence - ensure ordering of all memory operations
 SCL_FORCE_INLINE
-auto memory_fence() noexcept -> void {
+void memory_fence() noexcept {
 #if SCL_ARCH_X86
     _mm_mfence();
 #elif SCL_ARCH_ARM

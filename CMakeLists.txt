@@ -288,69 +288,53 @@ set(SCL_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(SCL_API_DIR ${CMAKE_CURRENT_SOURCE_DIR}/scl/api)
 
 # -----------------------------------------------------------------------------
-# C-API Source Files (Implementation)
+# Source Files (Read from .compile file)
 # -----------------------------------------------------------------------------
 
-# Core C-API sources
-set(SCL_API_CORE_SOURCES
-    ${SCL_API_DIR}/core/error.cpp      # Error handling C-API
-    ${SCL_API_DIR}/core/type.cpp       # Type utilities C-API (if needed)
-    ${SCL_API_DIR}/core/handler.cpp    # Sparse matrix handler implementation
-)
+# Read source file list from .compile (one file per line, relative paths allowed)
+set(SCL_COMPILE_LIST_FILE "${CMAKE_CURRENT_SOURCE_DIR}/.compile")
+set(SCL_ALL_SOURCES "")
 
-# Kernel C-API sources
-set(SCL_API_KERNEL_SOURCES
-    ${SCL_API_DIR}/kernel/log1p.cpp    # Log1p transformation kernels
-)
+if(EXISTS "${SCL_COMPILE_LIST_FILE}")
+    file(STRINGS "${SCL_COMPILE_LIST_FILE}" SCL_COMPILE_LIST)
+    foreach(src_file ${SCL_COMPILE_LIST})
+        # Skip empty lines and comments (lines starting with #)
+        string(STRIP "${src_file}" src_file)
+        if(src_file AND NOT src_file MATCHES "^#")
+            # Convert relative path to absolute
+            if(NOT IS_ABSOLUTE "${src_file}")
+                set(src_file "${CMAKE_CURRENT_SOURCE_DIR}/${src_file}")
+            endif()
+            # Check if file exists
+            if(EXISTS "${src_file}")
+                list(APPEND SCL_ALL_SOURCES "${src_file}")
+            else()
+                message(WARNING "Source file not found: ${src_file}")
+            endif()
+        endif()
+    endforeach()
+endif()
 
-# Collect all API sources
-set(SCL_API_SOURCES ${SCL_API_CORE_SOURCES} ${SCL_API_KERNEL_SOURCES})
-
-# Main source list (C API only, core is header-only)
-set(SCL_ALL_SOURCES ${SCL_API_SOURCES})
+# Report source files
+list(LENGTH SCL_ALL_SOURCES SCL_SOURCE_COUNT)
+message(STATUS "Source files from .compile: ${SCL_SOURCE_COUNT} files")
 
 # -----------------------------------------------------------------------------
-# C-API Header Files (Public Interface)
+# Header Files (Auto-discovered)
 # -----------------------------------------------------------------------------
 
-# Core C-API public headers (installed to include/scl/api/core/)
-set(SCL_API_CORE_HEADERS
-    ${SCL_API_DIR}/core/type.h         # Opaque handles, precision enums
-    ${SCL_API_DIR}/core/error.h        # Error handling functions
-    ${SCL_API_DIR}/core/sparse.h       # Sparse matrix operations
-    ${SCL_API_DIR}/core/dispatch.h     # C++ dispatch macros (internal use)
-    ${SCL_API_DIR}/core/unsafe.h       # Unsafe direct access (optional)
+# Find all headers dynamically
+file(GLOB_RECURSE SCL_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/scl/*.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/scl/*.h
 )
-
-# Kernel C-API public headers (installed to include/scl/api/kernel/)
-set(SCL_API_KERNEL_HEADERS
-    ${SCL_API_DIR}/kernel/log1p.h      # Log1p transformation kernels
-)
-
-# All API headers
-set(SCL_API_HEADERS ${SCL_API_CORE_HEADERS} ${SCL_API_KERNEL_HEADERS})
-
-# C++ core headers (for IDE support and installation)
-file(GLOB_RECURSE SCL_CORE_HEADERS
-    ${CMAKE_CURRENT_SOURCE_DIR}/scl/core/*.hpp
-)
-
-# Combined headers (for IDE support)
-set(SCL_HEADERS ${SCL_CORE_HEADERS} ${SCL_API_HEADERS})
 
 # Report configuration
+list(LENGTH SCL_HEADERS SCL_HEADER_COUNT)
 message(STATUS "")
-message(STATUS "C-API Configuration:")
-message(STATUS "  Core sources:")
-foreach(src ${SCL_API_CORE_SOURCES})
-    get_filename_component(src_name ${src} NAME)
-    message(STATUS "    - ${src_name}")
-endforeach()
-message(STATUS "  Public headers:")
-foreach(hdr ${SCL_API_CORE_HEADERS})
-    get_filename_component(hdr_name ${hdr} NAME)
-    message(STATUS "    - ${hdr_name}")
-endforeach()
+message(STATUS "Source Configuration:")
+message(STATUS "  Sources (from .compile): ${SCL_SOURCE_COUNT} files")
+message(STATUS "  Headers (auto-discovered): ${SCL_HEADER_COUNT} files")
 message(STATUS "")
 
 # -----------------------------------------------------------------------------
@@ -366,8 +350,23 @@ target_include_directories(scl_common INTERFACE
     $<INSTALL_INTERFACE:include>
 )
 
+# Version defaults (fallback to 0.0.0 if not defined)
+if(NOT DEFINED PROJECT_VERSION_MAJOR)
+    set(PROJECT_VERSION_MAJOR 0)
+endif()
+if(NOT DEFINED PROJECT_VERSION_MINOR)
+    set(PROJECT_VERSION_MINOR 0)
+endif()
+if(NOT DEFINED PROJECT_VERSION_PATCH)
+    set(PROJECT_VERSION_PATCH 0)
+endif()
+
 target_compile_definitions(scl_common INTERFACE
     ${SCL_THREADING_DEFINES}
+    # Version information
+    SCL_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    SCL_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    SCL_VERSION_PATCH=${PROJECT_VERSION_PATCH}
     $<$<CONFIG:Debug>:SCL_DEBUG=1>
     $<$<CONFIG:Release>:NDEBUG>
 )
@@ -388,7 +387,7 @@ endif()
 
 # Shared library
 if(SCL_BUILD_SHARED AND SCL_ALL_SOURCES)
-    add_library(scl SHARED ${SCL_ALL_SOURCES} ${SCL_HEADERS})
+    add_library(scl SHARED ${SCL_ALL_SOURCES})
     target_link_libraries(scl PUBLIC scl_common)
 
     set_target_properties(scl PROPERTIES
@@ -420,7 +419,7 @@ endif()
 
 # Static library
 if(SCL_BUILD_STATIC AND SCL_ALL_SOURCES)
-    add_library(scl_static STATIC ${SCL_ALL_SOURCES} ${SCL_HEADERS})
+    add_library(scl_static STATIC ${SCL_ALL_SOURCES})
     target_link_libraries(scl_static PUBLIC scl_common)
 
     set_target_properties(scl_static PROPERTIES
@@ -565,9 +564,8 @@ message(STATUS "Libraries:")
 message(STATUS "  Shared:         ${SCL_BUILD_SHARED}")
 message(STATUS "  Static:         ${SCL_BUILD_STATIC}")
 message(STATUS "")
-message(STATUS "C-API Modules:")
-list(LENGTH SCL_API_CORE_SOURCES SCL_API_CORE_COUNT)
-message(STATUS "  core/:          ${SCL_API_CORE_COUNT} sources (error, type, handler)")
+message(STATUS "Sources (from .compile):")
+message(STATUS "  Total:          ${SCL_SOURCE_COUNT} files")
 message(STATUS "")
 message(STATUS "Optimizations:")
 message(STATUS "  Native arch:    ${SCL_ENABLE_NATIVE}")

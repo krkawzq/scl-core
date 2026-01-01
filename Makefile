@@ -1,4 +1,4 @@
-.PHONY: help build compile compile-cpp clean format lint all tree cloc makedoc docs-dev docs-build docs-preview docs-clean codegen codegen-python codegen-docs test test-build test-run test-clean
+.PHONY: help build compile compile-cpp clean format lint all tree cloc makedoc docs-dev docs-build docs-preview docs-clean codegen codegen-python codegen-docs test test-build test-run test-clean dry-run configure
 
 # Config
 
@@ -22,6 +22,8 @@ help:
 	@echo "  build          Build everything (deps + compile)"
 	@echo "  compile        Compile C++"
 	@echo "  compile-cpp    Compile C++ only"
+	@echo "  dry-run        Configure only (generate compile_commands.json)"
+	@echo "  configure      Alias for dry-run"
 	@echo "  clean          Clean build artifacts"
 	@echo "  format         Format and fix code (all tools)"
 	@echo "  lint           Run linters"
@@ -55,6 +57,20 @@ all: clean build format lint
 
 setup-deps:
 	@[ -f scripts/setup_cpp_deps.sh ] && ./scripts/setup_cpp_deps.sh || true
+
+# Dry run: configure only, generate compile_commands.json and symlink
+dry-run: setup-deps
+	@mkdir -p $(CMAKE_BUILD_DIR)
+	@cd $(CMAKE_BUILD_DIR) && cmake ../.. -G Ninja -DCMAKE_BUILD_TYPE=Release
+	@if [ -f $(CMAKE_BUILD_DIR)/compile_commands.json ] && [ ! -e compile_commands.json ]; then \
+		ln -sf $(CMAKE_BUILD_DIR)/compile_commands.json compile_commands.json; \
+		echo "Created symlink: compile_commands.json -> $(CMAKE_BUILD_DIR)/compile_commands.json"; \
+	elif [ -f $(CMAKE_BUILD_DIR)/compile_commands.json ]; then \
+		echo "compile_commands.json already exists"; \
+	fi
+	@echo "Configuration complete. compile_commands.json is ready."
+
+configure: dry-run
 
 compile-cpp: setup-deps
 	@mkdir -p $(CMAKE_BUILD_DIR)

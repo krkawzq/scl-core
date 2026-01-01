@@ -1,16 +1,16 @@
-#pragma once
-
-/// @file version.hpp
-/// @brief Version Information
-
-#ifndef SCL_VERSION
-#define SCL_VERSION "0.5.0"
+#ifndef SCL_VERSION_MAJOR
+  #warning "SCL_VERSION_MAJOR is not defined"
+  #define SCL_VERSION_MAJOR 0
 #endif
 
-#ifndef SCL_AUTHOR
-#define SCL_AUTHOR "Wang Zhongqi"
+#ifndef SCL_VERSION_MINOR
+  #warning "SCL_VERSION_MINOR is not defined"
+  #define SCL_VERSION_MINOR 6
 #endif
 
-#ifndef SCL_EMAIL
-#define SCL_EMAIL "2868116803@qq.com"
+#ifndef SCL_VERSION_PATCH
+  #warning "SCL_VERSION_PATCH is not defined"
+  #define SCL_VERSION_PATCH 0
 #endif
+
+

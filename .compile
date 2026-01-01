@@ -1,0 +1,7 @@
+# SCL Source Files
+# One file per line, relative paths from project root
+# Lines starting with # are comments
+
+# C-API Core
+scl/test1.cpp
+

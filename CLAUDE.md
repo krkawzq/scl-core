@@ -5,14 +5,13 @@
 
 1. `template`（如有模板）需单独一行。
 2. `[[nodiscard]]`、`SCL_FORCE_INLINE`、`constexpr`等标记须独占一行，紧随 `template`（如有）之后。
-3. 函数实现必须以 `auto` 或 `void` 开头，返回类型需使用 `-> T`（Trailing Return Type）指定，即 `auto f(...) -> T` 或 `void f(...) -> void`。
-4. 示例（√）：
+3. 函数返回类型规则：
+   - **有返回值**：使用 `auto f(...) -> T` 格式（Trailing Return Type）
+   - **无返回值**：直接使用 `void f(...)` 格式，**不要**写成 `auto f(...) -> void`
+4. 示例：
 
     ```cpp
-    /// @brief 示例函数
-    /// @tparam T 类型参数
-    /// @param[in] x 输入值
-    /// @return 值加一
+    // ✓ 有返回值：使用 auto -> T
     template<typename T>
     [[nodiscard]]
     SCL_FORCE_INLINE
@@ -20,6 +19,16 @@
     auto add_one(T x) -> T {
         return x + 1;
     }
+
+    // ✓ 无返回值：直接使用 void
+    template<typename T>
+    SCL_FORCE_INLINE
+    void fill(std::span<T> dest, T value) {
+        for (auto& elem : dest) elem = value;
+    }
+
+    // ✗ 错误：不要用 auto -> void
+    // auto fill(std::span<T> dest, T value) -> void { ... }
     ```
 
 ---
@@ -46,7 +55,7 @@ Release/Debug builds should use appropriate C++20 and optimization/sanitizer fla
 - Use `std::span` for non-owning views (replace `T* + size`)
 - Use `constexpr`/`consteval` for compile-time computation as much as possible
 - Use attribute syntax directly (e.g., `[[nodiscard]]`, `[[likely]]`, `[[unlikely]]`, `[[no_unique_address]]`)
-- Always use trailing return type: `auto f() -> T` (required for all non-void functions)
+- 返回类型规则：有返回值用 `auto f() -> T`，无返回值直接用 `void f()`（不要写 `auto f() -> void`）
 - Use `std::source_location` for error reporting (replace `__FILE__`, `__LINE__`)
 - Use designated initializers for config structs
 
@@ -82,7 +91,8 @@ Implementation is organized under the appropriate `scl::module` namespace.
 - Each of the following must be in its own line (顺序为 template → 属性/修饰符 → 定义)：
     - `template` 声明单独一行（如有）
     - 所有属性/修饰符（如 `[[nodiscard]]`、`SCL_FORCE_INLINE`、`constexpr` 等）每个独占一行
-    - 函数定义以 `auto` 或 `void` 开头，必须使用 trailing return type（-> Type），不得遗漏，即 `auto f(...) -> T`
+    - 有返回值的函数：`auto f(...) -> T`（trailing return type）
+    - 无返回值的函数：直接用 `void f(...)`，不要写 `auto f(...) -> void`
 - Batch small single-line accessors when possible.
 
 ### 2.4 Variable Naming
@@ -95,21 +105,29 @@ Implementation is organized under the appropriate `scl::module` namespace.
 
 ---
 
-## 3. Platform Macros (scl/core/platform.hpp)
+## 3. Configuration Macros (scl/config.hpp)
 
 ### 3.1 Compiler Detection
 
-- Use macros such as `SCL_COMPILER_GCC`, `SCL_COMPILER_CLANG`, `SCL_COMPILER_MSVC`, `SCL_COMPILER_GCC_LIKE` for conditional compilation.
+- Use macros such as `SCL_CONFIG_COMPILER_GCC`, `SCL_CONFIG_COMPILER_CLANG`, `SCL_CONFIG_COMPILER_MSVC`, `SCL_CONFIG_COMPILER_GCC_LIKE` for conditional compilation.
 
-### 3.2 Architecture Detection
+### 3.2 Platform Detection
 
-- Use macros such as `SCL_ARCH_X86_64`, `SCL_ARCH_ARM64`, `SCL_ARCH_SSE4`, `SCL_ARCH_AVX2`, `SCL_ARCH_AVX512`, `SCL_ARCH_NEON` for architecture-specific code.
+- Use macros such as `SCL_CONFIG_PLATFORM_WINDOWS`, `SCL_CONFIG_PLATFORM_MACOS`, `SCL_CONFIG_PLATFORM_LINUX` for platform-specific code.
 
-### 3.3 Function Attributes
+### 3.3 Architecture Detection
+
+- Use macros such as `SCL_CONFIG_ARCH_X86_64`, `SCL_CONFIG_ARCH_ARM64`, `SCL_CONFIG_ARCH_64BIT` for architecture-specific code.
+
+### 3.4 SIMD Detection
+
+- Use macros such as `SCL_CONFIG_SIMD_AVX512`, `SCL_CONFIG_SIMD_AVX2`, `SCL_CONFIG_SIMD_AVX`, `SCL_CONFIG_SIMD_SSE4_2`, `SCL_CONFIG_SIMD_SSE4_1`, `SCL_CONFIG_SIMD_SSE3`, `SCL_CONFIG_SIMD_SSE2`, `SCL_CONFIG_SIMD_NEON` for SIMD-specific code.
+
+### 3.5 Function Attributes
 
 - Use macros such as `SCL_FORCE_INLINE`, `SCL_NOINLINE`, `SCL_RESTRICT`, `SCL_ASSUME(expr)`, `SCL_PREFETCH(addr, rw, locality)`, `SCL_ALIGNED(n)` to control code generation, inlining, aliasing and prefetching.
 
-### 3.4 Deprecated Macros
+### 3.6 Deprecated Macros
 
 - Do NOT use ancient macro wrappers for C++ attributes. Use C++20 attributes directly (e.g. use [[nodiscard]] instead of `SCL_NODISCARD`).
 
@@ -249,8 +267,9 @@ Keep the following minimum documentation:
 - Ensure code compiles with strict C++20 warnings and errors enabled.
 - Use C++20 attributes directly.
 - All memory ops via `scl::memory`
-- Platform macros from `scl/core/platform.hpp`
-- Trailing return type, attributes on own line
+- Configuration macros from `scl/config.hpp`
+- 有返回值用 `auto -> T`，无返回值直接用 `void`
+- Attributes on own line
 
 ### Error Handling
 - Compile-time checks for type/precision
@@ -281,8 +300,21 @@ Keep the following minimum documentation:
 - `SCL_CHECK`: Runtime argument validation (throws)
 - `SCL_DEBUG_ASSERT`: Debug-only, for internal invariants
 
-### 12.2 Platform Macro Summary
+### 12.2 Configuration Macro Summary
 
+**Compiler Detection:**
+- `SCL_CONFIG_COMPILER_GCC`, `SCL_CONFIG_COMPILER_CLANG`, `SCL_CONFIG_COMPILER_MSVC`, `SCL_CONFIG_COMPILER_GCC_LIKE`
+
+**Platform Detection:**
+- `SCL_CONFIG_PLATFORM_WINDOWS`, `SCL_CONFIG_PLATFORM_MACOS`, `SCL_CONFIG_PLATFORM_LINUX`
+
+**Architecture Detection:**
+- `SCL_CONFIG_ARCH_X86_64`, `SCL_CONFIG_ARCH_ARM64`, `SCL_CONFIG_ARCH_64BIT`
+
+**SIMD Detection:**
+- `SCL_CONFIG_SIMD_AVX512`, `SCL_CONFIG_SIMD_AVX2`, `SCL_CONFIG_SIMD_AVX`, `SCL_CONFIG_SIMD_SSE4_2`, `SCL_CONFIG_SIMD_SSE4_1`, `SCL_CONFIG_SIMD_SSE3`, `SCL_CONFIG_SIMD_SSE2`, `SCL_CONFIG_SIMD_NEON`
+
+**Function Attributes:**
 - `SCL_FORCE_INLINE`: Force inline  
 - `SCL_NOINLINE`: Prevent inline  
 - `SCL_RESTRICT`: Mark pointer as no-alias  
@@ -295,7 +327,7 @@ Keep the following minimum documentation:
 - Provide a doxygen comment with all required tags.
 - `template` on its own line (if needed)
 - All attribute/qualifier specifiers (`[[nodiscard]]`, `SCL_FORCE_INLINE`, `constexpr` etc.) each on their own line, directly after `template` (if any)
-- Function implementation begins with `auto` or `void`, and always uses trailing return type (`-> T`)
+- 有返回值：`auto f(...) -> T`；无返回值：直接用 `void f(...)`（不要写 `auto ... -> void`）
 
     ```cpp
     /// @brief Adds 1 to value
