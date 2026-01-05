@@ -241,7 +241,7 @@
 // SECTION 5: Compile-Time String Utilities
 // =============================================================================
 
-namespace scl::macro {
+namespace scl {
 
 /// @brief Get array size at compile time
 /// @tparam T Element type
@@ -266,7 +266,7 @@ auto unused(const T& value) noexcept -> void {
   (void)value;
 }
 
-}  // namespace scl::macro
+}  // namespace scl
 
 // NOLINTBEGIN(cppcoreguidelines-macro-usage)
 
@@ -279,12 +279,12 @@ auto unused(const T& value) noexcept -> void {
 #define SCL_CONCAT(a, b) SCL_CONCAT_IMPL(a, b)
 
 // Array size (backward compatibility)
-#define SCL_ARRAY_SIZE(arr) ::scl::macro::array_size(arr)
+#define SCL_ARRAY_SIZE(arr) ::scl::array_size(arr)
 
 // Unique identifier generation (must be macro for __LINE__)
 #define SCL_UNIQUE_ID(prefix) SCL_CONCAT(prefix, __LINE__)
 
 // Suppress unused warnings (backward compatibility)
-#define SCL_UNUSED(x) ::scl::macro::unused(x)
+#define SCL_UNUSED(x) ::scl::unused(x)
 
 // NOLINTEND(cppcoreguidelines-macro-usage)

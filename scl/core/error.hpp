@@ -95,33 +95,27 @@
  *   - SCL_STATIC_CHECK_SIZE(T, min):        Check type size is at least min
  *   - SCL_STATIC_CHECK_SAME(T, U):          Check types are the same
  *
- * [Runtime check macros (throw exceptions)]
- *   - SCL_CHECK(cond, ExType, ...):         General: throw ExType if condition fails
- *   - SCL_CHECK_ARG(cond, ...):             Parameter check (throws ValueError)
- *   - SCL_CHECK_DIM(cond, ...):             Dimension check (throws DimensionError)
- *   - SCL_CHECK_RANGE(cond, ...):           Range check (throws RangeError)
- *   - SCL_CHECK_MEM(cond, ...):             Memory check (throws MemoryError)
- *   - SCL_CHECK_TYPE(cond, ...):            Type check (throws TypeError)
- *   - SCL_CHECK_IO(cond, ...):              IO check (throws IoError)
- *   - SCL_CHECK_COMPUTE(cond, ...):         Computation check (throws ComputationError)
+ * [Runtime check functions (throw exceptions)]
+ *   - error::check_arg(cond, ...):          Parameter check (throws ValueError)
+ *   - error::check_dim(cond, ...):          Dimension check (throws DimensionError)
+ *   - error::check_range(cond, ...):        Range check (throws RangeError)
+ *   - error::check_mem(cond, ...):          Memory check (throws MemoryError)
+ *   - error::check_type(cond, ...):         Type check (throws TypeError)
+ *   - error::check_io(cond, ...):           IO check (throws IoError)
+ *   - error::check_compute(cond, ...):      Computation check (throws ComputationError)
  *
- * [Specialized check macros]
- *   - SCL_CHECK_NOT_NULL(ptr):              Throws NullPointerError if ptr is null
- *   - SCL_CHECK_INDEX(index, size):         Throws IndexError on OOB
- *   - SCL_CHECK_SIZE_MATCH(a, b):           Throws DimensionError for size mismatch
- *   - SCL_CHECK_POSITIVE(val, name):        Throws ValueError if value is not > 0
- *   - SCL_CHECK_NON_NEGATIVE(val, name):    Throws ValueError if value < 0
- *   - SCL_CHECK_ALIGNMENT(ptr, align):      Throws AlignmentError if misaligned
- *   - SCL_CHECK_FINITE(val):                Throws NaNError/ValueError if not finite
+ * [Specialized check functions]
+ *   - error::check_not_null(ptr, name):     Throws NullPointerError if ptr is null
+ *   - error::check_index(index, size):      Throws IndexError on OOB
+ *   - error::check_size_match(a, b):        Throws DimensionError for size mismatch
+ *   - error::check_positive(val, name):     Throws ValueError if value is not > 0
+ *   - error::check_non_negative(val, name): Throws ValueError if value < 0
+ *   - error::check_alignment<T, N>(ptr):    Throws AlignmentError if misaligned
+ *   - error::check_finite(val):             Throws NaNError/ValueError if not finite
  *
- * [Debug assertion macros (debug mode only)]
- *   - SCL_DEBUG_ASSERT(cond):               Debug assertion (aborts on failure)
- *   - SCL_DEBUG_ASSERT_MSG(cond, msg):      Debug assertion with message
- *
- * [Exception throw macros]
- *   - SCL_THROW(ExType, code, ...):         Throw specific exception and error code
- *   - SCL_NOT_IMPLEMENTED(feature):         Throw NotImplementedError
- *   - SCL_UNREACHABLE_CODE():               Throw UnreachableCode error
+ * [Exception throw functions]
+ *   - error::not_implemented(feature):      Throw NotImplementedError
+ *   - error::unreachable():                 Throw UnreachableCode error
  *
  * ============================================================================
  * ERROR CODE DESIGN
@@ -1645,73 +1639,170 @@ inline auto unreachable() -> void {
 }  // namespace scl::error
 
 // =============================================================================
-// SECTION 7: Backward Compatibility Macros
+// SECTION 7: Debug-Only Check Functions
 // =============================================================================
-//
-// NOTE: These macros are provided for backward compatibility only.
-//       Prefer using the template functions in scl::error:: namespace.
-//       Example: scl::error::check_arg(...) instead of SCL_CHECK_ARG(...)
-//
-// NOLINTBEGIN(cppcoreguidelines-macro-usage)
+// These functions provide debug-time assertions that are no-ops in release builds.
+// Unlike runtime checks (SECTION 6) which throw exceptions, these abort on failure.
+// Use for internal invariants that should never fail if code is correct.
 
-// Compile-time checks
-#define SCL_STATIC_CHECK(cond, msg) static_assert(cond, msg)
-#define SCL_STATIC_CHECK_FLOATING(T) ::scl::error::check_floating<T>()
-#define SCL_STATIC_CHECK_INTEGRAL(T) ::scl::error::check_integral<T>()
-#define SCL_STATIC_CHECK_ARITHMETIC(T) ::scl::error::check_arithmetic<T>()
-#define SCL_STATIC_CHECK_SIGNED(T) ::scl::error::check_signed<T>()
-#define SCL_STATIC_CHECK_UNSIGNED(T) ::scl::error::check_unsigned<T>()
-#define SCL_STATIC_CHECK_SIZE(T, min_bytes) \
-  ::scl::error::check_size<T, min_bytes>()
-#define SCL_STATIC_CHECK_SAME(T, U) ::scl::error::check_same<T, U>()
+namespace scl::error {
 
-// Runtime checks
-#define SCL_CHECK_ARG(cond, ...) ::scl::error::check_arg((cond), __VA_ARGS__)
-#define SCL_CHECK_DIM(cond, ...) ::scl::error::check_dim((cond), __VA_ARGS__)
-#define SCL_CHECK_RANGE(cond, ...) ::scl::error::check_range((cond), __VA_ARGS__)
-#define SCL_CHECK_MEM(cond, ...) ::scl::error::check_mem((cond), __VA_ARGS__)
-#define SCL_CHECK_TYPE(cond, ...) ::scl::error::check_type((cond), __VA_ARGS__)
-#define SCL_CHECK_IO(cond, ...) ::scl::error::check_io((cond), __VA_ARGS__)
-#define SCL_CHECK_COMPUTE(cond, ...) \
-  ::scl::error::check_compute((cond), __VA_ARGS__)
+#ifndef NDEBUG
+// -----------------------------------------------------------------------------
+// Debug Mode: Perform checks and abort on failure
+// -----------------------------------------------------------------------------
 
-// Specific checks
-#define SCL_CHECK_NOT_NULL(ptr) ::scl::error::check_not_null((ptr), #ptr)
-#define SCL_CHECK_INDEX(index, size) ::scl::error::check_index((index), (size))
-#define SCL_CHECK_SIZE_MATCH(a, b) ::scl::error::check_size_match((a), (b))
-#define SCL_CHECK_POSITIVE(val, name) \
-  ::scl::error::check_positive((val), (name))
-#define SCL_CHECK_NON_NEGATIVE(val, name) \
-  ::scl::error::check_non_negative((val), (name))
-#define SCL_CHECK_ALIGNMENT(ptr, align) \
-  ::scl::error::check_alignment<std::remove_pointer_t<decltype(ptr)>, align>(ptr)
-#define SCL_CHECK_FINITE(val) ::scl::error::check_finite((val))
+/// @brief Debug-only condition check, abort if false
+/// @param[in] condition Condition to check
+/// @param[in] message Error message if check fails
+/// @param[in] loc Source location (auto-captured)
+/// @note No-op when NDEBUG is defined
+inline auto debug_check(bool condition, const char* message,
+                        source_location loc = source_location::current())
+    -> void {
+  if (!condition) [[unlikely]] {
+    detail::debug_assert_fail_msg("condition", message, loc);
+  }
+}
 
+/// @brief Debug-only size match check, abort if sizes differ
+/// @tparam T1 First size type
+/// @tparam T2 Second size type
+/// @param[in] size_a First size
+/// @param[in] size_b Second size
+/// @param[in] message Error message if check fails
+/// @param[in] loc Source location (auto-captured)
+/// @note No-op when NDEBUG is defined
+template <typename T1, typename T2>
+inline auto debug_check_size_match(
+    T1 size_a, T2 size_b, const char* message = "size mismatch",
+    source_location loc = source_location::current()) -> void {
+  if (static_cast<std::size_t>(size_a) != static_cast<std::size_t>(size_b))
+      [[unlikely]] {
+    detail::debug_assert_fail_msg("size_a == size_b", message, loc);
+  }
+}
 
-// Debug assertions (must remain as macros for condition stringification)
-#ifdef NDEBUG
-  #define SCL_DEBUG_ASSERT(cond) ((void)0)
-  #define SCL_DEBUG_ASSERT_MSG(cond, msg) ((void)0)
+/// @brief Debug-only null pointer check, abort if null
+/// @tparam T Pointer type
+/// @param[in] ptr Pointer to check
+/// @param[in] name Pointer name for error message
+/// @param[in] loc Source location (auto-captured)
+/// @note No-op when NDEBUG is defined
+template <typename T>
+inline auto debug_check_not_null(
+    const T* ptr, const char* name = "pointer",
+    source_location loc = source_location::current()) -> void {
+  if (ptr == nullptr) [[unlikely]] {
+    detail::debug_assert_fail_msg(name, "pointer is null", loc);
+  }
+}
+
+/// @brief Debug-only index bounds check, abort if out of bounds
+/// @tparam IndexT Index type
+/// @tparam SizeT Size type
+/// @param[in] index Index to check
+/// @param[in] size Upper bound (exclusive)
+/// @param[in] loc Source location (auto-captured)
+/// @note No-op when NDEBUG is defined
+template <typename IndexT, typename SizeT>
+inline auto debug_check_index(IndexT index, SizeT size,
+                              source_location loc = source_location::current())
+    -> void {
+  const auto idx = static_cast<std::int64_t>(index);
+  const auto sz = static_cast<std::int64_t>(size);
+  if (idx < 0 || idx >= sz) [[unlikely]] {
+    detail::debug_assert_fail_msg("index in bounds", "index out of bounds",
+                                  loc);
+  }
+}
+
+/// @brief Debug-only positive value check, abort if not positive
+/// @tparam T Value type
+/// @param[in] value Value to check
+/// @param[in] name Value name for error message
+/// @param[in] loc Source location (auto-captured)
+/// @note No-op when NDEBUG is defined
+template <typename T>
+inline auto debug_check_positive(
+    T value, const char* name = "value",
+    source_location loc = source_location::current()) -> void {
+  if (value <= 0) [[unlikely]] {
+    detail::debug_assert_fail_msg(name, "must be positive", loc);
+  }
+}
+
+/// @brief Debug-only non-negative value check, abort if negative
+/// @tparam T Value type
+/// @param[in] value Value to check
+/// @param[in] name Value name for error message
+/// @param[in] loc Source location (auto-captured)
+/// @note No-op when NDEBUG is defined
+template <typename T>
+inline auto debug_check_non_negative(
+    T value, const char* name = "value",
+    source_location loc = source_location::current()) -> void {
+  if (value < 0) [[unlikely]] {
+    detail::debug_assert_fail_msg(name, "must be non-negative", loc);
+  }
+}
+
+/// @brief Debug-only alignment check, abort if misaligned
+/// @tparam Alignment Required alignment (must be power of 2)
+/// @param[in] ptr Pointer to check
+/// @param[in] loc Source location (auto-captured)
+/// @note No-op when NDEBUG is defined
+template <std::size_t Alignment>
+inline auto debug_check_alignment(
+    const void* ptr, source_location loc = source_location::current()) -> void {
+  static_assert((Alignment & (Alignment - 1)) == 0,
+                "Alignment must be a power of 2");
+  auto addr = reinterpret_cast<std::uintptr_t>(ptr);
+  if ((addr & (Alignment - 1)) != 0) [[unlikely]] {
+    detail::debug_assert_fail_msg("pointer alignment", "misaligned pointer",
+                                  loc);
+  }
+}
+
 #else
-  #define SCL_DEBUG_ASSERT(cond)                                           \
-    do {                                                                   \
-      if (!(cond)) [[unlikely]] {                                          \
-        ::scl::detail::debug_assert_fail(#cond,                            \
-                                         ::scl::source_location::current()); \
-      }                                                                    \
-    } while (0)
+// -----------------------------------------------------------------------------
+// Release Mode: No-op implementations
+// -----------------------------------------------------------------------------
 
-  #define SCL_DEBUG_ASSERT_MSG(cond, msg)                              \
-    do {                                                               \
-      if (!(cond)) [[unlikely]] {                                      \
-        ::scl::detail::debug_assert_fail_msg(                          \
-            #cond, msg, ::scl::source_location::current());            \
-      }                                                                \
-    } while (0)
-#endif
+inline auto debug_check(bool /*condition*/, const char* /*message*/,
+                        source_location /*loc*/ = source_location::current())
+    noexcept -> void {}
 
-// Throw shortcuts
-#define SCL_NOT_IMPLEMENTED(feature) ::scl::error::not_implemented(feature)
-#define SCL_UNREACHABLE_CODE() ::scl::error::unreachable()
+template <typename T1, typename T2>
+inline auto debug_check_size_match(
+    T1 /*size_a*/, T2 /*size_b*/, const char* /*message*/ = "",
+    source_location /*loc*/ = source_location::current()) noexcept -> void {}
 
-// NOLINTEND(cppcoreguidelines-macro-usage)
+template <typename T>
+inline auto debug_check_not_null(
+    const T* /*ptr*/, const char* /*name*/ = "",
+    source_location /*loc*/ = source_location::current()) noexcept -> void {}
+
+template <typename IndexT, typename SizeT>
+inline auto debug_check_index(
+    IndexT /*index*/, SizeT /*size*/,
+    source_location /*loc*/ = source_location::current()) noexcept -> void {}
+
+template <typename T>
+inline auto debug_check_positive(
+    T /*value*/, const char* /*name*/ = "",
+    source_location /*loc*/ = source_location::current()) noexcept -> void {}
+
+template <typename T>
+inline auto debug_check_non_negative(
+    T /*value*/, const char* /*name*/ = "",
+    source_location /*loc*/ = source_location::current()) noexcept -> void {}
+
+template <std::size_t Alignment>
+inline auto debug_check_alignment(
+    const void* /*ptr*/,
+    source_location /*loc*/ = source_location::current()) noexcept -> void {}
+
+#endif  // NDEBUG
+
+}  // namespace scl::error

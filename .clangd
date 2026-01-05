@@ -7,10 +7,10 @@ CompileFlags:
         - -Wall
         - -Wextra
         - -Wpedantic
-        - -Wshadow
-        - -std=c++20
         - -Iinclude
+        - -std=c++20
     Remove: [-m*, -f*]
+
 
 Diagnostics:
     UnusedIncludes: Strict
@@ -20,20 +20,10 @@ Diagnostics:
             - performance*
             - bugprone*
             - cppcoreguidelines*
-            - readability-redundant-*
+            - readability-redundant*
         Remove:
-            - cppcoreguidelines-pro-bounds-pointer-arithmetic
-            - cppcoreguidelines-pro-type-reinterpret-cast
-            - cppcoreguidelines-owning-memory
-            - cppcoreguidelines-no-malloc
-            - cppcoreguidelines-avoid-c-arrays
-            - modernize-use-trailing-return-type
-            - bugprone-easily-swappable-parameters
             - cppcoreguidelines-avoid-magic-numbers
-            - cppcoreguidelines-pro-bounds-constant-array-index
-            - cppcoreguidelines-non-private-member-variables-in-classes
-            - readability-redundant-member-init
-            - readability-identifier*
+            - cppcoreguidelines-pro-type-reinterpret-cast
 
 Completion:
     AllScopes: true

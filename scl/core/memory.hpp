@@ -1,25 +1,32 @@
 #pragma once
 
-/// @file scl/core/memory.hpp
-/// @brief SCL Memory Module - High-Performance Memory Primitives
-///
-/// This header provides:
-///   - Memory configuration constants (alignment, cache line, thresholds)
-///   - Aligned memory allocation (RAII and raw)
-///   - Data movement operations (copy, fill, zero, stream copy)
-///   - Prefetch utilities
-///   - Memory comparison and swap operations
-///   - SIMD-optimized reverse operations
-///   - Large memory allocation (mmap/VirtualAlloc)
-///   - Huge pages support
-///
-/// @note Uses std::span for non-owning views (C++20)
-/// @note Delegates to optimized libc/compiler when beneficial
-/// @note Platform-specific optimizations via SCL_PLATFORM_* macros
+/**
+ * @file scl/core/memory.hpp
+ * @brief SCL Memory Module - High-Performance Memory Primitives
+ *
+ * Core capabilities (std doesn't provide):
+ *   - Aligned memory allocation with RAII (AlignedBuffer, VirtualBuffer)
+ *   - Virtual memory management (mmap/VirtualAlloc, huge pages)
+ *   - Non-temporal streaming stores (stream_copy)
+ *   - Prefetch control (prefetch_read, prefetch_write, prefetch_ahead)
+ *   - Memory advice (madvise wrapper)
+ *   - Fine-grained memory fences (store/load/full)
+ *   - Page size queries (standard/huge pages)
+ *
+ * Convenience wrappers (thin layer over std):
+ *   - fill, zero, copy with std::span interface
+ *   - equal for trivially_copyable types
+ *
+ * @note Uses std::span for non-owning views (C++20)
+ * @note Delegates to optimized libc/compiler when beneficial
+ * @note Platform-specific optimizations via SCL_PLATFORM_* macros
+ * @note Some legacy functions are marked [[deprecated]] - prefer std alternatives
+ */
 
 #include "scl/core/type.hpp"
 #include "scl/core/macro.hpp"
 #include "scl/core/error.hpp"
+#include "scl/core/bits.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -97,30 +104,10 @@ inline constexpr Size LARGE_ALLOC_THRESHOLD = Size{1024} * Size{1024};
 inline constexpr Size MMAP_THRESHOLD = Size{64} * Size{1024};
 
 // =============================================================================
-// SECTION 2: Alignment Utility Functions (Forward)
+// SECTION 2: Alignment Utilities (from bits.hpp)
 // =============================================================================
-
-/// @brief Calculate aligned size (round up)
-/// @param[in] size Original size
-/// @param[in] alignment Alignment requirement
-/// @return Aligned size >= original size
-[[nodiscard]]
-SCL_FORCE_INLINE
-constexpr
-auto align_up(Size size, Size alignment) noexcept -> Size {
-    return (size + alignment - 1) & ~(alignment - 1);
-}
-
-/// @brief Calculate aligned size (round down)
-/// @param[in] size Original size
-/// @param[in] alignment Alignment requirement
-/// @return Aligned size <= original size
-[[nodiscard]]
-SCL_FORCE_INLINE
-constexpr
-auto align_down(Size size, Size alignment) noexcept -> Size {
-    return size & ~(alignment - 1);
-}
+// Note: align_up, align_down, is_aligned are provided by scl::bits namespace
+// Use bits::align_up, bits::align_down for size/value alignment
 
 // =============================================================================
 // SECTION 3: Aligned Memory Allocation
@@ -226,7 +213,7 @@ auto aligned_alloc(Size count, Size alignment = DEFAULT_ALIGNMENT) -> AlignedPtr
             const auto total_size = byte_size + alignment + sizeof(void*);
             void* base = std::malloc(total_size);
             if (base) {
-                auto aligned = reinterpret_cast<void*>(
+                auto *aligned = reinterpret_cast<void*>(
                     (reinterpret_cast<std::uintptr_t>(base) + sizeof(void*) + alignment - 1) 
                     & ~(alignment - 1));
                 // Store original pointer before aligned pointer
@@ -433,7 +420,7 @@ auto virtual_alloc(Size byte_size, AllocFlags flags = AllocFlags::None) noexcept
     if (has_flag(flags, AllocFlags::HugePages)) {
         alloc_type |= MEM_LARGE_PAGES;
         // Huge pages require SeLockMemoryPrivilege and aligned size
-        byte_size = align_up(byte_size, HUGE_PAGE_SIZE);
+        byte_size = bits::align_up(byte_size, HUGE_PAGE_SIZE);
     }
     
     if (has_flag(flags, AllocFlags::Executable)) {
@@ -459,7 +446,7 @@ auto virtual_alloc(Size byte_size, AllocFlags flags = AllocFlags::None) noexcept
 #if SCL_PLATFORM_LINUX
     if (has_flag(flags, AllocFlags::HugePages)) {
         map_flags |= MAP_HUGETLB;
-        byte_size = align_up(byte_size, HUGE_PAGE_SIZE);
+        byte_size = bits::align_up(byte_size, HUGE_PAGE_SIZE);
     }
     if (has_flag(flags, AllocFlags::NoReserve)) {
         map_flags |= MAP_NORESERVE;
@@ -525,7 +512,7 @@ public:
     explicit VirtualBuffer(Size count, AllocFlags flags = AllocFlags::None)
         : count_(count) {
         if (count == 0) [[unlikely]] { return; };
-        byte_size_ = align_up(count * sizeof(T), PAGE_SIZE);
+        byte_size_ = bits::align_up(count * sizeof(T), PAGE_SIZE);
         ptr_ = static_cast<T*>(virtual_alloc(byte_size_, flags));
     }
 
@@ -591,62 +578,59 @@ private:
 // =============================================================================
 // SECTION 6: Fill and Zero Operations
 // =============================================================================
+// Note: Thin wrappers over std with span interface convenience
 
-/// @brief Fill span with a value
+/// @brief Fill span with a value (convenience wrapper over std::fill)
 /// @tparam T Element type
 /// @param[out] dest Destination span
 /// @param[in] value Value to fill with
-/// @note Uses optimized paths for trivially copyable types
+/// @note For single-byte trivial types, uses memset for optimal performance
 template<typename T>
 SCL_FORCE_INLINE
-void fill(std::span<T> dest, T value) {
+void fill(std::span<T> dest, const T& value) {
     if (dest.empty()) [[unlikely]] { return; };
 
     if constexpr (std::is_trivially_copyable_v<T> && sizeof(T) == 1) {
-        // Single-byte: memset is optimal (uses AVX-512 + NT stores)
+        // Single-byte: memset is optimal (uses AVX-512 + NT stores in modern libc)
         std::memset(dest.data(), static_cast<unsigned char>(value), dest.size());
-    } else if constexpr (std::is_trivially_copyable_v<T>) {
-        // Multi-byte: let compiler auto-vectorize
-        std::fill(dest.begin(), dest.end(), value);
     } else {
-        // Non-trivially copyable: manual loop
-        for (auto& elem : dest) {
-            elem = value;
-        }
+        // Multi-byte or non-trivial: delegate to std::fill
+        std::fill(dest.begin(), dest.end(), value);
     }
 }
 
 /// @brief Zero-initialize span
 /// @tparam T Element type
 /// @param[out] dest Destination span
+/// @note Uses memset for trivial types, value-initialization otherwise
 template<typename T>
 SCL_FORCE_INLINE
 void zero(std::span<T> dest) {
-    if constexpr (std::is_trivial_v<T>) {
+    if (dest.empty()) [[unlikely]] { return; };
+
+    if constexpr (std::is_trivially_copyable_v<T>) {
         std::memset(dest.data(), 0, dest.size_bytes());
     } else {
-        fill(dest, T{});
+        std::fill(dest.begin(), dest.end(), T{});
     }
 }
 
 // =============================================================================
 // SECTION 7: Copy Operations
 // =============================================================================
+// Note: copy_fast/copy are thin wrappers; stream_copy is core SCL value (NT stores)
 
-/// @brief Fast copy (no overlap allowed)
+/// @brief Fast copy without overlap checking
 /// @tparam T Element type
 /// @param[in] src Source span
 /// @param[out] dest Destination span
 /// @pre src.size() == dest.size()
 /// @pre No overlap between src and dest
+/// @note Uses memcpy for trivially_copyable types, std::copy otherwise
 template<typename T>
 SCL_FORCE_INLINE
 void copy_fast(std::span<const T> src, std::span<T> dest) {
-    SCL_DEBUG_ASSERT_MSG(src.size() == dest.size(), "copy_fast: size mismatch");
-    SCL_DEBUG_ASSERT_MSG(
-        src.data() + src.size() <= dest.data() || dest.data() + dest.size() <= src.data(),
-        "copy_fast: overlap detected, use copy() instead"
-    );
+    error::debug_check_size_match(src.size(), dest.size(), "copy_fast: size mismatch");
 
     if constexpr (std::is_trivially_copyable_v<T>) {
         std::memcpy(dest.data(), src.data(), src.size_bytes());
@@ -655,21 +639,23 @@ void copy_fast(std::span<const T> src, std::span<T> dest) {
     }
 }
 
-/// @brief Safe copy (handles overlap)
+/// @brief Safe copy handling overlap
 /// @tparam T Element type
 /// @param[in] src Source span
 /// @param[out] dest Destination span
 /// @pre src.size() == dest.size()
+/// @note Uses memmove for trivially_copyable types, std::copy/copy_backward otherwise
 template<typename T>
 SCL_FORCE_INLINE
 void copy(std::span<const T> src, std::span<T> dest) {
-    SCL_DEBUG_ASSERT_MSG(src.size() == dest.size(), "copy: size mismatch");
+    error::debug_check_size_match(src.size(), dest.size(), "copy: size mismatch");
 
     if (src.data() == dest.data()) [[unlikely]] { return; };
 
     if constexpr (std::is_trivially_copyable_v<T>) {
         std::memmove(dest.data(), src.data(), src.size_bytes());
     } else {
+        // std::copy handles forward overlap, use copy_backward for backward overlap
         if (dest.data() < src.data()) {
             std::copy(src.begin(), src.end(), dest.begin());
         } else {
@@ -680,18 +666,19 @@ void copy(std::span<const T> src, std::span<T> dest) {
 
 /// @brief Stream copy using non-temporal stores (bypasses cache)
 /// @tparam T Element type
-/// @param[in] src Source span (must be 64-byte aligned)
-/// @param[out] dest Destination span (must be 64-byte aligned)
+/// @param[in] src Source span (should be 64-byte aligned for best performance)
+/// @param[out] dest Destination span (should be 64-byte aligned for best performance)
 /// @pre src.size() == dest.size()
-/// @note Falls back to copy_fast for small arrays or unaligned data
+/// @note This is a core SCL feature - std does NOT provide non-temporal stores
+/// @note Falls back to copy_fast for small arrays (< 256KB) or unaligned data
 /// @note Platform-specific SIMD streaming:
 ///       - x86 AVX-512: _mm512_stream_si512
 ///       - x86 AVX: _mm256_stream_si256
 ///       - x86 SSE2: _mm_stream_si128
-///       - ARM NEON: vst1q (no true NT store, uses regular store)
+///       - ARM NEON: vst1q (no true NT store, uses regular store with prefetch)
 template<typename T>
 void stream_copy(std::span<const T> src, std::span<T> dest) {
-    SCL_DEBUG_ASSERT_MSG(src.size() == dest.size(), "stream_copy: size mismatch");
+    error::debug_check_size_match(src.size(), dest.size(), "stream_copy: size mismatch");
 
     const auto byte_size = src.size_bytes();
 
@@ -874,12 +861,14 @@ void prefetch_ahead(std::span<const T> src, Size current_idx) {
 // =============================================================================
 // SECTION 9: Memory Comparison
 // =============================================================================
+// Note: equal() is correct for byte-equality; compare() is DEPRECATED (endianness bug)
 
-/// @brief Compare two spans for equality
+/// @brief Compare two spans for byte-equality
 /// @tparam T Element type
 /// @param[in] a First span
 /// @param[in] b Second span
 /// @return true if spans have same content
+/// @note Uses memcmp for trivially_copyable types (correct for equality testing)
 template<typename T>
 [[nodiscard]]
 SCL_FORCE_INLINE
@@ -900,7 +889,13 @@ auto equal(std::span<const T> a, std::span<const T> b) -> bool {
 /// @param[in] a First span
 /// @param[in] b Second span
 /// @return -1 if a < b, 0 if a == b, 1 if a > b
+/// @deprecated Use std::lexicographical_compare_three_way (C++20) or 
+///             std::lexicographical_compare instead.
+///             This function has incorrect behavior for multi-byte arithmetic types 
+///             due to endianness issues with memcmp (e.g., int 1 vs 256 comparison).
 template<typename T>
+[[deprecated("Use std::lexicographical_compare or <=> operator. "
+             "memcmp-based comparison is endianness-dependent for multi-byte types.")]]
 [[nodiscard]]
 SCL_FORCE_INLINE
 auto compare(std::span<const T> a, std::span<const T> b) -> int {
@@ -924,19 +919,20 @@ auto compare(std::span<const T> a, std::span<const T> b) -> int {
 }
 
 // =============================================================================
-// SECTION 10: Swap Operations
+// SECTION 10: Swap Operations [DEPRECATED]
 // =============================================================================
+// Note: Pure redundant wrappers - prefer std::swap and std::swap_ranges
 
 /// @brief Swap two values
 /// @tparam T Element type
 /// @param[in,out] a First value
 /// @param[in,out] b Second value
+/// @deprecated Use std::swap instead. This wrapper provides no additional optimization.
 template<typename T>
+[[deprecated("Use std::swap - this wrapper provides no additional benefit.")]]
 SCL_FORCE_INLINE
 void swap(T& a, T& b) noexcept {
-    T tmp = static_cast<T&&>(a);
-    a = static_cast<T&&>(b);
-    b = static_cast<T&&>(tmp);
+    std::swap(a, b);
 }
 
 /// @brief Swap contents of two spans
@@ -945,28 +941,28 @@ void swap(T& a, T& b) noexcept {
 /// @param[in,out] b Second span
 /// @pre a.size() == b.size()
 /// @pre No overlap between a and b
+/// @deprecated Use std::swap_ranges instead. This wrapper provides no additional optimization.
 template<typename T>
+[[deprecated("Use std::swap_ranges - this wrapper provides no additional benefit.")]]
 void swap_ranges(std::span<T> a, std::span<T> b) {
-    SCL_DEBUG_ASSERT_MSG(a.size() == b.size(), "swap_ranges: size mismatch");
-    if (a.data() == b.data()) [[unlikely]] { return; }
-    SCL_DEBUG_ASSERT_MSG(
-        a.data() + a.size() <= b.data() || b.data() + b.size() <= a.data(),
-        "swap_ranges: overlap detected"
-    );
-
+    error::debug_check_size_match(a.size(), b.size(), "swap_ranges: size mismatch");
     std::swap_ranges(a.begin(), a.end(), b.begin());
 }
 
 // =============================================================================
-// SECTION 11: Reverse Operations
+// SECTION 11: Reverse Operations [DEPRECATED]
 // =============================================================================
+// Note: Pure redundant wrappers - prefer std::reverse and std::reverse_copy
 
 /// @brief Reverse span in-place
 /// @tparam T Element type
 /// @param[in,out] data Span to reverse
+/// @deprecated Use std::reverse or std::ranges::reverse instead. 
+///             This wrapper provides no additional optimization.
 template<typename T>
+[[deprecated("Use std::reverse or std::ranges::reverse - "
+             "this wrapper provides no additional benefit.")]]
 void reverse(std::span<T> data) {
-    if (data.size() <= 1) [[unlikely]] { return; };
     std::reverse(data.begin(), data.end());
 }
 
@@ -975,10 +971,13 @@ void reverse(std::span<T> data) {
 /// @param[in] src Source span
 /// @param[out] dest Destination span
 /// @pre src.size() == dest.size()
+/// @deprecated Use std::reverse_copy or std::ranges::reverse_copy instead.
+///             This wrapper provides no additional optimization.
 template<typename T>
+[[deprecated("Use std::reverse_copy - this wrapper provides no additional benefit.")]]
 SCL_FORCE_INLINE
 void reverse_copy(std::span<const T> src, std::span<T> dest) {
-    SCL_DEBUG_ASSERT_MSG(src.size() == dest.size(), "reverse_copy: size mismatch");
+    error::debug_check_size_match(src.size(), dest.size(), "reverse_copy: size mismatch");
     std::reverse_copy(src.begin(), src.end(), dest.begin());
 }
 
@@ -1005,7 +1004,7 @@ auto is_aligned(const void* ptr, Size alignment) noexcept -> bool {
 SCL_FORCE_INLINE
 constexpr
 auto cache_lines(Size bytes) noexcept -> Size {
-    return align_up(bytes, CACHE_LINE_SIZE) / CACHE_LINE_SIZE;
+    return bits::align_up(bytes, CACHE_LINE_SIZE) / CACHE_LINE_SIZE;
 }
 
 /// @brief Calculate number of pages covered
@@ -1016,7 +1015,7 @@ SCL_FORCE_INLINE
 constexpr
 auto pages(Size bytes) noexcept -> Size {
     // NOLINTNEXTLINE(readability-suspicious-call-argument)
-    return align_up(bytes, PAGE_SIZE) / PAGE_SIZE;
+    return bits::align_up(bytes, PAGE_SIZE) / PAGE_SIZE;
 }
 
 // =============================================================================

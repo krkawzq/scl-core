@@ -31,33 +31,17 @@
 namespace scl::bits {
 
 // -----------------------------------------------------------------------------
-// Constants
-// -----------------------------------------------------------------------------
-
-/// @brief Number of bits in a 32-bit integer
-inline constexpr int kBitsPerU32 = 32;
-
-/// @brief Number of bits in a 64-bit integer
-inline constexpr int kBitsPerU64 = 64;
-
-/// @brief Shift amount for 16-bit operations
-inline constexpr int kShift16 = 16;
-
-/// @brief Shift amount for 32-bit operations
-inline constexpr int kShift32 = 32;
-
-// -----------------------------------------------------------------------------
 // Count Leading Zeros
 // -----------------------------------------------------------------------------
 
 /// @brief Count leading zeros
 /// @param[in] val Input value
-/// @return Number of leading zero bits (kBitsPerU32 if val == 0)
+/// @return Number of leading zero bits (32 if val == 0)
 [[nodiscard]]
 constexpr
 auto clz(std::uint32_t val) noexcept -> int {
   if (val == 0) {
-    return kBitsPerU32;
+    return 32;
   }
 #if SCL_CONFIG_COMPILER_GCC_LIKE
   return __builtin_clz(val);
@@ -79,12 +63,12 @@ auto clz(std::uint32_t val) noexcept -> int {
 
 /// @brief Count leading zeros (64-bit)
 /// @param[in] val Input value
-/// @return Number of leading zero bits (kBitsPerU64 if val == 0)
+/// @return Number of leading zero bits (64 if val == 0)
 [[nodiscard]]
 constexpr
 auto clz(std::uint64_t val) noexcept -> int {
   if (val == 0) {
-    return kBitsPerU64;
+    return 64;
   }
 #if SCL_CONFIG_COMPILER_GCC_LIKE
   return __builtin_clzll(val);
@@ -110,12 +94,12 @@ auto clz(std::uint64_t val) noexcept -> int {
 
 /// @brief Count trailing zeros
 /// @param[in] val Input value
-/// @return Number of trailing zero bits (kBitsPerU32 if val == 0)
+/// @return Number of trailing zero bits (32 if val == 0)
 [[nodiscard]]
 constexpr
 auto ctz(std::uint32_t val) noexcept -> int {
   if (val == 0) {
-    return kBitsPerU32;
+    return 32;
   }
 #if SCL_CONFIG_COMPILER_GCC_LIKE
   return __builtin_ctz(val);
@@ -135,12 +119,12 @@ auto ctz(std::uint32_t val) noexcept -> int {
 
 /// @brief Count trailing zeros (64-bit)
 /// @param[in] val Input value
-/// @return Number of trailing zero bits (kBitsPerU64 if val == 0)
+/// @return Number of trailing zero bits (64 if val == 0)
 [[nodiscard]]
 constexpr
 auto ctz(std::uint64_t val) noexcept -> int {
   if (val == 0) {
-    return kBitsPerU64;
+    return 64;
   }
 #if SCL_CONFIG_COMPILER_GCC_LIKE
   return __builtin_ctzll(val);
@@ -227,7 +211,7 @@ auto next_power_of_2(std::uint32_t val) noexcept -> std::uint32_t {
   val |= val >> 2;
   val |= val >> 4;
   val |= val >> 8;
-  val |= val >> kShift16;
+  val |= val >> 16;
   return val + 1;
 }
 
@@ -245,8 +229,8 @@ auto next_power_of_2(std::uint64_t val) noexcept -> std::uint64_t {
   val |= val >> 2;
   val |= val >> 4;
   val |= val >> 8;
-  val |= val >> kShift16;
-  val |= val >> kShift32;
+  val |= val >> 16;
+  val |= val >> 32;
   return val + 1;
 }
 
@@ -294,6 +278,86 @@ constexpr
 auto is_aligned(T value, T alignment) noexcept -> bool {
   static_assert(std::is_integral_v<T>, "Requires integral type");
   return (value & (alignment - 1)) == 0;
+}
+
+// -----------------------------------------------------------------------------
+// SIMD Alignment Partitioning
+// -----------------------------------------------------------------------------
+
+/// @brief Result of alignment partitioning for SIMD processing
+struct AlignmentPartition {
+  std::size_t head;    ///< Elements before first aligned block
+  std::size_t body;    ///< Elements in aligned blocks
+  std::size_t tail;    ///< Elements after last aligned block
+  std::size_t blocks;  ///< Number of aligned blocks
+};
+
+/// @brief Compute alignment partition for SIMD processing
+/// @param[in] base_ptr Pointer to array start (as uintptr_t)
+/// @param[in] count Number of elements
+/// @param[in] lane_count SIMD lane count (must be power of 2)
+/// @param[in] elem_size Size of each element in bytes
+/// @return AlignmentPartition with {head, body, tail, blocks}
+/// @note Invariant: head + body + tail == count
+/// @note Invariant: body == blocks * lane_count
+[[nodiscard]]
+constexpr
+auto partition_for_alignment(std::uintptr_t base_ptr,
+                             std::size_t count,
+                             std::size_t lane_count,
+                             std::size_t elem_size) noexcept -> AlignmentPartition {
+  // Invalid lane_count (must be power of 2)
+  if (lane_count == 0 || (lane_count & (lane_count - 1)) != 0) {
+    return {count, 0, 0, 0};
+  }
+
+  const std::size_t align_bytes = lane_count * elem_size;
+  const std::size_t misalign = base_ptr % align_bytes;
+  const std::size_t head_bytes = (misalign != 0) ? (align_bytes - misalign) : 0;
+  const std::size_t head = head_bytes / elem_size;
+
+  // Array too small for aligned block
+  if (head >= count) {
+    return {count, 0, 0, 0};
+  }
+
+  const std::size_t remaining = count - head;
+  const std::size_t blocks = remaining / lane_count;
+  const std::size_t body = blocks * lane_count;
+  const std::size_t tail = remaining - body;
+
+  return {head, body, tail, blocks};
+}
+
+/// @brief Compute alignment partition for typed pointers
+/// @tparam T Element type
+/// @param[in] ptr Pointer to array start
+/// @param[in] count Number of elements
+/// @param[in] lane_count SIMD lane count (must be power of 2)
+/// @return AlignmentPartition with {head, body, tail, blocks}
+template <typename T>
+[[nodiscard]]
+constexpr
+auto partition_for_alignment(const T* ptr,
+                             std::size_t count,
+                             std::size_t lane_count) noexcept -> AlignmentPartition {
+  return partition_for_alignment(
+      reinterpret_cast<std::uintptr_t>(ptr),
+      count,
+      lane_count,
+      sizeof(T));
+}
+
+/// @brief Check if pointer is aligned for given SIMD lane count
+/// @tparam T Element type
+/// @param[in] ptr Pointer to check
+/// @param[in] lane_count SIMD lane count (must be power of 2)
+/// @return true if ptr is aligned for lane_count elements
+template <typename T>
+[[nodiscard]]
+constexpr
+auto is_simd_aligned(const T* ptr, std::size_t lane_count) noexcept -> bool {
+  return (reinterpret_cast<std::uintptr_t>(ptr) % (lane_count * sizeof(T))) == 0;
 }
 
 }  // namespace scl::bits

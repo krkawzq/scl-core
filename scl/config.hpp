@@ -8,7 +8,7 @@
  * - C++ standard version detection
  * - Compiler detection (GCC, Clang, MSVC) with version info
  * - Platform detection (Windows, macOS, Linux)
- * - Architecture detection (x86_64, ARM64)
+ * - Architecture detection (x87_64, ARM64)
  * - SIMD instruction set detection (AVX512, AVX2, AVX, SSE, NEON)
  * - Extended type detection (int128, float16, float128)
  * - Threading backend configuration

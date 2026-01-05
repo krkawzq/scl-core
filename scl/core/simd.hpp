@@ -96,7 +96,7 @@ concept SimdCompatible = is_simd_compatible_v<T>;
 template <typename T>
 [[nodiscard]]
 constexpr
-auto simd_lanes() noexcept -> std::size_t {
+auto lanes() noexcept -> std::size_t {
   const SimdTagFor<T> d;
   return hwy::HWY_NAMESPACE::Lanes(d);
 }
@@ -107,7 +107,7 @@ auto simd_lanes() noexcept -> std::size_t {
 template <typename T>
 [[nodiscard]]
 constexpr
-auto simd_bytes() noexcept -> std::size_t {
+auto bytes() noexcept -> std::size_t {
   return simd_lanes<T>() * sizeof(T);
 }
 
@@ -127,7 +127,7 @@ auto simd_enabled() noexcept -> bool {
 /// @return String describing the current SIMD target (e.g., "AVX2", "NEON")
 [[nodiscard]]
 inline
-auto simd_target_name() noexcept -> const char* {
+auto target_name() noexcept -> const char* {
   return hwy::TargetName(hwy::HWY_TARGET);
 }
 
